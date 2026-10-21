@@ -85,7 +85,7 @@ object WepWawetLogger {
         val savedOrdinal = prefs.getInt(PREF_MIN_LEVEL, Level.INFO.ordinal)
         minLevel = Level.entries.getOrElse(savedOrdinal) { Level.INFO }
         LogPersistenceWorker.schedule(context)
-        androidLog(Domain.APP, Level.INFO, "WepWawetLogger.init", "logger initialized", emptyMap(), null)
+        androidLog(Domain.APP, Level.INFO, "WepWawetLogger.init", "logger initialized", null)
     }
 
     fun setMinLevel(context: Context, level: Level) {

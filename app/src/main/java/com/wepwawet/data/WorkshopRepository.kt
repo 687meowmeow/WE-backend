@@ -5,8 +5,6 @@ import com.wepwawet.log.WepWawetLogger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
  * Single source of truth for workshop data in the UI.
@@ -19,7 +17,7 @@ import javax.inject.Singleton
  *   - Lookup by ID (for the Wallpaper detail screen)
  */
 @Singleton
-class WorkshopRepository @Inject constructor(
+class WorkshopRepository constructor(
     private val steamApi: SteamApiService,
 ) {
 

@@ -11,8 +11,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import javax.inject.Inject
-import javax.inject.Singleton
 
 /**
  * High-level service for Steam workshop data. Wraps the Retrofit [SteamRemoteStorageApi]
@@ -27,7 +25,7 @@ import javax.inject.Singleton
  * than HTML scraping but requires the key.
  */
 @Singleton
-class SteamApiService @Inject constructor(
+class SteamApiService constructor(
     private val api: SteamRemoteStorageApi,
     private val httpClient: OkHttpClient,
 ) {

@@ -43,11 +43,11 @@ class LogPersistenceWorker(
         }
 
         // Prune
-        val cutoff = Instant.now().minus(java.time.Duration.ofDays(PRUNE_DAYS.toLong()))
+        val cutoffMs = System.currentTimeMillis() - (PRUNE_DAYS.toLong() * 24L * 60L * 60L * 1000L)
         logsDir.listFiles { f ->
             f.isFile && f.name.matches(Regex("wepwawet-\\d{4}-\\d{2}-\\d{2}\\.log"))
         }?.forEach { f ->
-            if (f.lastModified().toInstant().isBefore(cutoff)) f.delete()
+            if (f.lastModified() < cutoffMs) f.delete()
         }
 
         return Result.success()
@@ -65,7 +65,7 @@ class LogPersistenceWorker(
             val request = androidx.work.PeriodicWorkRequestBuilder<LogPersistenceWorker>(
                 15, java.util.concurrent.TimeUnit.MINUTES
             ).setConstraints(constraints).build()
-            androidx.work.WorkManager.getInstance(context).enqueueUniqueWork(
+            androidx.work.WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 UNIQUE_NAME,
                 androidx.work.ExistingPeriodicWorkPolicy.KEEP,
                 request,

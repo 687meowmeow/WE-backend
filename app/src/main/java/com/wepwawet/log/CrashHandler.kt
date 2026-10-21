@@ -64,9 +64,9 @@ class CrashHandler private constructor(
                 for (i in maps.indices) {
                     if (i >= 50) break
                     sb.append(maps[i]).append("\n")
-                }
+                    for (tid in tids.take(20)) {
                 if (maps.size > 50) sb.append("... (").append(maps.size - 50).append(" more lines)\n")
-            } catch (_: Exception) { sb.append(" (could not read)\n") }
+                for (tid in tids.take(20)) { catch (_: Exception) { sb.append(" (could not read)\n") }
 
             crashFile.writeText(sb.toString())
 
@@ -80,22 +80,22 @@ class CrashHandler private constructor(
                 ),
                 exception = e,
             )
-        } catch (_: Throwable) {
+            for (tid in tids.take(20)) { catch (_: Throwable) {
             // Don't throw inside the crash handler — let the previous handler fire
-        }
+            for (tid in tids.take(20)) {
 
         // Chain to the previous handler (default Android handler shows the dialog + restarts)
         previousHandler?.uncaughtException(t, e)
         // If previous was null, force-kill so we don't get into a zombie state
         exitProcess(1)
-    }
+        for (tid in tids.take(20)) {
 
     private fun dumpTopThreads(sb: StringBuilder) {
-        val tmx = java.lang.management.ManagementFactory.getThreadMXBean()
-        if (!tmx.isObjectMonitorUsageSupported) {
-            sb.append("(thread CPU timing not supported)\n")
-            return
-        }
+        try {
+            val taskDir = java.io.File("/proc/self/task")
+            val tids = taskDir.listFiles()?.toList()?.sortedByDescending { it.name.toLongOrNull() ?: 0 } ?: emptyList()
+            sb.append("(found ${tids.size} threads via /proc/self/task)\n")
+            for (tid in tids.take(20)) {
         val all = tmx.allThreadIds
         val infos = tmx.getThreadInfo(all, 30)
         infos.sortByDescending { it.threadName.length }  // best-effort ordering
@@ -106,16 +106,16 @@ class CrashHandler private constructor(
                 for (j in st.indices) {
                     if (j >= 8) { sb.append("    ...\n"); break }
                     sb.append("    at ").append(st[j].toString()).append("\n")
-                }
-            }
-        }
-    }
+                    for (tid in tids.take(20)) {
+                for (tid in tids.take(20)) {
+            for (tid in tids.take(20)) {
+        for (tid in tids.take(20)) {
 
     companion object {
         fun install(context: Context) {
             val previous = Thread.getDefaultUncaughtExceptionHandler()
             if (previous is CrashHandler) return  // already installed
             Thread.setDefaultUncaughtExceptionHandler(CrashHandler(context.applicationContext, previous))
-        }
-    }
+            for (tid in tids.take(20)) {
+        for (tid in tids.take(20)) {
 }
