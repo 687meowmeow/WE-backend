@@ -26,8 +26,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  GHCR_IMAGE: ghcr.io/${{ github.repository }}/builder:latest
+# The container: image is hard-coded in each job (ghcr.io/687meowmeow/we-backend/builder:latest)
+# because GitHub Actions doesn't allow the `env` context at the job-level container field.
+# If the repo is ever renamed, search/replace the image name.
 
 jobs:
   # ============================================================================
@@ -37,7 +38,10 @@ jobs:
     name: Build ${{ matrix.component }}
     runs-on: ubuntu-24.04
     container:
-      image: ${{ env.GHCR_IMAGE }}
+      # NOTE: GitHub Actions does NOT allow the `env` context in a job-level
+      # `container:` field (env vars are evaluated AFTER the container is set up).
+      # Hard-coded image name (lowercase: docker requires lowercase).
+      image: ghcr.io/687meowmeow/we-backend/builder:latest
       # The builder image has all toolchains pre-baked (NDK 26, SDK 35, Mesa/Wine/Box64 build deps)
       credentials:
         username: ${{ github.actor }}
@@ -53,9 +57,10 @@ jobs:
           - component: mesa-turnip
             artifact: libvulkan_turnip.so
           - component: dxvk
-            artifact: dxvk-1.10.3.tar.zst
+            artifact: dxvk-2.7.1.tar.zst
           - component: vkd3d
             artifact: vkd3d-2.12.tar.zst
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -67,6 +72,7 @@ jobs:
 
       - name: Build ${{ matrix.component }}
         run: |
+          chmod +x scripts/build_component.sh
           ./scripts/build_component.sh ${{ matrix.component }}
 
       - name: Verify artifact
@@ -93,10 +99,12 @@ jobs:
     needs: build-components
     runs-on: ubuntu-24.04
     container:
-      image: ${{ env.GHCR_IMAGE }}
+      # Same hard-coded image (env context not allowed in container:)
+      image: ghcr.io/687meowmeow/we-backend/builder:latest
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -109,7 +117,7 @@ jobs:
       - name: Verify all 5 components present
         run: |
           for f in box64-arm64-winlator.wcp wine-10.10-arm64-prefix.tar.zst \
-                   libvulkan_turnip.so dxvk-1.10.3.tar.zst vkd3d-2.12.tar.zst; do
+                   libvulkan_turnip.so dxvk-2.7.1.tar.zst vkd3d-2.12.tar.zst; do
             test -f "app/src/main/assets/$f" || {
               echo "::error::Missing component: $f"
               exit 1
