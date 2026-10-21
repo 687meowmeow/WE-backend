@@ -1,0 +1,231 @@
+name: Build WepWawet APK
+
+# Build trigger options:
+#   - push to main / develop  -> debug APK (sanity check)
+#   - tag v*                   -> release APK + GitHub Release
+#   - workflow_dispatch        -> manual trigger (debug)
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      debug_release:
+        description: 'Build a release APK without tagging'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write       # needed for creating GitHub Releases
+  packages: read       # needed for pulling the builder image from GHCR
+  attestations: write # for build provenance
+  id-token: write     # for OIDC keyless signing
+
+# Cancel in-progress builds when a new commit is pushed to the same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GHCR_IMAGE: ghcr.io/${{ github.repository }}/builder:latest
+
+jobs:
+  # ============================================================================
+  # Job 1: 5-way matrix of component builds (all run in parallel)
+  # ============================================================================
+  build-components:
+    name: Build ${{ matrix.component }}
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ env.GHCR_IMAGE }}
+      # The builder image has all toolchains pre-baked (NDK 26, SDK 35, Mesa/Wine/Box64 build deps)
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: box64
+            artifact: box64-arm64-winlator.wcp
+          - component: wine
+            artifact: wine-10.10-arm64-prefix.tar.zst
+          - component: mesa-turnip
+            artifact: libvulkan_turnip.so
+          - component: dxvk
+            artifact: dxvk-1.10.3.tar.zst
+          - component: vkd3d
+            artifact: vkd3d-2.12.tar.zst
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ matrix.component }}-arm64
+          max-size: '2G'
+
+      - name: Build ${{ matrix.component }}
+        run: |
+          ./scripts/build_component.sh ${{ matrix.component }}
+
+      - name: Verify artifact
+        run: |
+          test -f artifacts/${{ matrix.artifact }} || {
+            echo "::error::Expected artifact not produced: ${{ matrix.artifact }}"
+            exit 1
+          }
+          ls -lh artifacts/${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.component }}
+          path: artifacts/${{ matrix.artifact }}
+          retention-days: 14
+          compression-level: 0  # already compressed
+
+  # ============================================================================
+  # Job 2: Assemble the APK from the 5 component artifacts
+  # ============================================================================
+  assemble-apk:
+    name: Assemble APK
+    needs: build-components
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ env.GHCR_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all 5 component artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: app/src/main/assets/
+
+      - name: Verify all 5 components present
+        run: |
+          for f in box64-arm64-winlator.wcp wine-10.10-arm64-prefix.tar.zst \
+                   libvulkan_turnip.so dxvk-1.10.3.tar.zst vkd3d-2.12.tar.zst; do
+            test -f "app/src/main/assets/$f" || {
+              echo "::error::Missing component: $f"
+              exit 1
+            }
+          done
+          ls -lh app/src/main/assets/
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode keystore
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || github.event.inputs.debug_release }}
+        run: |
+          if [ -z "${{ secrets.WEPWAWET_KEYSTORE_BASE64 }}" ]; then
+            echo "::warning::Release keystore not set; will produce unsigned APK"
+            exit 0
+          fi
+          echo "${{ secrets.WEPWAWET_KEYSTORE_BASE64 }}" | base64 -d > ${{ runner.temp }}/wepwawet.keystore
+          echo "WEPWAWET_KEYSTORE_PATH=${{ runner.temp }}/wepwawet.keystore" >> $GITHUB_ENV
+          echo "WEPWAWET_KEYSTORE_PASS=${{ secrets.WEPWAWET_KEYSTORE_PASS }}" >> $GITHUB_ENV
+          echo "WEPWAWET_KEY_ALIAS=${{ secrets.WEPWAWET_KEY_ALIAS }}" >> $GITHUB_ENV
+          echo "WEPWAWET_KEY_PASS=${{ secrets.WEPWAWET_KEY_PASS }}" >> $GITHUB_ENV
+
+      - name: Build APK (assembleRelease)
+        run: |
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace --info
+
+      - name: Build AAB (bundleRelease)
+        run: |
+          ./gradlew :app:bundleRelease --no-daemon --stacktrace --info
+
+      - name: Locate built APK
+        id: find-apk
+        run: |
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          AAB=$(find app/build/outputs/bundle/release -name '*.aab' | head -1)
+          echo "apk_path=$APK" >> $GITHUB_OUTPUT
+          echo "aab_path=$AAB" >> $GITHUB_OUTPUT
+          ls -lh "$APK" "$AAB"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ steps.find-apk.outputs.apk_path }}
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wepwawet-apk
+          path: |
+            ${{ steps.find-apk.outputs.apk_path }}
+            ${{ steps.find-apk.outputs.aab_path }}
+          retention-days: 30
+
+  # ============================================================================
+  # Job 3: GitHub Release (only on tags)
+  # ============================================================================
+  release:
+    name: Publish GitHub Release
+    needs: assemble-apk
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: wepwawet-apk
+          path: release/
+
+      - name: Find APK
+        id: find
+        run: |
+          APK=$(find release -name '*.apk' | head -1)
+          AAB=$(find release -name '*.aab' | head -1)
+          echo "apk=$APK" >> $GITHUB_OUTPUT
+          echo "aab=$AAB" >> $GITHUB_OUTPUT
+          ls -lh release/
+
+      - name: Split APK if >2GB (GitHub Release asset cap)
+        run: |
+          APK_SIZE=$(stat -c%s "${{ steps.find.outputs.apk }}")
+          if [ "$APK_SIZE" -gt 2000000000 ]; then
+            echo "APK exceeds 2GB; splitting"
+            cd release/ && split -b 1900M -d -a 2 \
+              "$(basename ${{ steps.find.outputs.apk }})" \
+              "$(basename ${{ steps.find.outputs.apk }}).part"
+            rm "${{ steps.find.outputs.apk }}"
+            ls -lh release/
+          fi
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
+          generate_release_notes: true
+          body: |
+            ## WepWawet ${{ github.ref_name }}
+
+            Pre-alpha — see [README](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/README.md)
+            and [ARCHITECTURE](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/ARCHITECTURE.md)
+            for installation instructions and current limitations.
+
+            If the APK was split into `.part00`, `.part01`, ... parts, reassemble with:
+            ```
+            cat wepwawet-*.part00 wepwawet-*.part01 ... > wepwawet.apk
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

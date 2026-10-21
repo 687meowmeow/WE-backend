@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WepWawet launcher icon foreground — a stylized wolf-head silhouette in white
+  on the violet primary background (per the WepWawet theme palette).
+  Simple vector path; not pixel-perfect but functional placeholder. Replace with
+  proper artwork before release.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Wolf head silhouette (simplified, stylized) -->
+    <group android:translateX="22" android:translateY="22">
+        <!-- Head outline -->
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M32,4 L48,4 L52,16 L56,16 L56,28 L48,36 L48,52 L40,60 L40,72 L24,72 L24,60 L16,52 L16,36 L8,28 L8,16 L12,16 L16,4 Z" />
+        <!-- Eyes -->
+        <path
+            android:fillColor="#FF8E5BFF"
+            android:pathData="M22,28 L28,28 L28,34 L22,34 Z" />
+        <path
+            android:fillColor="#FF8E5BFF"
+            android:pathData="M36,28 L42,28 L42,34 L36,34 Z" />
+        <!-- Nose -->
+        <path
+            android:fillColor="#FF8E5BFF"
+            android:pathData="M30,44 L34,44 L34,48 L30,48 Z" />
+    </group>
+</vector>

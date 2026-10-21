@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Steam credentials must never back up -->
+    <exclude domain="sharedpref" path="steam_credentials.xml" />
+    <!-- Box64 DynaCache is regenerable -->
+    <exclude domain="file" path="box64-cache/" />
+    <!-- Logs are huge and don't need to back up -->
+    <exclude domain="file" path="logs/" />
+</full-backup-content>

@@ -1,0 +1,39 @@
+# WepWawet .gitignore
+
+# Built artifacts (do not commit large binaries — they come from CI)
+app/src/main/assets/*.wcp
+app/src/main/assets/*.tar.zst
+app/src/main/assets/*.so
+app/src/main/assets/*.dll
+app/src/main/assets/wine-prefix/
+
+# Native libs (built by CI per-component matrix)
+app/src/main/jniLibs/arm64-v8a/*
+
+# Local environment files
+local.properties
+.gradle/
+build/
+/app/build/
+/.gradle/
+*.iml
+.idea/
+.DS_Store
+
+# Keystore (NEVER commit)
+*.keystore
+*.jks
+!debug.keystore
+
+# Logs
+*.log
+crash-*.txt
+
+# Wine prefix snapshots (if you ever snapshot one locally)
+prefix-snapshot/
+
+# IDE / editors
+.vscode/
+*.swp
+*.swo
+*~

@@ -1,0 +1,162 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.compose.compiler)
+    alias(libs.plugins.kotlin.serialization)
+}
+
+android {
+    namespace = "com.wepwawet"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.wepwawet"
+        minSdk = 26  // Android 8.0 — matches Winlator v11.2 requirement
+        targetSdk = 35
+        versionCode = 1
+        versionName = "0.1.0-alpha"
+        // WE app targets Snapdragon 8 Gen 2+ — only arm64-v8a makes sense
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+        // Custom Application ID field so we can carry version metadata into the APK
+        buildConfigField("String", "GIT_SHA", "\"${getGitSha()}\"")
+        buildConfigField("String", "BUILD_TIME", "\"${getBuildTime()}\"")
+        // Multidex not needed since we don't have 65k+ methods, but explicit
+        multiDexEnabled = true
+        // Required for very large APKs that include assets > 200 MB
+        // (the Play Store cap doesn't apply to sideloaded APKs)
+        // Use APK splits for asset packs in the future
+    }
+
+    // APK signing in CI: keystore is base64-decoded from a GitHub Secret
+    // For local dev, debug signing is automatic via AGP.
+    signingConfigs {
+        create("release") {
+            val keystorePath = System.getenv("WEPWAWET_KEYSTORE_PATH")
+            val keystorePass = System.getenv("WEPWAWET_KEYSTORE_PASS") ?: ""
+            val keyAlias = System.getenv("WEPWAWET_KEY_ALIAS") ?: ""
+            val keyPass = System.getenv("WEPWAWET_KEY_PASS") ?: ""
+            if (keystorePath != null && keystorePath.isNotBlank()) {
+                storeFile = file(keystorePath)
+                storePassword = keystorePass
+                this.keyAlias = keyAlias
+                keyPassword = keyPass
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.findByName("release")
+            // Native libs are extracted at install time so they can be loaded directly
+            // (Winlator requires this for the Box64 binary that's exec'd)
+            packaging {
+                jniLibs.useLegacyPackaging = true
+                // Bundle rootfs tarball as-is, no compression (we'll zstd it ourselves)
+                resources.excludes += listOf("META-INF/*.DSA", "META-INF/*.SF", "META-INF/*.RSA")
+            }
+        }
+        debug {
+            isDebuggable = true
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            // Multi-APK not needed for debug builds
+        }
+    }
+
+    // Compose
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+
+    // Java/Kotlin target — Winlator v11.2 uses Java 17
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_17)
+            freeCompilerArgs.addAll(
+                "-opt-in=kotlin.RequiresOptIn",
+                "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api",
+                "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi",
+                "-opt-in=kotlinx.serialization.ExperimentalSerializationApi",
+                "-opt-in=androidx.media3.common.util.UnstableApi",
+            )
+        }
+    }
+
+    // Large assets — the bundled rootfs, Wine prefix, Box64 binary, etc. all live here
+    sourceSets {
+        getByName("main") {
+            assets.srcDirs("src/main/assets")
+            jniLibs.srcDirs("src/main/jniLibs")
+        }
+    }
+}
+
+dependencies {
+    // Compose BOM
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.extended)
+    debugImplementation(libs.androidx.compose.ui.tooling)
+
+    // Lifecycle / Activity / Navigation
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.service)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.process)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.navigation.compose)
+
+    // Networking
+    implementation(libs.okhttp)
+    implementation(libs.okhttp.logging.interceptor)
+    implementation(libs.retrofit)
+    implementation(libs.retrofit.kotlinx.serialization)
+    implementation(libs.kotlinx.serialization.json)
+
+    // Image loading
+    implementation(libs.coil.compose)
+
+    // WorkManager (for log persistence + background tasks)
+    implementation(libs.androidx.work.runtime.ktx)
+
+    // DataStore + encrypted prefs (for Steam credential storage)
+    implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.security.crypto)
+
+    // Testing
+    testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+}
+
+// Helpers
+fun getGitSha(): String {
+    return try {
+        val process = ProcessBuilder("git", "rev-parse", "--short", "HEAD")
+            .redirectErrorStream(true).start()
+        process.inputStream.bufferedReader().readText().trim().ifEmpty { "unknown" }
+    } catch (e: Exception) {
+        "unknown"
+    }
+}
+
+fun getBuildTime(): String {
+    return java.time.OffsetDateTime.now().toString()
+}

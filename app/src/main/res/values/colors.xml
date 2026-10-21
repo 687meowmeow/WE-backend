@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="wepwawet_bg">#0B0B0F</color>
+    <color name="wepwawet_surface">#15151B</color>
+    <color name="wepwawet_primary">#8E5BFF</color>
+    <color name="wepwawet_on_primary">#FFFFFF</color>
+    <color name="wepwawet_secondary">#FFB72E</color>
+    <color name="wepwawet_on_secondary">#1B1300</color>
+    <color name="wepwawet_error">#FF6B5C</color>
+    <color name="wepwawet_on_bg">#F5F5F7</color>
+    <color name="wepwawet_on_surface">#E6E6E9</color>
+    <color name="wepwawet_outline">#3A3A45</color>
+</resources>
