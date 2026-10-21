@@ -37,9 +37,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     meson \
     nasm yasm \
     autoconf automake libtool \
-    mingw-w64 \
+    mingw-w64 mingw-w64-tools \
     gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
     gcc-x86-64-linux-gnu g++-x86-64-linux-gnu \
+    glslang-tools \
     libfreetype-dev \
     libx11-dev libxext-dev libxcb1-dev libxrandr-dev \
     libxcomposite-dev libxinerama-dev libxrender-dev libxcursor-dev \

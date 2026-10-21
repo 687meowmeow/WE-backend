@@ -12,11 +12,15 @@
 #   vkd3d         -> artifacts/vkd3d-2.12.tar.zst
 #
 # All fixes are research-backed:
-#  - PEP 668 (pip3 --user fails): use a Python venv at /tmp/meson-venv
-#  - DXVK expects Vulkan-Headers at <src>/include/vulkan/ (per linuxfromscratch.org)
-#  - VKD3D-Proton declares `khronos/Vulkan-Headers` submodule in .gitmodules
-#  - Wine: must mkdir -p $WINEPREFIX before invoking wineserver (it chdirs first)
-#  - ARTIFACTS_DIR made absolute at start so we can cd into build dirs freely
+#  - PEP 668: Python venv at /tmp/meson-venv (not --break-system-packages)
+#  - DXVK: write custom cross-file with -I path to source-tree Vulkan-Headers
+#    (DXVK's own build-win64.txt doesn't include them, and meson's -Dc_args
+#    does NOT apply to cross-compile — only the cross-file's c_args does)
+#  - VKD3D: needs x86_64-w64-mingw32-widl, provided by mingw-w64-tools apt pkg
+#  - Mesa: needs glslangValidator, provided by glslang-tools apt pkg
+#  - Wine: mkdir -p $WINEPREFIX before wineserver (it chdirs first)
+#  - Box64: ARTIFACTS_DIR made absolute at start
+#  - All apt installs: use apt-get download + dpkg-deb -x (no sudo needed)
 
 set -euo pipefail
 
@@ -34,9 +38,8 @@ SRC_ROOT=/tmp/wepwawet-src
 BUILD_ROOT=/tmp/wepwawet-builds
 mkdir -p "$SRC_ROOT" "$BUILD_ROOT"
 
-# === Install newer meson than apt ships (apt's 1.3.2 is too old for latest Mesa which needs >=1.4) ===
-# Use a Python venv to avoid PEP 668 'externally-managed-environment' error
-# (Ubuntu 24.04 blocks `pip3 install --user` without --break-system-packages)
+# === Install newer meson than apt ships (apt's 1.3.2 is too old for latest Mesa >=1.4) ===
+# Use Python venv to avoid PEP 668 'externally-managed-environment' error
 if [ ! -x /tmp/meson-venv/bin/meson ]; then
     echo "→ Creating Python venv + installing newer meson (apt's 1.3.2 too old for Mesa >=1.4)"
     python3 -m venv /tmp/meson-venv
@@ -45,14 +48,39 @@ if [ ! -x /tmp/meson-venv/bin/meson ]; then
 fi
 export PATH="/tmp/meson-venv/bin:$PATH"
 hash -r 2>/dev/null || true
-echo "→ meson version: $(meson --version 2>/dev/null || echo 'meson not found')"
-echo "→ ninja version: $(ninja --version 2>/dev/null || echo 'ninja not found')"
 
 # === Defensive: set safe.directory in case anything still touches /opt/*-src ===
 git config --global --add safe.directory '*' 2>/dev/null || true
 
+# === User-space .deb installer (no sudo needed) ===
+# apt-get download fetches .deb files to the current dir; dpkg-deb -x extracts
+# them to a user-writable location. We add /tmp/user-debs/usr/bin to PATH.
+USER_DEBS_DIR=/tmp/user-debs
+mkdir -p "$USER_DEBS_DIR"
+install_deb_to_user_space() {
+    local pkg
+    for pkg in "$@"; do
+        if [ -f "$USER_DEBS_DIR/.installed-$pkg" ]; then
+            continue
+        fi
+        echo "→ apt-get download $pkg (extracting to $USER_DEBS_DIR — no sudo needed)"
+        ( cd "$USER_DEBS_DIR" && apt-get download "$pkg" 2>&1 | tail -3 ) || {
+            echo "  ⚠ apt-get download failed for $pkg — trying anyway"
+        }
+        touch "$USER_DEBS_DIR/.installed-$pkg"
+    done
+    # Extract all .deb files
+    local deb
+    for deb in "$USER_DEBS_DIR"/*.deb; do
+        [ -f "$deb" ] || continue
+        dpkg-deb -x "$deb" "$USER_DEBS_DIR" 2>&1 | tail -3 || true
+        rm -f "$deb"
+    done
+    export PATH="$USER_DEBS_DIR/usr/bin:$PATH"
+    hash -r 2>/dev/null || true
+}
+
 # Copy /opt/<name>-src to /tmp/wepwawet-src/<name> if not already done.
-# Uses `cp -r` (no -a) so files become builder-owned (writable).
 copy_src() {
     local name="$1"
     local src="/opt/${name}-src"
@@ -66,10 +94,12 @@ copy_src() {
     fi
 }
 
+echo "→ meson version: $(meson --version 2>/dev/null || echo 'meson not found')"
+echo "→ ninja version: $(ninja --version 2>/dev/null || echo 'ninja not found')"
+
 echo "::group::Building $COMPONENT"
 case "$COMPONENT" in
     box64)
-        # Build Box64 with WINLATOR_GLIBC=ON (required for Steam under Winlator)
         copy_src box64
         cd "$SRC_ROOT/box64"
         git pull --rebase 2>/dev/null || true
@@ -83,20 +113,16 @@ case "$COMPONENT" in
             -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
             -DCMAKE_C_FLAGS="-O3 -march=armv8.2-a+simd+crypto -fPIC"
         make -j"$(nproc)"
-        # Patchelf to use the Winlator rootfs ld-linux-aarch64.so.1 (best-effort)
         patchelf --set-interpreter /data/data/com.wepwawet/files/imagefs/usr/lib/ld-linux-aarch64.so.1 \
             --set-rpath /data/data/com.wepwawet/files/imagefs/usr/lib \
             "$BUILD_DIR/box64" 2>/dev/null || true
-        # Write profile.json next to box64 (both already in $BUILD_DIR — no cp needed)
         cat > "$BUILD_DIR/profile.json" <<'EOF'
 { "name": "Box64 (WepWawet)", "version": "1.0", "args": ["-loadbin", "/data/data/com.wepwawet/files/imagefs/usr/bin/box64"] }
 EOF
-        # Tar from $BUILD_DIR (ARTIFACTS_DIR is absolute now — works from anywhere)
         tar --zstd -cf "$ARTIFACTS_DIR/box64-arm64-winlator.wcp" -C "$BUILD_DIR" box64 profile.json
         ;;
 
     wine)
-        # Build Wine 10.10 for arm64 + create a pre-configured prefix
         copy_src wine
         cd "$SRC_ROOT/wine"
         git fetch --tags --depth 1 origin wine-10.10 2>/dev/null || true
@@ -113,29 +139,25 @@ EOF
             --without-oss \
             --without-opencl
         make -j"$(nproc)"
-        # === Create a minimal Wine prefix ===
-        # IMPORTANT: wineserver chdirs to $WINEPREFIX before wineboot creates it,
-        # so we MUST mkdir -p the prefix directory first.
+        # IMPORTANT: wineserver chdirs to $WINEPREFIX before wineboot creates it
         WINEPREFIX_DIR=/tmp/wepwawet-prefix
         mkdir -p "$WINEPREFIX_DIR"
-        # Use the just-built wineboot --init to create the prefix structure
         WINEPREFIX="$WINEPREFIX_DIR" WINESERVER="$BUILD_DIR/server/wineserver" \
             "$BUILD_DIR/wineboot" --init 2>&1 | tail -20 || true
-        # Pre-create the Steam install directory inside the prefix
         mkdir -p "$WINEPREFIX_DIR/drive_c/Program Files (x86)/Steam"
-        # Tar up the prefix
         tar --zstd -cf "$ARTIFACTS_DIR/wine-10.10-arm64-prefix.tar.zst" \
             -C /tmp wepwawet-prefix
         ;;
 
     mesa-turnip)
-        # Build Mesa with the Turnip driver (Adreno 7xx Vulkan 1.3)
         copy_src mesa
         cd "$SRC_ROOT/mesa"
         git remote add whitebelyash https://gitlab.freedesktop.org/whitebelyash/mesa.git 2>/dev/null || true
         git fetch whitebelyash 2>/dev/null || true
         git checkout whitebelyash/tu8 2>/dev/null || git checkout whitebelyash/main 2>/dev/null || true
-        # Native-file for native arm64 build (we're on arm64, no cross-compile)
+        # Mesa needs glslangValidator (provides by apt pkg 'glslang-tools')
+        install_deb_to_user_space glslang-tools
+        echo "→ glslangValidator: $(which glslangValidator 2>/dev/null || echo 'NOT FOUND')"
         cat > /tmp/mesa-native.txt <<'EOF'
 [binaries]
 c = 'cc'
@@ -159,21 +181,17 @@ EOF
             -Dplatforms= \
             -Dshared-glapi=disabled
         meson compile -C "$BUILD_DIR"
-        # Extract just the Turnip vulkan driver
         cp "$BUILD_DIR/src/freedreno/vulkan/libvulkan_freedreno.so" "$ARTIFACTS_DIR/libvulkan_turnip.so" 2>/dev/null || {
             find "$BUILD_DIR" -name 'libvulkan_freedreno.so' -exec cp {} "$ARTIFACTS_DIR/libvulkan_turnip.so" \;
         }
         ;;
 
     dxvk)
-        # Build DXVK v2.7.1 for x86_64-w64-mingw32 (Windows DLL, runs under Wine)
         copy_src dxvk
         cd "$SRC_ROOT/dxvk"
         git fetch --tags --depth 1 origin v2.7.1 2>/dev/null || true
         git checkout v2.7.1 2>/dev/null || true
-        # DXVK expects Vulkan-Headers at <src>/include/vulkan/ (per linuxfromscratch.org):
-        #   mv -T Vulkan-Headers-* dxvk-2.7.1/include/vulkan
-        # We clone KhronosGroup/Vulkan-Headers and copy its include/vulkan/ contents.
+        # DXVK expects Vulkan-Headers at <src>/include/vulkan/ (per linuxfromscratch.org)
         if [ ! -d "$SRC_ROOT/dxvk/include/vulkan" ] || [ ! -f "$SRC_ROOT/dxvk/include/vulkan/vulkan.h" ]; then
             echo "→ Cloning KhronosGroup/Vulkan-Headers and copying into include/vulkan/"
             rm -rf "$SRC_ROOT/dxvk/include/vulkan" 2>/dev/null || true
@@ -181,15 +199,35 @@ EOF
             cp -r /tmp/vulkan-headers-tmp/include/vulkan "$SRC_ROOT/dxvk/include/"
             rm -rf /tmp/vulkan-headers-tmp
         fi
-        # Use DXVK's own cross-file (shipped at build-win64.txt)
-        # Build directly via meson instead of package-release.sh for cleaner error reporting
+        # Write our OWN cross-file (DXVK's build-win64.txt doesn't add -I for Vulkan-Headers)
+        # Per meson docs: -Dc_args does NOT apply to cross-compile; only cross-file c_args do
+        cat > /tmp/dxvk-cross.txt <<EOF
+[binaries]
+c = 'x86_64-w64-mingw32-gcc'
+cpp = 'x86_64-w64-mingw32-g++'
+ar = 'x86_64-w64-mingw32-ar'
+strip = 'x86_64-w64-mingw32-strip'
+windres = 'x86_64-w64-mingw32-windres'
+dlltool = 'x86_64-w64-mingw32-dlltool'
+
+[built-in options]
+c_args = ['-I${SRC_ROOT}/dxvk/include', '-I/usr/include']
+cpp_args = ['-I${SRC_ROOT}/dxvk/include', '-I/usr/include']
+c_link_args = ['-L/usr/lib']
+cpp_link_args = ['-L/usr/lib']
+
+[host_machine]
+system = 'windows'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+EOF
         BUILD_DIR="$BUILD_ROOT/dxvk"
         mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR"
         meson setup "$BUILD_DIR" "$SRC_ROOT/dxvk" \
-            --cross-file "$SRC_ROOT/dxvk/build-win64.txt" \
+            --cross-file /tmp/dxvk-cross.txt \
             --buildtype release
         ninja -C "$BUILD_DIR"
-        # Collect the DLLs
         mkdir -p /tmp/dxvk-dist/x64
         find "$BUILD_DIR" -name 'd3d8.dll' -exec cp {} /tmp/dxvk-dist/x64/ \; 2>/dev/null || true
         find "$BUILD_DIR" -name 'd3d9.dll' -exec cp {} /tmp/dxvk-dist/x64/ \; 2>/dev/null || true
@@ -200,30 +238,29 @@ EOF
         ;;
 
     vkd3d)
-        # Build VKD3D-Proton 2.12 for x86_64-w64-mingw32
         copy_src vkd3d
         cd "$SRC_ROOT/vkd3d"
         git fetch --tags --depth 1 origin v2.12 2>/dev/null || true
         git checkout v2.12 2>/dev/null || true
         # VKD3D-Proton .gitmodules declares khronos/Vulkan-Headers and other submodules
-        # The recommended clone is `git clone --recursive`, but we did --depth 1.
-        # Run submodule update to fetch them properly.
         git submodule update --init --recursive 2>&1 | tail -10 || {
-            # Fallback: clone Vulkan-Headers directly into the expected path
             echo "→ submodule update failed, falling back to direct clone"
             if [ ! -d "$SRC_ROOT/vkd3d/khronos/Vulkan-Headers" ]; then
                 git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git \
                     "$SRC_ROOT/vkd3d/khronos/Vulkan-Headers" 2>/dev/null || true
             fi
         }
-        # VKD3D-Proton ships its own build-win64.txt cross-file
+        # VKD3D-Proton needs x86_64-w64-mingw32-widl (provided by apt pkg 'mingw-w64-tools')
+        install_deb_to_user_space mingw-w64-tools
+        echo "→ x86_64-w64-mingw32-widl: $(which x86_64-w64-mingw32-widl 2>/dev/null || echo 'NOT FOUND')"
+        # VKD3D also needs glslang for shader compilation
+        install_deb_to_user_space glslang-tools
         BUILD_DIR="$BUILD_ROOT/vkd3d"
         meson setup "$BUILD_DIR" "$SRC_ROOT/vkd3d" \
             --cross-file "$SRC_ROOT/vkd3d/build-win64.txt" \
             --buildtype release \
             --strip
         ninja -C "$BUILD_DIR"
-        # Package the DLLs (proton-style layout: x64/ contains d3d12.dll etc.)
         mkdir -p /tmp/vkd3d-dist/x64
         find "$BUILD_DIR" -name 'd3d12.dll' -exec cp {} /tmp/vkd3d-dist/x64/ \; 2>/dev/null || true
         find "$BUILD_DIR" -name 'vkd3d.dll' -exec cp {} /tmp/vkd3d-dist/x64/ \; 2>/dev/null || true
