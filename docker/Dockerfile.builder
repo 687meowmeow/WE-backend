@@ -19,6 +19,11 @@ FROM ubuntu:24.04 AS base
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
+# Enable universe + multiverse repositories (needed for glslang-tools, mingw-w64-tools)
+# Ubuntu 24.04 uses deb822 format in /etc/apt/sources.list.d/ubuntu.sources
+RUN sed -i 's/^Components: main restricted$/Components: main restricted universe multiverse/' \
+    /etc/apt/sources.list.d/ubuntu.sources || true
+
 # Install the foundational build tools (apt packages first; they change rarely)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \

@@ -63,11 +63,23 @@ install_deb_to_user_space() {
         if [ -f "$USER_DEBS_DIR/.installed-$pkg" ]; then
             continue
         fi
-        echo "→ apt-get download $pkg (extracting to $USER_DEBS_DIR — no sudo needed)"
-        ( cd "$USER_DEBS_DIR" && apt-get download "$pkg" 2>&1 | tail -3 ) || {
-            echo "  ⚠ apt-get download failed for $pkg — trying anyway"
-        }
-        touch "$USER_DEBS_DIR/.installed-$pkg"
+        echo "→ apt-get update + download $pkg"
+        # apt-get update is required — the GHCR image's package index may be stale
+        # and universe repo may not be enabled (we enable it in the Dockerfile, but
+        # in case the image is old, we try to enable it here too)
+        apt-get update -qq 2>&1 | tail -3 || true
+        # Try to enable universe repo if not already (Ubuntu 24.04 deb822 format)
+        sed -i 's/^Components: main restricted$/Components: main restricted universe multiverse/' \
+            /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true
+        apt-get update -qq 2>&1 | tail -3 || true
+        # Download the .deb
+        if ( cd "$USER_DEBS_DIR" && apt-get download "$pkg" ) >/tmp/"$pkg".log 2>&1; then
+            touch "$USER_DEBS_DIR/.installed-$pkg"
+        else
+            echo "❌ Failed to fetch $pkg"
+            cat /tmp/"$pkg".log
+            exit 1
+        fi
     done
     # Extract all .deb files
     local deb

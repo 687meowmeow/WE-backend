@@ -1,9 +1,5 @@
 name: Build WepWawet APK
 
-# Build trigger options:
-#   - push to main / develop  -> debug APK (sanity check)
-#   - tag v*                   -> release APK + GitHub Release
-#   - workflow_dispatch        -> manual trigger (debug)
 on:
   push:
     branches: [main, develop]
@@ -16,33 +12,21 @@ on:
         default: false
 
 permissions:
-  contents: write       # needed for creating GitHub Releases
-  packages: read       # needed for pulling the builder image from GHCR
-  attestations: write # for build provenance
-  id-token: write     # for OIDC keyless signing
+  contents: write
+  packages: read
+  attestations: write
+  id-token: write
 
-# Cancel in-progress builds when a new commit is pushed to the same ref
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# The container: image is hard-coded in each job (ghcr.io/687meowmeow/we-backend/builder:latest)
-# because GitHub Actions doesn't allow the `env` context at the job-level container field.
-# If the repo is ever renamed, search/replace the image name.
-
 jobs:
-  # ============================================================================
-  # Job 1: 5-way matrix of component builds (all run in parallel)
-  # ============================================================================
   build-components:
     name: Build ${{ matrix.component }}
     runs-on: ubuntu-24.04
     container:
-      # NOTE: GitHub Actions does NOT allow the `env` context in a job-level
-      # `container:` field (env vars are evaluated AFTER the container is set up).
-      # Hard-coded image name (lowercase: docker requires lowercase).
       image: ghcr.io/687meowmeow/we-backend/builder:latest
-      # The builder image has all toolchains pre-baked (NDK 26, SDK 35, Mesa/Wine/Box64 build deps)
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -52,14 +36,19 @@ jobs:
         include:
           - component: box64
             artifact: box64-arm64-winlator.wcp
+            version: latest-main
           - component: wine
             artifact: wine-10.10-arm64-prefix.tar.zst
+            version: wine-10.10
           - component: mesa-turnip
             artifact: libvulkan_turnip.so
+            version: whitebelyash-tu8
           - component: dxvk
             artifact: dxvk-2.7.1.tar.zst
+            version: v2.7.1
           - component: vkd3d
             artifact: vkd3d-2.12.tar.zst
+            version: v2.12
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -68,9 +57,17 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ matrix.component }}-arm64
-          max-size: '2G'
+          max-size: '1G'
+
+      - name: Cache built artifact
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: artifacts/${{ matrix.artifact }}
+          key: ${{ matrix.component }}-artifact-v${{ matrix.version }}-${{ hashFiles('scripts/build_component.sh') }}
 
       - name: Build ${{ matrix.component }}
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           chmod +x scripts/build_component.sh
           ./scripts/build_component.sh ${{ matrix.component }}
@@ -89,17 +86,13 @@ jobs:
           name: ${{ matrix.component }}
           path: artifacts/${{ matrix.artifact }}
           retention-days: 14
-          compression-level: 0  # already compressed
+          compression-level: 0
 
-  # ============================================================================
-  # Job 2: Assemble the APK from the 5 component artifacts
-  # ============================================================================
   assemble-apk:
     name: Assemble APK
     needs: build-components
     runs-on: ubuntu-24.04
     container:
-      # Same hard-coded image (env context not allowed in container:)
       image: ghcr.io/687meowmeow/we-backend/builder:latest
       credentials:
         username: ${{ github.actor }}
@@ -147,13 +140,11 @@ jobs:
           echo "WEPWAWET_KEY_ALIAS=${{ secrets.WEPWAWET_KEY_ALIAS }}" >> $GITHUB_ENV
           echo "WEPWAWET_KEY_PASS=${{ secrets.WEPWAWET_KEY_PASS }}" >> $GITHUB_ENV
 
-      - name: Build APK (assembleRelease)
-        run: |
-          ./gradlew :app:assembleRelease --no-daemon --stacktrace --info
+      - name: Build APK
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace --info
 
-      - name: Build AAB (bundleRelease)
-        run: |
-          ./gradlew :app:bundleRelease --no-daemon --stacktrace --info
+      - name: Build AAB
+        run: ./gradlew :app:bundleRelease --no-daemon --stacktrace --info
 
       - name: Locate built APK
         id: find-apk
@@ -178,9 +169,6 @@ jobs:
             ${{ steps.find-apk.outputs.aab_path }}
           retention-days: 30
 
-  # ============================================================================
-  # Job 3: GitHub Release (only on tags)
-  # ============================================================================
   release:
     name: Publish GitHub Release
     needs: assemble-apk
@@ -204,7 +192,7 @@ jobs:
           echo "aab=$AAB" >> $GITHUB_OUTPUT
           ls -lh release/
 
-      - name: Split APK if >2GB (GitHub Release asset cap)
+      - name: Split APK if >2GB
         run: |
           APK_SIZE=$(stat -c%s "${{ steps.find.outputs.apk }}")
           if [ "$APK_SIZE" -gt 2000000000 ]; then
