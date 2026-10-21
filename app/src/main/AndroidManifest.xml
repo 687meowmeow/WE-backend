@@ -34,7 +34,9 @@
     <!-- ====== Hardware/features — declare so Play filters work (though we sideload) ====== -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="true" />
-    <uses-feature android:name="android.hardware.vulkan.version" android:glEsVersion="0x00301000" android:required="true" />
+    <!-- Vulkan 1.3 required (Adreno 740+ on SD8Gen2) — use android:version, NOT glEsVersion -->
+    <uses-feature android:name="android.hardware.vulkan.level" android:required="true" />
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="131072" android:required="true" />
     <!-- Adreno 740+ Vulkan 1.3 — we can't enforce this at install time, but document it -->
 
     <application
