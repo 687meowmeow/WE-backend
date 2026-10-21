@@ -1,4 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.text.SimpleDateFormat
+import java.util.Date
 
 plugins {
     alias(libs.plugins.android.application)
@@ -158,5 +160,6 @@ fun getGitSha(): String {
 }
 
 fun getBuildTime(): String {
-    return java.time.OffsetDateTime.now().toString()
+    val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX")
+    return sdf.format(Date())
 }
