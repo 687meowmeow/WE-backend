@@ -37,17 +37,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-tags: true
+          fetch-depth: 0
       - name: Check if commit has a v* tag
         id: check
         run: |
-          # Fetch all tags so we can check if this commit has one
-          git fetch --tags --force
-          # Check if this commit has a v* tag pointing at it
+          # fetch-depth: 0 already fetched all tags — no need for git fetch --tags
+          # (using both fetch-tags: true AND git fetch --tags --force caused
+          #  "Cannot fetch both <sha> and refs/tags/v* to refs/tags/v*" error)
           TAG=$(git tag --points-at ${{ github.sha }} | grep '^v' | head -1 || true)
           echo "Found tag: '${TAG}'"
           if [ "${{ github.ref_type }}" = "branch" ] && [ -n "$TAG" ]; then
-            echo "This is a branch push but the commit already has tag '$TAG'"
+            echo "This is a branch push but the commit already has tag '$TAG' — skipping"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
             echo "skip=false" >> $GITHUB_OUTPUT
