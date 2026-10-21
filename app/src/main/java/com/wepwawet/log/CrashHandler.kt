@@ -2,6 +2,7 @@ package com.wepwawet.log
 
 import android.content.Context
 import android.os.Process
+import android.os.Build
 import kotlin.system.exitProcess
 
 /**

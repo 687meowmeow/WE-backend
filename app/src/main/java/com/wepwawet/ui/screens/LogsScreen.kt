@@ -2,6 +2,7 @@ package com.wepwawet.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -20,33 +21,30 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.wepwawet.log.LogEntry
 import com.wepwawet.log.WepWawetLogger
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LogsScreen(onBack: () -> Unit) {
-    val events = remember { mutableListOf<WepWawetLogger.LogEntry>() }
-    var tick by remember { mutableStateOf(0) }
+    val events = remember { mutableStateListOf<LogEntry>() }
+    val tick = remember { mutableIntStateOf(0) }
 
-    // Poll the logger's snapshot every 500ms — the logger's SharedFlow could also be
-    // used directly, but polling is simpler and we want historical context (last 2000
-    // entries), not just new ones.
     LaunchedEffect(Unit) {
         while (true) {
             events.clear()
-            events += WepWawetLogger.snapshot()
-            tick++
+            events.addAll(WepWawetLogger.snapshot())
+            tick.intValue++
             delay(500)
         }
     }
@@ -54,7 +52,7 @@ fun LogsScreen(onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Logs ($tick)") },
+                title = { Text("Logs (${tick.intValue})") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
@@ -70,7 +68,6 @@ fun LogsScreen(onBack: () -> Unit) {
                 .padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            // Reverse so newest at top
             items(events.reversed(), key = { it.seq }) { entry ->
                 LogEntryRow(entry)
             }
@@ -79,7 +76,7 @@ fun LogsScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun LogEntryRow(entry: WepWawetLogger.LogEntry) {
+private fun LogEntryRow(entry: LogEntry) {
     val levelColor = when (entry.level) {
         WepWawetLogger.Level.TRACE, WepWawetLogger.Level.DEBUG -> Color(0xFF6B7280)
         WepWawetLogger.Level.INFO -> Color(0xFFE6E6E9)
@@ -97,7 +94,7 @@ private fun LogEntryRow(entry: WepWawetLogger.LogEntry) {
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(8.dp)) {
-            androidx.compose.foundation.layout.Row(modifier = Modifier.fillMaxWidth()) {
+            Row(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = entry.domain.tag,
                     color = MaterialTheme.colorScheme.primary,
