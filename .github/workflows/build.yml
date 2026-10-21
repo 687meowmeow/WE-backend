@@ -137,14 +137,18 @@ jobs:
     needs: [check-tag, build-components]
     if: needs.check-tag.outputs.skip != 'true'
     runs-on: ubuntu-24.04
-    container:
-      image: ghcr.io/687meowmeow/we-backend/builder:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+    # NO container — use the host runner which has full write access
+    # to install Android SDK components. The container approach failed
+    # because the builder user can't write to /opt/android-sdk/ and AGP
+    # couldn't find/install platforms;android-35.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
 
       - name: Download all 5 component artifacts
         uses: actions/download-artifact@v4
