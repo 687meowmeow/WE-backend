@@ -44,7 +44,7 @@ if [ ! -x /tmp/meson-venv/bin/meson ]; then
     echo "→ Creating Python venv + installing newer meson (apt's 1.3.2 too old for Mesa >=1.4)"
     python3 -m venv /tmp/meson-venv
     /tmp/meson-venv/bin/pip install --quiet --upgrade pip
-    /tmp/meson-venv/bin/pip install --quiet 'meson>=1.4.0'
+    /tmp/meson-venv/bin/pip install --quiet 'meson>=1.4.0' 'packaging'
 fi
 export PATH="/tmp/meson-venv/bin:$PATH"
 hash -r 2>/dev/null || true
@@ -230,10 +230,13 @@ EOF
         git checkout v2.7.1 2>/dev/null || true
         # DXVK expects Vulkan-Headers at <src>/include/vulkan/ (per linuxfromscratch.org)
         if [ ! -d "$SRC_ROOT/dxvk/include/vulkan" ] || [ ! -f "$SRC_ROOT/dxvk/include/vulkan/vulkan.h" ]; then
-            echo "→ Cloning KhronosGroup/Vulkan-Headers and copying into include/vulkan/"
+            echo "→ Cloning KhronosGroup/Vulkan-Headers and copying into include/"
             rm -rf "$SRC_ROOT/dxvk/include/vulkan" 2>/dev/null || true
+            rm -rf "$SRC_ROOT/dxvk/include/vk_video" 2>/dev/null || true
             git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vulkan-headers-tmp 2>/dev/null || true
-            cp -r /tmp/vulkan-headers-tmp/include/vulkan "$SRC_ROOT/dxvk/include/"
+            # Copy the ENTIRE include/ directory — not just vulkan/ but also vk_video/
+            # (vulkan_core.h includes <vk_video/vulkan_video_codec_h264std.h>)
+            cp -r /tmp/vulkan-headers-tmp/include/* "$SRC_ROOT/dxvk/include/"
             rm -rf /tmp/vulkan-headers-tmp
         fi
         # Write our OWN cross-file (DXVK's build-win64.txt doesn't add -I for Vulkan-Headers)

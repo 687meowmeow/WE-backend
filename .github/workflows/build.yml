@@ -35,16 +35,24 @@ jobs:
     outputs:
       skip: ${{ steps.check.outputs.skip }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - name: Check if commit has a v* tag
         id: check
         run: |
-          # fetch-depth: 0 already fetched all tags — no need for git fetch --tags
-          # (using both fetch-tags: true AND git fetch --tags --force caused
-          #  "Cannot fetch both <sha> and refs/tags/v* to refs/tags/v*" error)
-          TAG=$(git tag --points-at ${{ github.sha }} | grep '^v' | head -1 || true)
+          # Use GitHub API (synchronous, no git fetch race condition)
+          # The /repos/{owner}/{repo}/tags endpoint returns tags with their
+          # commit SHA (already dereferenced for annotated tags).
+          TAG=$(curl -sS -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/tags?per_page=100" | \
+            python3 -c "
+          import sys, json
+          tags = json.load(sys.stdin)
+          sha = '${{ github.sha }}'
+          for t in tags:
+              if t['commit']['sha'] == sha and t['name'].startswith('v'):
+                  print(t['name'])
+                  break
+          " 2>/dev/null || true)
           echo "Found tag: '${TAG}'"
           if [ "${{ github.ref_type }}" = "branch" ] && [ -n "$TAG" ]; then
             echo "This is a branch push but the commit already has tag '$TAG' — skipping"
