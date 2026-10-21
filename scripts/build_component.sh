@@ -44,7 +44,7 @@ if [ ! -x /tmp/meson-venv/bin/meson ]; then
     echo "→ Creating Python venv + installing newer meson (apt's 1.3.2 too old for Mesa >=1.4)"
     python3 -m venv /tmp/meson-venv
     /tmp/meson-venv/bin/pip install --quiet --upgrade pip
-    /tmp/meson-venv/bin/pip install --quiet 'meson>=1.4.0' 'packaging' 'mako'
+    /tmp/meson-venv/bin/pip install --quiet 'meson>=1.4.0' 'packaging' 'mako' 'pyyaml'
 fi
 export PATH="/tmp/meson-venv/bin:$PATH"
 hash -r 2>/dev/null || true
