@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     python3 python3-pip python3-venv \
     ccache \
-    zstd xz-utils tar gzip \
+    zstd xz-utils tar gzip unzip file \
     patchelf \
     flex bison \
     ninja-build \
@@ -64,16 +64,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zlib1g-dev \
     libxml2-dev libxslt1-dev \
     libcups2-dev \
-    libdbus-1-dev \
     libfontconfig1-dev \
     libgnutls28-dev \
     libgsm1-dev \
     libkrb5-dev \
     libldap2-dev \
-    libnettle-dev \
-    libopencl-clang-dev \
+    nettle-dev \
     libpcsclite-dev \
-    libpng-dev \
     libv4l-dev \
     libva-dev \
     libusb-1.0-0-dev \
@@ -81,7 +78,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libudev-dev \
     libsane-dev \
     libsnappy-dev \
-    libvulkan-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install JDK 17 (needed by Android Gradle plugin)
