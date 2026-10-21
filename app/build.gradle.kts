@@ -19,6 +19,11 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0-alpha"
+        // Explicitly set buildToolsVersion to match what's installed in the
+        // Docker image (35.0.0) — AGP 8.7.0 defaults to 34.0.0 which isn't
+        // installed, and the builder user can't install it (no write access
+        // to /opt/android-sdk/).
+        buildToolsVersion = "35.0.0"
         // WE app targets Snapdragon 8 Gen 2+ — only arm64-v8a makes sense
         ndk {
             abiFilters += "arm64-v8a"
@@ -150,13 +155,9 @@ dependencies {
 
 // Helpers
 fun getGitSha(): String {
-    return try {
-        val process = ProcessBuilder("git", "rev-parse", "--short", "HEAD")
-            .redirectErrorStream(true).start()
-        process.inputStream.bufferedReader().readText().trim().ifEmpty { "unknown" }
-    } catch (e: Exception) {
-        "unknown"
-    }
+    // Use GITHUB_SHA env var (always available in CI) — avoids Gradle 8.10+
+    // blocking external process execution during configuration time.
+    return System.getenv("GITHUB_SHA")?.take(7) ?: "unknown"
 }
 
 fun getBuildTime(): String {
