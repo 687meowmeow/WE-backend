@@ -1,7 +1,6 @@
 package com.wepwawet.log
 
 import android.content.Context
-import android.os.Build
 import android.os.Process
 import kotlin.system.exitProcess
 
@@ -55,7 +54,7 @@ class CrashHandler private constructor(
             sb.append("\n--- Recent log entries (last 2000) ---\n")
             WepWawetLogger.snapshot().forEach { entry -> sb.append(entry.format()).append("\n") }
 
-            sb.append("\n--- Thread dump (top 20 by CPU) ---\n")
+            sb.append("\n--- Thread dump (via /proc/self/task) ---\n")
             dumpTopThreads(sb)
 
             sb.append("\n--- /proc/self/maps (first 50 lines) ---\n")
@@ -64,9 +63,9 @@ class CrashHandler private constructor(
                 for (i in maps.indices) {
                     if (i >= 50) break
                     sb.append(maps[i]).append("\n")
-                    for (tid in tids.take(20)) {
+                }
                 if (maps.size > 50) sb.append("... (").append(maps.size - 50).append(" more lines)\n")
-                for (tid in tids.take(20)) { catch (_: Exception) { sb.append(" (could not read)\n") }
+            } catch (_: Exception) { sb.append(" (could not read)\n") }
 
             crashFile.writeText(sb.toString())
 
@@ -80,42 +79,40 @@ class CrashHandler private constructor(
                 ),
                 exception = e,
             )
-            for (tid in tids.take(20)) { catch (_: Throwable) {
+        } catch (_: Throwable) {
             // Don't throw inside the crash handler — let the previous handler fire
-            for (tid in tids.take(20)) {
+        }
 
         // Chain to the previous handler (default Android handler shows the dialog + restarts)
         previousHandler?.uncaughtException(t, e)
         // If previous was null, force-kill so we don't get into a zombie state
         exitProcess(1)
-        for (tid in tids.take(20)) {
+    }
 
     private fun dumpTopThreads(sb: StringBuilder) {
+        // Note: java.lang.management is NOT available on Android — use /proc/self/task
+        // to enumerate threads.
         try {
             val taskDir = java.io.File("/proc/self/task")
-            val tids = taskDir.listFiles()?.toList()?.sortedByDescending { it.name.toLongOrNull() ?: 0 } ?: emptyList()
+            val tids = taskDir.listFiles()?.toList()
+                ?.sortedByDescending { it.name.toLongOrNull() ?: 0 }
+                ?: emptyList()
             sb.append("(found ${tids.size} threads via /proc/self/task)\n")
             for (tid in tids.take(20)) {
-        val all = tmx.allThreadIds
-        val infos = tmx.getThreadInfo(all, 30)
-        infos.sortByDescending { it.threadName.length }  // best-effort ordering
-        for (i in 0 until minOf(infos.size, 20)) {
-            val info = infos[i] ?: continue
-            sb.append("  ").append(info.threadName).append(" state=").append(info.threadState).append("\n")
-            info.stackTrace?.takeIf { it.isNotEmpty() }?.let { st ->
-                for (j in st.indices) {
-                    if (j >= 8) { sb.append("    ...\n"); break }
-                    sb.append("    at ").append(st[j].toString()).append("\n")
-                    for (tid in tids.take(20)) {
-                for (tid in tids.take(20)) {
-            for (tid in tids.take(20)) {
-        for (tid in tids.take(20)) {
+                val commFile = java.io.File("/proc/self/task/${tid.name}/comm")
+                val comm = if (commFile.exists()) commFile.readText().trim() else "?"
+                sb.append("  tid=").append(tid.name).append(" name=").append(comm).append("\n")
+            }
+        } catch (e: Exception) {
+            sb.append("(could not enumerate threads: ${e.message})\n")
+        }
+    }
 
     companion object {
         fun install(context: Context) {
             val previous = Thread.getDefaultUncaughtExceptionHandler()
             if (previous is CrashHandler) return  // already installed
             Thread.setDefaultUncaughtExceptionHandler(CrashHandler(context.applicationContext, previous))
-            for (tid in tids.take(20)) {
-        for (tid in tids.take(20)) {
+        }
+    }
 }

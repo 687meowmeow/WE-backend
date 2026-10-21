@@ -24,10 +24,9 @@ import okhttp3.Request
  * (in Settings -> Steam account -> Enable Web API key). That path is faster + more reliable
  * than HTML scraping but requires the key.
  */
-@Singleton
-class SteamApiService constructor(
-    private val api: SteamRemoteStorageApi,
-    private val httpClient: OkHttpClient,
+class SteamApiService(
+    private val api: SteamRemoteStorageApi = retrofitApi(),
+    private val httpClient: OkHttpClient = defaultClient(),
 ) {
 
     /**
@@ -152,5 +151,25 @@ class SteamApiService constructor(
         const val WE_APP_ID = 431960L
         const val BATCH_SIZE = 50
         const val PAGE_SIZE = 50
+
+        /** Default OkHttp client — used when no DI is wired up. */
+        fun defaultClient(): OkHttpClient {
+            return OkHttpClient.Builder()
+                .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+        }
+
+        /** Retrofit interface for the Steam Web API — used when no DI is wired up. */
+        fun retrofitApi(): SteamRemoteStorageApi {
+            val contentType = "application/json".toMediaType()
+            val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            val retrofit = retrofit2.Retrofit.Builder()
+                .baseUrl(BASE_URL)
+                .client(defaultClient())
+                .addConverterFactory(json.asConverterFactory(contentType))
+                .build()
+            return retrofit.create(SteamRemoteStorageApi::class.java)
+        }
     }
 }

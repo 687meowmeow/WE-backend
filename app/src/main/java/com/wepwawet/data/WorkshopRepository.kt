@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.asStateFlow
  *     folder via [com.wepwawet.wine.WinePrefixManager.observeSubscriptions]
  *   - Lookup by ID (for the Wallpaper detail screen)
  */
-@Singleton
 class WorkshopRepository constructor(
     private val steamApi: SteamApiService,
 ) {
