@@ -53,8 +53,9 @@ hash -r 2>/dev/null || true
 git config --global --add safe.directory '*' 2>/dev/null || true
 
 # === User-space .deb installer (no sudo needed) ===
-# apt-get download fetches .deb files to the current dir; dpkg-deb -x extracts
-# them to a user-writable location. We add /tmp/user-debs/usr/bin to PATH.
+# Only called as a FALLBACK when the binary is NOT already in PATH (i.e., the
+# Docker image doesn't have the package installed). Uses apt-get download +
+# dpkg-deb -x to extract to a user-writable location.
 USER_DEBS_DIR=/tmp/user-debs
 mkdir -p "$USER_DEBS_DIR"
 install_deb_to_user_space() {
@@ -63,21 +64,28 @@ install_deb_to_user_space() {
         if [ -f "$USER_DEBS_DIR/.installed-$pkg" ]; then
             continue
         fi
-        echo "→ apt-get update + download $pkg"
-        # apt-get update is required — the GHCR image's package index may be stale
-        # and universe repo may not be enabled (we enable it in the Dockerfile, but
-        # in case the image is old, we try to enable it here too)
-        apt-get update -qq 2>&1 | tail -3 || true
+        echo "→ Attempting to install $pkg via apt-get download (fallback)"
+        # Try to fix APT state — /var/lib/apt/lists/partial may not be writable
+        # by the builder user. If apt-get update fails, we try apt-get download
+        # without it (using stale package lists from the image build time).
+        mkdir -p /var/lib/apt/lists/partial 2>/dev/null || true
+        apt-get update -qq 2>&1 | tail -3 || {
+            echo "  ⚠ apt-get update failed (permission denied on /var/lib/apt/lists?)"
+            echo "  → Trying apt-get download with stale package lists..."
+        }
         # Try to enable universe repo if not already (Ubuntu 24.04 deb822 format)
         sed -i 's/^Components: main restricted$/Components: main restricted universe multiverse/' \
             /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true
         apt-get update -qq 2>&1 | tail -3 || true
-        # Download the .deb
+        # Download the .deb (this can work even without apt-get update if the
+        # package lists from image build time are still present)
         if ( cd "$USER_DEBS_DIR" && apt-get download "$pkg" ) >/tmp/"$pkg".log 2>&1; then
             touch "$USER_DEBS_DIR/.installed-$pkg"
         else
             echo "❌ Failed to fetch $pkg"
             cat /tmp/"$pkg".log
+            echo "The Docker image should have this package pre-installed."
+            echo "Try rebuilding the GHCR image: trigger the docker-image.yml workflow."
             exit 1
         fi
     done
@@ -90,6 +98,22 @@ install_deb_to_user_space() {
     done
     export PATH="$USER_DEBS_DIR/usr/bin:$PATH"
     hash -r 2>/dev/null || true
+}
+
+# Helper: ensure a binary is available, install via apt-get download if not
+ensure_binary() {
+    local binary="$1"
+    local pkg="$2"
+    if which "$binary" >/dev/null 2>&1; then
+        echo "→ $binary already available: $(which $binary)"
+    else
+        echo "→ $binary not found, installing $pkg..."
+        install_deb_to_user_space "$pkg"
+        if ! which "$binary" >/dev/null 2>&1; then
+            echo "❌ $binary still not found after installing $pkg"
+            exit 1
+        fi
+    fi
 }
 
 # Copy /opt/<name>-src to /tmp/wepwawet-src/<name> if not already done.
@@ -167,9 +191,10 @@ EOF
         git remote add whitebelyash https://gitlab.freedesktop.org/whitebelyash/mesa.git 2>/dev/null || true
         git fetch whitebelyash 2>/dev/null || true
         git checkout whitebelyash/tu8 2>/dev/null || git checkout whitebelyash/main 2>/dev/null || true
-        # Mesa needs glslangValidator (provides by apt pkg 'glslang-tools')
-        install_deb_to_user_space glslang-tools
-        echo "→ glslangValidator: $(which glslangValidator 2>/dev/null || echo 'NOT FOUND')"
+        # Mesa needs glslangValidator for shader compilation.
+        # The Docker image should have glslang-tools installed — only call
+        # install_deb_to_user_space as a fallback if not found.
+        ensure_binary glslangValidator glslang-tools
         cat > /tmp/mesa-native.txt <<'EOF'
 [binaries]
 c = 'cc'
@@ -212,7 +237,12 @@ EOF
             rm -rf /tmp/vulkan-headers-tmp
         fi
         # Write our OWN cross-file (DXVK's build-win64.txt doesn't add -I for Vulkan-Headers)
-        # Per meson docs: -Dc_args does NOT apply to cross-compile; only cross-file c_args do
+        # Per meson docs: -Dc_args does NOT apply to cross-compile; only cross-file c_args do.
+        # CRITICAL: Do NOT add -I/usr/include — that makes the mingw cross-compiler find
+        # Linux glibc headers (bits/libc-header-start.h) instead of mingw's own, causing
+        # 'fatal error: bits/libc-header-start.h: No such file or directory' and the
+        # subsequent 'Missing Vulkan-Headers' error. Only include the source tree's
+        # include/ directory where we cloned the Vulkan-Headers.
         cat > /tmp/dxvk-cross.txt <<EOF
 [binaries]
 c = 'x86_64-w64-mingw32-gcc'
@@ -223,10 +253,8 @@ windres = 'x86_64-w64-mingw32-windres'
 dlltool = 'x86_64-w64-mingw32-dlltool'
 
 [built-in options]
-c_args = ['-I${SRC_ROOT}/dxvk/include', '-I/usr/include']
-cpp_args = ['-I${SRC_ROOT}/dxvk/include', '-I/usr/include']
-c_link_args = ['-L/usr/lib']
-cpp_link_args = ['-L/usr/lib']
+c_args = ['-I${SRC_ROOT}/dxvk/include']
+cpp_args = ['-I${SRC_ROOT}/dxvk/include']
 
 [host_machine]
 system = 'windows'
@@ -263,10 +291,10 @@ EOF
             fi
         }
         # VKD3D-Proton needs x86_64-w64-mingw32-widl (provided by apt pkg 'mingw-w64-tools')
-        install_deb_to_user_space mingw-w64-tools
-        echo "→ x86_64-w64-mingw32-widl: $(which x86_64-w64-mingw32-widl 2>/dev/null || echo 'NOT FOUND')"
-        # VKD3D also needs glslang for shader compilation
-        install_deb_to_user_space glslang-tools
+        # and glslangValidator (provided by apt pkg 'glslang-tools').
+        # The Docker image should have both installed — use ensure_binary as fallback.
+        ensure_binary x86_64-w64-mingw32-widl mingw-w64-tools
+        ensure_binary glslangValidator glslang-tools
         BUILD_DIR="$BUILD_ROOT/vkd3d"
         meson setup "$BUILD_DIR" "$SRC_ROOT/vkd3d" \
             --cross-file "$SRC_ROOT/vkd3d/build-win64.txt" \
