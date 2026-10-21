@@ -22,8 +22,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ============================================================================
+  # Job 0: Check if this commit already has a v* tag (prevents duplicate runs)
+  # ============================================================================
+  # When you push a commit AND a tag simultaneously, GitHub Actions triggers
+  # build.yml twice (once for the branch push, once for the tag push). This
+  # job detects that situation and sets skip=true for the branch-push run,
+  # so only the tag-triggered run proceeds (which includes the release job).
+  check-tag:
+    name: Check for duplicate tag run
+    runs-on: ubuntu-24.04
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+      - name: Check if commit has a v* tag
+        id: check
+        run: |
+          # Fetch all tags so we can check if this commit has one
+          git fetch --tags --force
+          # Check if this commit has a v* tag pointing at it
+          TAG=$(git tag --points-at ${{ github.sha }} | grep '^v' | head -1 || true)
+          echo "Found tag: '${TAG}'"
+          if [ "${{ github.ref_type }}" = "branch" ] && [ -n "$TAG" ]; then
+            echo "This is a branch push but the commit already has tag '$TAG'"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+  # ============================================================================
+  # Job 1: 5-way matrix of component builds (all run in parallel)
+  # ============================================================================
   build-components:
     name: Build ${{ matrix.component }}
+    needs: check-tag
+    if: needs.check-tag.outputs.skip != 'true'
     runs-on: ubuntu-24.04
     container:
       image: ghcr.io/687meowmeow/we-backend/builder:latest
@@ -90,7 +126,8 @@ jobs:
 
   assemble-apk:
     name: Assemble APK
-    needs: build-components
+    needs: [check-tag, build-components]
+    if: needs.check-tag.outputs.skip != 'true'
     runs-on: ubuntu-24.04
     container:
       image: ghcr.io/687meowmeow/we-backend/builder:latest
@@ -171,8 +208,8 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: assemble-apk
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [check-tag, assemble-apk]
+    if: needs.check-tag.outputs.skip != 'true' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

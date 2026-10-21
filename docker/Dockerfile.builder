@@ -128,20 +128,30 @@ ENV BOX64_REPO=/opt/box64-src
 RUN git clone --depth 1 https://github.com/ptitSeb/box64.git $BOX64_REPO
 
 # ============================================================================
-# DXVK / VKD3D
+# DXVK / VKD3D-Proton (DirectX → Vulkan translation layers)
 # ============================================================================
+# DXVK v1.10.3 doesn't exist (v1.x line was dropped); v2.7.1 is current stable.
+# VKD3D upstream (gitlab.winehq.org/wine/vkd3d) uses 'vkd3d-X.Y' tag naming,
+# so 'v2.12' doesn't exist there. We use the Proton fork
+# (github.com/HansKristian-Work/vkd3d-proton) which uses 'vX.Y' tag naming
+# and is what Wine/Proton users actually run. github→github is also more
+# reliable from GitHub Actions runners than github→gitlab.winehq.org.
 ENV DXVK_REPO=/opt/dxvk-src
+RUN git clone --depth 1 --single-branch -b v2.7.1 https://github.com/doitsujin/dxvk.git $DXVK_REPO
+
 ENV VKD3D_REPO=/opt/vkd3d-src
-RUN git clone --depth 1 -b v1.10.3 https://github.com/doitsujin/dxvk.git $DXVK_REPO && \
-    git clone --depth 1 -b v2.12 https://gitlab.winehq.org/wine/vkd3d.git $VKD3D_REPO
+RUN git clone --depth 1 --single-branch -b v2.12 https://github.com/HansKristian-Work/vkd3d-proton.git $VKD3D_REPO
 
 # ============================================================================
 # Winlator rootfs (Ubuntu Focal ARM64 base, used as the Wine prefix's C: drive)
 # ============================================================================
+# Ubuntu Base 20.04 only goes up to 20.04.5 — there's no 20.04.6 ubuntu-base
+# tarball (the .6 point release is for desktop/server images only, not the
+# minimal base rootfs). Switched http:// → https://.
 ENV ROOTFS_BASE=/opt/rootfs-base
 RUN mkdir -p $ROOTFS_BASE && \
     cd /tmp && \
-    curl -fsSL http://cdimage.ubuntu.com/ubuntu-base/releases/20.04/release/ubuntu-base-20.04.6-base-arm64.tar.gz -o rootfs.tar.gz && \
+    curl -fsSL https://cdimage.ubuntu.com/ubuntu-base/releases/20.04/release/ubuntu-base-20.04.5-base-arm64.tar.gz -o rootfs.tar.gz && \
     tar xzf rootfs.tar.gz -C $ROOTFS_BASE && \
     rm rootfs.tar.gz
 
