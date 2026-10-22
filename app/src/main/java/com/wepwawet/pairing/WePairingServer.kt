@@ -1,3 +1,4 @@
+import com.google.gson.Gson
 package com.wepwawet.pairing
 
 import android.util.Log
