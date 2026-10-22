@@ -1,7 +1,7 @@
-import com.google.gson.Gson
 package com.wepwawet.pairing
 
 import android.util.Log
+import com.google.gson.Gson
 import com.wepwawet.log.WepWawetLogger
 import java.io.DataInputStream
 import java.io.DataOutputStream
