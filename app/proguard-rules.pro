@@ -9,7 +9,7 @@
 -keepclassmembers class kotlinx.serialization.json.** {
     *** Companion;
 }
--keepclasses { class kotlinx.serialization.json.** }
+-keep class kotlinx.serialization.json.** { *; }
 
 # Retrofit — service interfaces (used by SteamApiService)
 -keepattributes Signature, InnerClasses, EnclosingMethod
