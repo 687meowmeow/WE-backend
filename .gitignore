@@ -1,40 +1,54 @@
-# WepWawet .gitignore
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-# Built artifacts (do not commit large binaries — they come from CI)
-app/src/main/assets/*.wcp
-app/src/main/assets/*.tar.zst
-app/src/main/assets/*.so
-app/src/main/assets/*.dll
-app/src/main/assets/wine-prefix/
+# dependencies
+node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
 
-# Native libs (built by CI per-component matrix)
-app/src/main/jniLibs/arm64-v8a/*
+# testing
+/coverage
 
-# Local environment files
-local.properties
-.gradle/
-build/
-/app/build/
-/.gradle/
-*.iml
-.idea/
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
 .DS_Store
+*.pem
 
-# Keystore (NEVER commit)
-*.keystore
-*.jks
-!debug.keystore
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
 
-# Logs
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+local-*
+.claude
+.z-ai-config
 *.log
-crash-*.txt
+dev.log
+dev.out.log
+test
+prompt
 
-# Wine prefix snapshots (if you ever snapshot one locally)
-prefix-snapshot/
-
-# IDE / editors
-.vscode/
-*.swp
-*.swo
-*~
-upload/
+server.log
+# Skills directory
+/skills/
