@@ -28,6 +28,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,15 +51,23 @@ fun PairingScreen(
     var pin by remember { mutableStateOf("1234") }
     var running by remember { mutableStateOf(false) }
 
+    // Auto-start proxy on screen appear
+    DisposableEffect(Unit) {
+        if (!running) {
+            running = true
+            PairingService.start(context, pin)
+        }
+        onDispose { }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Pairing") },
                 navigationIcon = {
                     IconButton(onClick = {
-                        if (running) {
-                            PairingService.stop(context)
-                        }
+                        PairingService.stop(context)
+                        running = false
                         onBack()
                     }) {
                         Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
@@ -141,8 +150,8 @@ fun PairingScreen(
                     }
                 } else {
                     Button(onClick = {
-                        running = false
                         PairingService.stop(context)
+                        running = false
                     }) {
                         Icon(Icons.Filled.Stop, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
@@ -150,7 +159,12 @@ fun PairingScreen(
                     }
                 }
                 OutlinedButton(onClick = {
+                    // Stop old service, generate new PIN, start new service
+                    PairingService.stop(context)
                     pin = (1000..9999).random().toString()
+                    if (running) {
+                        PairingService.start(context, pin)
+                    }
                 }) {
                     Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                     Spacer(Modifier.width(8.dp))
@@ -177,12 +191,14 @@ fun PairingScreen(
                         Spacer(Modifier.height(8.dp))
                         Text("• UDP 7884: Broadcasting WallpaperEngine/Ping")
                         Text("• TCP 7889: Listening for pairing connections")
-                        Text("• RSA-1024 keypair generated")
+                        Text("• RSA-1024 keypair generated (OAEP padding)")
                         Text("• AES-256-CBC + RSA/ECB/OAEPPadding")
                         Text("• PIN: $pin")
+                        Text("• Discovery: protocolVersion=4 (CONNECTION_PROTOCOL_VERSION)")
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "Check the Logs tab for real-time protocol messages.",
+                            "Check the Logs tab for real-time protocol messages.\n" +
+                            "Use the copy button to copy logs for debugging.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

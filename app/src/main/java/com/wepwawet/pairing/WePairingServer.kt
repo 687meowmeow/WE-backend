@@ -238,7 +238,7 @@ class WePairingServer {
      */
     private fun readLengthPrefixed(input: DataInputStream, label: String): ByteArray? {
         val length = readLeInt(input)
-        WepWawetLogger.proxyDebug("Reading length-prefixed: $label", "length" to length)
+        WepWawetLogger.proxy("Reading length-prefixed: $label", "length" to length)
         if (length <= 0 || length > MAX_SAFE_DATA_LENGTH) {
             WepWawetLogger.proxyError("Invalid $label length: $length")
             return null
@@ -323,10 +323,14 @@ class WePairingServer {
             client.use {
                 // Set TCP keepalive + timeouts
                 it.keepAlive = true
-                it.soTimeout = 30000  // 30s timeout for handshake
+                it.soTimeout = 60000  // 60s timeout (phone blocks on commandQueue until PIN entered)
 
-                val input = DataInputStream(it.getInputStream())
-                val output = DataOutputStream(it.getOutputStream())
+                // CRITICAL: Use BufferedOutputStream to avoid TCP fragmentation.
+                // Without buffering, writeLeInt sends 4 individual bytes via writeByte,
+                // creating 4 tiny TCP segments. The phone may time out waiting for
+                // the complete length prefix.
+                val input = DataInputStream(java.io.BufferedInputStream(it.getInputStream()))
+                val output = DataOutputStream(java.io.BufferedOutputStream(it.getOutputStream()))
 
                 WepWawetLogger.proxy("Handling pairing connection",
                     "remote" to it.remoteSocketAddress.toString())
@@ -336,7 +340,7 @@ class WePairingServer {
                 // (was modulus-first in earlier code — WRONG)
                 val (modulus, exponent) = getRsaPublicKeyComponents()
                 val expBytes = stripLeadingZero(exponent.toByteArray())
-                WepWawetLogger.proxyDebug("Sending RSA exponent",
+                WepWawetLogger.proxy("Sending RSA exponent",
                     "exponent" to exponent.toString(16),
                     "wire_bytes" to expBytes.size,
                     "wire_hex" to expBytes.joinToString("") { "%02x".format(it) })
@@ -354,7 +358,7 @@ class WePairingServer {
                 } else {
                     modBytes
                 }
-                WepWawetLogger.proxyDebug("Sending RSA modulus",
+                WepWawetLogger.proxy("Sending RSA modulus",
                     "modulus_bits" to modulus.bitLength(),
                     "wire_bytes" to modPadded.size,
                     "wire_hex_first_16" to modPadded.take(16).joinToString("") { "%02x".format(it) })
