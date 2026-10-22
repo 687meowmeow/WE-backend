@@ -1041,3 +1041,108 @@ with tool context-deadline timeouts in the main session. Their mitigations
 (native proxy sidesteps bcrypt; manual IP entry sidesteps mDNS uncertainty) are
 baked into the architecture. If the user wants more confidence before v1, those
 research areas should be re-run.
+
+---
+Task ID: 1
+Agent: main (Z.ai CLI)
+Task: Fix "crashes on boot without logs being made" — user reports the WepWawet
+APK crashes immediately on launch with no crash report visible in Downloads.
+
+Work Log:
+- Read CrashHandler.kt and found it writes to app-internal storage
+  (`/data/data/com.wepwawet/files/wepwawet/crashes/`) — INVISIBLE to the
+  user without root. The user's previous explicit request was for crash
+  logs in `Downloads/WepWawet/` (per worklog Task 5a). The summary line
+  "CrashHandler.kt — Writes crash reports to Downloads/WepWawet/" was a
+  docstring claim, not the actual behavior. This was the root cause of
+  "without logs being made" — logs WERE being made, just to a location
+  the user couldn't access.
+- Read WepWawetApplication.kt and found that onCreate was not robust:
+  a single init-step failure (e.g. WorkManager.getInstance() throwing
+  IllegalStateException when on-demand initializer is misconfigured)
+  would propagate up and crash the app before the UI could render.
+- Read WepWawetLogger.kt and found that init() calls
+  LogPersistenceWorker.schedule(context) which calls
+  WorkManager.getInstance(context) — if this throws, the whole app
+  crashes at boot.
+- Read MainActivity.kt and found it catches `Exception` around
+  PairingService.start() — but class-loading Errors like
+  NoClassDefFoundError wouldn't be caught, would propagate.
+- Read WorkshopItem.kt and confirmed the `banned` field is `Boolean`
+  but Steam API returns Int (0 or 1) — would cause JsonSyntaxException
+  when parsing workshop items with `banned:1`. Not the boot crash,
+  but a real bug that would break workshop browsing.
+- Read AndroidManifest.xml to confirm no WRITE_EXTERNAL_STORAGE
+  permission is declared, so the legacy File API path for Android 9
+  and below would fail.
+
+Fixes Applied (commit 398ffe5):
+
+1. CrashHandler.kt — completely rewritten to:
+   - Write crash reports to PUBLIC Downloads/WepWawet/ via MediaStore
+     on Android 10+ (no permission needed for our own files in the
+     Downloads collection), and via legacy File API to
+     Environment.getExternalStoragePublicDirectory(DIRECTORY_DOWNLOADS)/WepWawet/
+     on Android 9 and below.
+   - ALSO write to internal storage as a backup.
+   - ALSO log to logcat via Log.e() as a final fallback.
+   - Every step wrapped in runCatching so a single I/O failure
+     doesn't prevent the next step.
+   - install() wrapped in try-catch + Log.e fallback.
+   - Also writes a `crash-latest.txt` file so the user can find the
+     most recent crash without sorting by timestamp.
+
+2. WepWawetApplication.kt — completely rewritten to:
+   - Wrap CrashHandler.install, WepWawetLogger.init,
+     createNotificationChannels, the startup-complete log call,
+     AND the boot breadcrumb write — each in their own runCatching
+     block. A single step failure can no longer bring down the app.
+   - Write a `boot.txt` breadcrumb to Downloads/WepWawet/ at the
+     START of onCreate. If this file is missing on the user's device,
+     the crash is happening BEFORE Application.onCreate() runs —
+     which means class loading failure, manifest merge issue, or
+     native init crash (none of which the Java CrashHandler can
+     capture, but at least the user knows the boundary).
+   - Append "onCreate complete" to boot.txt at the end so the user
+     can see exactly how far the boot got.
+
+3. WepWawetLogger.kt — init() now wraps LogPersistenceWorker.schedule
+   in try-catch. WorkManager init failure no longer crashes the app;
+   the in-memory ring buffer still works.
+
+4. MainActivity.kt — onCreate now:
+   - Catches Throwable (not just Exception) around
+     PairingService.start() so class-loading Errors don't kill the
+     activity.
+   - Catches Throwable around setContent() so Compose first-composition
+     crashes don't kill the activity (the activity shows a black
+     screen instead of immediately crashing).
+   - Logs to BOTH WepWawetLogger AND logcat as fallbacks.
+
+5. WorkshopItem.kt — `banned` field changed from Boolean to Int
+   (Steam API returns Int, this would have caused JsonSyntaxException
+   when workshop items with `banned:1` were parsed — separate bug,
+   not the boot crash, but fixed while I was in there).
+
+6. AndroidManifest.xml — added `WRITE_EXTERNAL_STORAGE` and
+   `READ_EXTERNAL_STORAGE` permissions with `maxSdkVersion="28"`
+   so legacy Android 9 and below can write to the public Downloads
+   directory via File API.
+
+Stage Summary:
+- Pushed commit 398ffe5 to GitHub (https://github.com/687meowmeow/WE-backend).
+- GitHub Actions build #112 triggered (status: in_progress).
+- Once the build completes (~10-15 min based on previous builds), the new
+  APK will be available in the workflow's "wepwawet-apk" artifact.
+- After the user installs the new APK and tries to launch, they should
+  see:
+    - Downloads/WepWawet/boot.txt — proves the app reached
+      Application.onCreate. If this file is missing, the crash is
+      in class loading or native init (need adb logcat to debug).
+    - Downloads/WepWawet/crash-latest.txt — full crash report
+      with thread, stack trace, recent log entries, /proc/self/maps.
+    - Downloads/WepWawet/crash-<timestamp>.txt — historical
+      crash reports.
+- With these logs, the next iteration can identify the actual cause
+  of the boot crash (which the previous "no logs being made" state
+  made impossible to diagnose).
