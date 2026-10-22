@@ -47,6 +47,15 @@
 -dontwarn okio.**
 -dontwarn javax.annotation.**
 
+# Tink crypto (transitively pulled in via androidx.security.crypto for
+# EncryptedSharedPreferences). Tink's runtime classes use compile-time-only
+# annotations from com.google.errorprone.annotations which are NOT packaged
+# in the runtime APK. R8's "Missing class" report (new in AGP 8.x) treats
+# references to missing classes as build-breaking errors. We use -dontwarn
+# to silence them — the annotations are not needed at runtime.
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn com.google.crypto.tink.**
+
 # Kotlin coroutines — keep internal state machine
 -keepclassmembers class kotlinx.coroutines.** {
     volatile <fields>;
