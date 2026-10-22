@@ -3,8 +3,17 @@
 # Compose — recommended by AndroidX
 -keep class androidx.compose.** { *; }
 
+# Gson — data classes used for JSON serialization (CRITICAL: without these,
+# R8 renames the classes and Gson can't find the no-arg constructor, causing
+# "Abstract classes can't be instantiated" errors at runtime)
+-keep class com.wepwawet.pairing.** { *; }
+-keep class com.wepwawet.data.model.** { *; }
+-keep class com.wepwawet.data.api.** { *; }
+-keep class com.google.gson.** { *; }
+-keepattributes Signature
+-keepattributes *Annotation*
+
 # Kotlinx Serialization — required for the JSON converter
--keepattributes *Annotation*, InnerClasses
 -dontnote kotlinx.serialization.AnnotationsKt
 -keepclassmembers class kotlinx.serialization.json.** {
     *** Companion;
@@ -12,9 +21,7 @@
 -keep class kotlinx.serialization.json.** { *; }
 
 # Retrofit — service interfaces (used by SteamApiService)
--keepattributes Signature, InnerClasses, EnclosingMethod
--keep class com.wepwawet.data.api.** { *; }
--keep class com.wepwawet.data.model.** { *; }
+-keepattributes InnerClasses, EnclosingMethod
 -keepclassmembers,allowshrinking,allowobfuscation interface * {
     @retrofit2.http.* <methods>;
 }
@@ -23,11 +30,6 @@
 -dontwarn okhttp3.**
 -dontwarn okio.**
 -dontwarn javax.annotation.**
-
-# Wine / native bridge — JNI classes
--keep class com.wepwawet.wine.** { *; }
--keep class com.wepwawet.proxy.** { *; }
--keep class com.winlator.** { *; }   # if we bundle Winlator classes
 
 # Kotlin coroutines — keep internal state machine
 -keepclassmembers class kotlinx.coroutines.** {
