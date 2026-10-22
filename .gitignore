@@ -52,3 +52,22 @@ prompt
 server.log
 # Skills directory
 /skills/
+# === WepWawet Android-specific ignores ===
+
+# Decompiled WE Android APK source tree (43 MB) — used for RE only, never commit
+we-android-decompiled/
+we-android.apk
+
+# jadx decompiler tool (73 MB zip) — install on demand via we_decompile_android.py
+tools/jadx/
+tools/jadx-1.5.6.zip
+tools/jadx-*.zip
+
+# Tool result outputs (large text files from agent searches)
+tool-results/
+
+# Upload directory (user-provided crash logs and screenshots)
+upload/
+
+# Native libraries extracted during RE
+*.so
