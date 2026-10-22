@@ -1,0 +1,302 @@
+   200→- Fetched WE creator documentation sitemap (`docs.wallpaperengine.io/sitemap.xml`, 24KB) — only `/en/scene/` and `/en/web/` content trees (no `/en/image/`, `/en/video/`, `/en/playlist/`, `/en/application/` — those types need no creator docs).
+   201→- Fetched WE official Android page (`wallpaperengine.io/android/en`, 39KB) — confirmed direct APK download URL `wallpaperengine.io/android/apk/wallpaper-engine.apk`, Play Store package ID `io.wallpaperengine.weclient`, requires Android 10+.
+   202→- HTTP HEAD-tested the direct APK URL — confirmed 145MB `application/vnd.android.package-archive` (publicly downloadable, no Google Play needed).
+   203→- Fetched `Almamu/linux-wallpaperengine` README (14KB), LICENSE (GPL3), `.gitmodules` (reveals quickjs+glslang+SPIRV-Cross submodules), `CMakeLists.txt` (30KB — reveals CEF 135.0.17/Chromium 135 + explicit `linuxarm64` platform target + dep on MPV/LZ4/FFMPEG/PulseAudio/FFTW3/GLM/GLFW/GLEW/GLUT/SDL2/DBus/Freetype).
+   204→- Scraped the linux-wallpaperengine GitHub source tree via HTML (api.github.com was rate-limited as in Task 1-A). Confirmed directory structure: `src/main.cpp`, `src/WallpaperEngine/{Application,Assets,Audio,Data,Debugging,FileSystem,Input,Logging,Media,Render,Scripting,Testing,VideoPlayback/MPV,WebBrowser}/`, `src/Steam/FileSystem/`, `src/External/` (submodules).
+   205→- Fetched raw source of LWE's `PackageParser.cpp` (reveals `.pkg` binary format: `PKGV` magic + uint32 fileCount + per-file {filename, offset, length}), `ProjectParser.cpp` (reveals `project.json` schema + that only `scene|video|web` types are supported by LWE), `TextureParser.cpp` (reveals `.tex` binary format: `TEXB` magic + container version 0002/0003/0004 + mipmap list + LZ4 compression + animated texture frames), `PackageAdapter.cpp` (.pkg file system adapter), `main.cpp` (CEF `--type=zygote`/`--type=utility` subprocess flags), `Steam/FileSystem/FileSystem.h` (`workshopDirectory(appID, contentID)` helper).
+   206→- Fetched `RePKG` README + LICENSE — MIT-licensed C# tool by `notscuffed`, the canonical community reference for `.pkg` and `.tex` parsing (linux-wallpaperengine README credits it for "texture flag insights").
+   207→- Attempted to fetch SteamCMD docs from `developer.valvesoftware.com/wiki/SteamCMD` (405-byte redirect, blocked from sandbox) and `steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.txt` (404). Relied on partner.steamgames.com Workshop Implementation Guide's coverage of `steamcmd.exe +workshop_build_item <vdf>` (and the symmetric `+workshop_download_item` known from community knowledge).
+   208→
+   209→Key sources consulted (URLs):
+   210→- https://store.steampowered.com/app/431960/Wallpaper_Engine/
+   211→- https://steamcommunity.com/workshop/browse?appid=431960 (HTML — anonymously scrapable for item IDs)
+   212→- https://steamcommunity.com/sharedfiles/filedetails/?id=1845706469 (HTML — anonymously scrapable for item metadata)
+   213→- https://partner.steamgames.com/doc/features/workshop
+   214→- https://partner.steamgames.com/doc/features/workshop/implementation
+   215→- https://partner.steamgames.com/doc/webapi
+   216→- https://partner.steamgames.com/doc/api/ISteamRemoteStorage
+   217→- https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/ (LIVE-tested anonymous endpoint, works!)
+   218→- https://api.steampowered.com/ISteamRemoteStorage/GetCollectionDetails/v1/ (LIVE-tested anonymous endpoint, works!)
+   219→- https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/ (LIVE-tested — 403 Forbidden without `key=`)
+   220→- https://api.steampowered.com/IPublishedFileService/GetDetails/v1/ (LIVE-tested — 401 Unauthorized without `key=`)
+   221→- https://steamcommunity.com/dev/apikey (Web API key registration)
+   222→- https://help.wallpaperengine.io/en/ (help site root, sitemap visible)
+   223→- https://help.wallpaperengine.io/en/mobile/pairing.html (UDP 7884 + TCP 7889 + 4-digit PIN)
+   224→- https://help.wallpaperengine.io/en/mobile/pairing-fixes.html (`.mpkg` backup format + manual USB import)
+   225→- https://help.wallpaperengine.io/en/mobile/faq.html (confirms no Workshop access on Android)
+   226→- https://help.wallpaperengine.io/en/functionality/cli.html (`-control` IPC commands: pause/stop/play/mute/openWallpaper/closeWallpaper/etc.)
+   227→- https://help.wallpaperengine.io/en/functionality/editingwallpapers.html (project.json schema, .pkg "packed" not editable)
+   228→- https://help.wallpaperengine.io/en/functionality/linuxmacos.html (custom engine, partial Android port)
+   229→- https://help.wallpaperengine.io/en/general/bits.html (`webwallpaper32.exe` always 32-bit)
+   230→- https://docs.wallpaperengine.io/sitemap.xml (creator doc sitemap — only `scene/` + `web/` trees exist)
+   231→- https://docs.wallpaperengine.io/en/scene/scenescript/reference.html (SceneScript API classes)
+   232→- https://docs.wallpaperengine.io/en/scene/shader/overview.html (custom shader language)
+   233→- https://www.wallpaperengine.io/ (official site)
+   234→- https://www.wallpaperengine.io/android/en (Android app page — direct APK + Play Store ID)
+   235→- https://www.wallpaperengine.io/android/apk/wallpaper-engine.apk (145MB, freely downloadable)
+   236→- https://play.google.com/store/apps/details?id=io.wallpaperengine.weclient
+   237→- https://github.com/Almamu/linux-wallpaperengine (GPL3 native reimplementation, alt path)
+   238→- https://raw.githubusercontent.com/Almamu/linux-wallpaperengine/main/README.md
+   239→- https://raw.githubusercontent.com/Almamu/linux-wallpaperengine/main/LICENSE (GPL3)
+   240→- https://raw.githubusercontent.com/Almamu/linux-wallpaperengine/main/.gitmodules (quickjs/glslang/SPIRV-Cross deps)
+   241→- https://raw.githubusercontent.com/Almamu/linux-wallpaperengine/main/CMakeLists.txt (CEF 135 / Chromium 135, ARM64 target)
+   242→- https://github.com/Almamu/linux-wallpaperengine/blob/main/src/WallpaperEngine/Data/Parsers/PackageParser.cpp (.pkg binary format)
+   243→- https://github.com/Almamu/linux-wallpaperengine/blob/main/src/WallpaperEngine/Data/Parsers/ProjectParser.cpp (project.json schema, only scene/video/web)
+   244→- https://github.com/Almamu/linux-wallpaperengine/blob/main/src/WallpaperEngine/Data/Parsers/TextureParser.cpp (.tex binary format, LZ4, animated)
+   245→- https://github.com/Almamu/linux-wallpaperengine/tree/main/src/WallpaperEngine/Render/Wallpapers (CScene/CVideo/CWeb type renderers)
+   246→- https://github.com/Almamu/linux-wallpaperengine/tree/main/src/WallpaperEngine/FileSystem/Adapters (Package/Directory/Virtual/MediaCover)
+   247→- https://wpengine.alma.mu/ (LWE showcase gallery, working examples)
+   248→- https://github.com/notscuffed/repkg (MIT-licensed reference .pkg/.tex parser, C#)
+   249→- https://raw.githubusercontent.com/notscuffed/repkg/master/README.md
+   250→- https://raw.githubusercontent.com/notscuffed/repkg/master/LICENSE (MIT)
+   251→
+   252→Stage Summary:
+   253→
+   254→### WE Steam IDs
+   255→- **App ID: 431960** (Wallpaper Engine on Steam)
+   256→- **Workshop browse URL: `https://steamcommunity.com/workshop/browse?appid=431960`** (anonymously scrapable HTML)
+   257→- **Workshop content directory on disk: `<Steam install>/steamapps/workshop/content/431960/<publishedfileid>/`**
+   258→- **WE install directory: `<Steam install>/steamapps/common/wallpaper_engine/`** (contains `wallpaper32.exe`, `wallpaper64.exe`, `wallpaperui.exe`, `webwallpaper32.exe`, `assets/`, `projects/myprojects/`)
+   259→- **WE Android app on Google Play: `io.wallpaperengine.weclient`**; direct APK at `https://www.wallpaperengine.io/android/apk/wallpaper-engine.apk` (145MB, no Play Store needed, freely downloadable, content-type `application/vnd.android.package-archive`). Requires Android 10+.
+   260→
+   261→### Steam Workshop Web API
+   262→
+   263→**Anonymous-accessible endpoints (LIVE-tested against wallpaper ID 1845706469 — NieR:Automata):**
+   264→
+   265→1. `POST https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/`
+   266→   - Body: `itemcount=N&publishedfileids[0]=<id>&publishedfileids[1]=<id>&...`
+   267→   - Returns JSON: `publishedfileid`, `creator` (SteamID64), `creator_app_id` (=431960), `consumer_app_id` (=431960), `file_size`, `hcontent_file` (UGC file handle), `preview_url` (public jpg URL on `images.steamusercontent.com`), `title`, `description`, `time_created`, `time_updated`, `visibility`, `banned`, `ban_reason`, `subscriptions`, `favorited`, `lifetime_subscriptions`, `lifetime_favorited`, `views`, `tags[]` (e.g. `[{tag:Wallpaper}, {tag:Scene}, {tag:Game}, {tag:Approved}, {tag:"3840 x 2160"}, {tag:Everyone}]`).
+   268→   - **CRITICAL LIMITATION: `file_url` field is ALWAYS empty string** — Steam does not expose the actual download URL anonymously. So this endpoint gives metadata only, not content.
+   269→2. `POST https://api.steampowered.com/ISteamRemoteStorage/GetCollectionDetails/v1/`
+   270→   - Body: `collectioncount=N&publishedfileids[0]=<id>` — returns items in a workshop collection. Anonymously accessible.
+   271→
+   272→**Endpoints that REQUIRE a Steam Web API `key=` parameter (LIVE-tested — 401/403/404 without):**
+   273→
+   274→- `GET https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/?appid=431960&query_type=4&page=1&cursor=*&numperpage=50&return_tags=true&return_vote_data=true&return_previews=true&return_children=true` → 403 Forbidden: "Access is denied. Retrying will not help. Please verify your key= parameter."
+   275→- `GET https://api.steampowered.com/IPublishedFileService/GetDetails/v1/?publishedfileid=<id>` → 401 Unauthorized.
+   276→- `GET https://api.steampowered.com/IPublishedFileService/GetUserItems/v1/?steamid=<sid>&listtype=subscribed&appid=431960` → 404.
+   277→- `GET https://api.steampowered.com/IWorkshopService/EnumerateSubscribedItems/v1/?appid=431960` → 404.
+   278→- `GET https://api.steampowered.com/ISteamRemoteStorage/GetUGCDetails/v1/?ugchandle=<handle>` → "Method 'GetUGCDetails' not found in interface 'ISteamRemoteStorage'" (method removed from public API).
+   279→
+   280→**Auth model:**
+   281→- Steam Web API key (regular user tier) is obtained from https://steamcommunity.com/dev/apikey (just needs a Steam login). This is sufficient for many endpoints (`ISteamUser`, `ISteamUserStats`, etc.).
+   282→- Whether this regular user key is sufficient for `IPublishedFileService/QueryFiles` is **untested** in this research (would have needed a real key). The Steamworks doc tree mentions "Authentication using Web API Keys" — suggesting a regular user key may suffice. If it does, our app can prompt the user once for their key and use the proper search/browse API. If not (i.e., if it requires a Steamworks partner-tier key), our app must fall back to HTML scraping.
+   283→- The Steamworks SDK (C++) `ISteamUGC` interface provides `CreateQueryAllUGCRequest`, `CreateQueryUserUGCRequest`, `SetSearchText`, `AddRequiredTag`, `SetMatchAnyTag`, `SetRankedByTrendDays`, `DownloadItem` — but this requires the Steam client running AND the Steamworks SDK compiled into our binary. Not viable for a pure-Android UI; viable only via the Wine-side WE/Steam install.
+   284→
+   285→**Recommended approach for our custom Android workshop UI:**
+   286→
+   287→1. **Discovery / browse / search** → HTML scraping of `steamcommunity.com/workshop/browse?appid=431960&searchtext=<q>&browsesort=<s>&requiredtags[]=<t>&section=ReadyToUse&p=<page>&numperpage=50`. Returns 30+ item cards per page (each as `/sharedfiles/filedetails/?id=<id>` links + preview image URLs). Tested anonymously against browse and searchtext pages, both work.
+   288→2. **Item metadata enrichment** → bulk `POST ISteamRemoteStorage/GetPublishedFileDetails/v1/` with the IDs scraped in step 1, batched up to 100 IDs per call. Returns full JSON metadata. Anonymous, free.
+   289→3. **Preview thumbnails** → directly fetched from `images.steamusercontent.com/ugc/<hash1>/<hash2>/` — tested anonymously, returns `application/octet-stream` blob (855KB for one wallpaper preview).
+   290→4. **Search/sort with proper API** (optional, if user provides a Web API key) → `IPublishedFileService/QueryFiles/v1/?key=<userkey>&appid=431960&...`. Need to test whether a regular user key works.
+   291→
+   292→### Workshop Item File Format
+   293→
+   294→A WE workshop item is stored on disk at `<Steam>/steamapps/workshop/content/431960/<publishedfileid>/`. Contents depend on `type`:
+   295→
+   296→- **Scene (type=scene)**: contains `scene.pkg` (a `PKGV`-magic archive) which itself contains `project.json`, `scene.json` (the scene graph: objects, particles, effects, lights, cameras, materials, shaders, animations, puppet-warp rigs), `.tex` files (LZ4-compressed textures in custom `TEXB` format), `.model` files (3D models), `.vs/.fs` files (custom GLSL-like shaders). Also includes `preview.jpg`. Scene wallpapers are NOT directly editable — must be unpacked first.
+   297→- **Video (type=video)**: contains the video file (`<name>.mp4` or `.webm`) + `project.json` (with `type=video`, `file=<video>.mp4`) + `preview.jpg`.
+   298→- **Web (type=web)**: contains `index.html` + JS/CSS/images (possibly packed in `.pkg`) + `project.json` (with `type=web`, `file=index.html`).
+   299→- **Application (type=application)**: contains a custom author-written `.exe` + `project.json` (with `type=application`, `file=<exe>.exe`). Compiled binary, not editable.
+   300→- **Image (type=image)**: contains the static image (`<name>.jpg` or `.png`) + `project.json` (with `type=image`).
+   301→- **Playlist**: contains `playlist.json` referencing other workshop item IDs + schedule config.
+   302→
+   303→**`project.json` schema** (reverse-engineered from LWE `ProjectParser.cpp`):
+   304→```json
+   305→{
+   306→  "workshopid": "12345678",           // optional, string or int
+   307→  "title": "...",                      // required
+   308→  "type": "scene|video|web|image|application|playlist",  // required (lowercase)
+   309→  "file": "scene.json|index.html|video.mp4|...",  // required — main wallpaper file
+   310→  "preview": "preview.jpg",
+   311→  "description": "...",
+   312→  "tags": ["Relaxing"],
+   313→  "visibility": "private|public|friends",
+   314→  "general": {
+   315→    "supportsaudioprocessing": false,
+   316→    "properties": {                     // user-editable properties (checkbox/slider/color/combo/text/texture)
+   317→      "schemecolor": { "order": 0, "text": "...", "type": "color", "value": "0.76 0.37 0.07" },
+   318→      "bloom": { "type": "boolean", "value": 0 },
+   319→      "barcount": { "type": "slider", "value": 64, "minimum": 16, "maximum": 64, "step": 1 }
+   320→    }
+   321→  }
+   322→}
+   323→```
+   324→
+   325→**`.pkg` binary format** (from LWE `PackageParser.cpp`):
+   326→- Header magic: 4 bytes ASCII `PKGV`
+   327→- uint32 LE: fileCount
+   328→- For each file entry: a sized-string (uint32 LE byte-length + UTF-8 bytes of filename), then uint32 LE offset (relative to baseOffset = end of header), then uint32 LE length
+   329→- After header (at baseOffset): raw file payloads concatenated in entry order
+   330→
+   331→**`.tex` texture format** (from LWE `TextureParser.cpp`):
+   332→- Header magic: `TEXB` + containerVersion (TEXB0002 / TEXB0003 / TEXB0004)
+   333→- TextureFormat (uint32): DXT5, RGBA8888, etc.
+   334→- TextureFlags (uint32), FIF (uint32) for sprite-sheet metadata
+   335→- uint32 imageCount
+   336→- Per image: uint32 mipmapCount; per mipmap: width, height, compression (0=raw, 1=LZ4), compressedSize, uncompressedSize, data
+   337→- TEXB0004 includes embedded JSON metadata in the per-mipmap header
+   338→- Animated textures supported: frames with frameNumber, frametime, x, y (for sprite-sheet playback)
+   339→
+   340→**`RePKG`** (https://github.com/notscuffed/repkg, MIT, C#) is the canonical community reference for `.pkg` + `.tex` extraction. LWE's README credits it for "texture flag insights". RePKG commands: `extract` (PKG→files, TEX→PNG), `info` (dump PKG/TEX structure). The unofficial scene wallpaper unpacker at https://wetranslate.thiscould.work/scene.pkg/ is built on the same format knowledge.
+   341→
+   342→### linux-wallpaperengine Deep Dive
+   343→
+   344→`Almamu/linux-wallpaperengine` (https://github.com/Almamu/linux-wallpaperengine) is a native C++ reimplementation of Wallpaper Engine that reads the official WE workshop content and renders it on Linux without Steam or Wine. It is GPL3-licensed, C++20, CMake-based, and explicitly supports ARM64 Linux (the CMakeLists has a `linuxarm64` CEF platform branch — meaningful for our Android project, though CEF has no official Android build).
+   345→
+   346→**Architecture.** Entry point is `src/main.cpp` → `WallpaperApplication` + `ApplicationContext` (argparse-based CLI). Rendering is OpenGL 3.3 via SDL2 windowing. The source tree at `src/WallpaperEngine/` is organized by concern: `Render/` (the OpenGL renderer with `CWallpaper` base class, `CObject`/`CImage`/`CParticle`/`CSound`/`CText` scene-graph nodes, `CFBO`/`FBOProvider` for offscreen render targets, `Camera`, `WallpaperState`, `TextureCache`); `Render/Wallpapers/` contains the three type-specific renderers `CScene.cpp` (3D scene), `CVideo.cpp` (MPV-backed video), `CWeb.cpp` (CEF-backed web) — **LWE supports exactly three wallpaper types** (no Image, Application, or Playlist); `Render/Objects/Effects/` is the image-filter/effect subsystem; `Render/Shaders/` uses the `glslang-WallpaperEngine` and `SPIRV-Cross-WallpaperEngine` forks for shader compilation. The `FileSystem/` module has `Container` + `Adapters/` (`Directory`, `Package`, `Virtual`, `MediaCover`) — the `Package` adapter is the `.pkg` reader. `Data/Parsers/` is the file-format parsing toolkit (`PackageParser`, `ProjectParser`, `TextureParser`, `ModelParser`, `MaterialParser`, `EffectParser`, `ObjectParser`, `PropertyParser`, `ShaderConstantParser`, `DynamicValueParser`). `WebBrowser/` has `WebBrowserContext` + a `CEF/` subdirectory for web wallpapers (uses CEF 135.0.17, Chromium 135.0.7049.52). `VideoPlayback/MPV/` is the libmpv integration for video wallpapers. `Scripting/` uses quickjs to interpret WE's SceneScript (the JS-like language WE exposes for scene interactivity, with classes like `IScene`, `IEngine`, `IEffect`, `IImageLayer`, `IModelLayer`, `IParticleSystem`, `Mat3/Mat4/Vec2/Vec3/Vec4` per the WE creator docs). `Audio/` uses PulseAudio + kissfft/FFTW3 for audio-reactive visualizers.
+   347→
+   348→**Reuse potential for our Android app.** LWE is GPL3, so embedding any of it forces our whole app to be GPL3 — acceptable for this single-user project but worth flagging. The high-value, low-coupling modules are `Data/Parsers/` + `Data/Utils/BinaryReader` + `Data/Model/`: these are pure C++ with minimal deps (nlohmann/json, LZ4, std::filesystem). They can be extracted as a static library and JNI-wrapped to read workshop item metadata (project.json, scene.json contents inside a `.pkg`, list of textures, user properties, preview extraction) **without dragging in OpenGL/SDL2/MPV/CEF**. This is enough for our custom Android workshop browser to display wallpaper metadata, the properties panel, and preview thumbnails — we don't need LWE's renderer because the actual wallpaper rendering on our device is delegated to the real WE binary running inside Winlator (Wine+Box64). **Cleaner alternative**: implement a fresh, independent `.pkg`/`.tex` parser in Kotlin using RePKG's reverse-engineered format docs as a reference (RePKG is MIT, no GPL contamination; we'd just be implementing the same documented binary format).
+   349→
+   350→**Most important takeaway from LWE for our project**: it confirms that the WE content format is fully reverse-engineered and documented in working code, so a Linux/ARM/Android-compatible parser exists in the wild. If the Wine-emulated WE renderer proves too heavy for our SD8Gen2 (a real risk flagged by Task 1-A), we have a fallback: use LWE's renderer (or a port of it) as the on-device wallpaper engine, and speak the WE Android pairing protocol from a thin wrapper — bypassing Wine entirely. The pairing protocol (UDP 7884 + TCP 7889 + 4-digit PIN, per WE help) is independent of how the wallpaper is rendered; if our emulated "PC" answers discovery broadcasts and accepts the 4-digit PIN handshake, the Android WE app should pair with us regardless of what's rendering the wallpaper. **This is the "ALTERNATIVE PATH" flagged in Task 1-A and is a viable plan B if Wine+Box64 WE is too slow.**
+   351→
+   352→### Wallpaper Types Breakdown
+   353→
+   354→| Type | File format | Renderer | Android-viable? |
+   355→|------|-------------|----------|-----------------|
+   356→| **Scene (3D)** | `.pkg` (`PKGV` magic) containing `project.json` (type=scene), `scene.json` (scene graph), `.tex` (LZ4-compressed `TEXB` textures), `.model`, `.vs/.fs` (custom shaders compiled via glslang→SPIRV-Cross); supports SceneScript (JS-like via quickjs) for interactivity, puppet-warp, particles, effects, audio-reactive visualizers | WE on Windows: DirectX 11-class custom renderer. LWE: OpenGL 3.3 + custom scene graph. Both use the same `.pkg` content | Via Winlator: viable (DX11→Vulkan via DXVK + Adreno Turnip). Expect 30–60 FPS at 1080p for medium-complexity scenes. Native Android: NOT viable without full OpenGL/Vulkan scene renderer port (would essentially be porting LWE) |
+   357→| **Video** | `.mp4` (H.264/H.265) or `.webm` (VP8/VP9) + `project.json` (type=video, file=video.mp4). WE on Windows uses Media Foundation + LAV Filters (per `help.wallpaperengine.io/en/videos/lav.html`); LWE uses libmpv | Windows MF+LAV via Wine; LWE libmpv; Android: MediaCodec HW decode available | Most Android-friendly type: viable via Winlator (software decode) OR natively via Android ExoPlayer/MediaCodec HW decode. We could short-circuit Winlator entirely for video wallpapers |
+   358→| **Web (HTML)** | `.pkg` or directory containing `index.html` + JS/CSS/images + `project.json` (type=web). The WE web wallpaper API (`docs.wallpaperengine.io/en/web/api/`) exposes extensions: `iCUE`, `RGB`, `propertylistener`, `audio/visualizer`, `audio/media` | WE on Windows: Chromium Embedded Framework (CEF) via `webwallpaper32.exe` (always 32-bit). LWE: CEF 135.0.17 (Chromium 135.0.7049.52). Heavy Chromium workload | Via Winlator: viable but expensive (same cost as steamwebhelper). Native Android: Android WebView/Chrome can render the HTML/CSS/JS, but the WE web wallpaper API extensions won't all map cleanly (iCUE/RGB need stubs, audio-reactive needs audio capture) |
+   359→| **Application** | Custom author-compiled `.exe` + `project.json` (type=application). Binary, no source available | WE on Windows runs the .exe as a child process and captures its window output to the wallpaper texture | ONLY viable via Winlator (runs the original Windows .exe through Wine+Box64). NOT viable natively — would need source port per author, impossible |
+   360→| **Image** | Static `.jpg`/`.png` + `project.json` (type=image). Trivial | Displayed directly as a texture | Trivial natively — Android `BitmapFactory`/`Coil`/`Glide` |
+   361→| **Playlist** | `playlist.json` referencing other workshop IDs + schedule config | WE rotates items on a schedule | Trivial natively — just track which wallpaper to display when |
+   362→
+   363→### Workshop Download Without Steam Client
+   364→
+   365→**The Steam client (running) is the canonical and effectively only path** for downloading WE workshop content for a paid Steam app. The official WE Android FAQ explicitly states: *"Wallpaper Engine on Android cannot directly access the Steam Workshop to download new wallpapers"* due to "technical and legal limitations" — i.e., Steam workshop content for a paid app is gated behind the user's Steam subscription ownership.
+   366→
+   367→- **SteamCMD** supports `+workshop_download_item <appid> <publishedfileid>` but only after `+login <username> <password>`. Anonymous SteamCMD logins do NOT support workshop item downloads for non-Source-engine apps. For paid apps like WE (appid 431960), the user must own WE on the logged-in Steam account, and the Steam client/SteamCMD must successfully verify subscription ownership.
+   368→- **ISteamRemoteStorage Web API** (`GetPublishedFileDetails`) returns metadata anonymously but **the `file_url` field is always empty** — Steam deliberately does not expose the actual download URL over the public Web API. The older `ISteamRemoteStorage/GetUGCDetails` Web API method has been removed.
+   369→- **Steamworks SDK (C++) `ISteamUGC::DownloadItem`** can download items for an authenticated user with the `bHighPriority` flag — but this requires the Steam client to be running AND a Steamworks SDK-compiled app. Not viable for a pure-Android UI; viable only via the Wine-side Steam install.
+   370→- **Practical conclusion**: Our emulated "PC" MUST have a running Steam client (under Wine via Winlator) that has subscribed to the wallpapers the user wants to push to the Android app. There is **no** SteamCMD-only or Web-API-only path.
+   371→
+   372→### WE Localhost Control API (if any)
+   373→
+   374→**No HTTP/localhost control API** found in WE — but there IS a documented **CLI IPC API**. Running `wallpaper32.exe -control <command> ...` while WE is already running sends commands to the live instance via Windows IPC (likely a named pipe or window message). Documented commands (full list at `help.wallpaperengine.io/en/functionality/cli.html`):
+   375→- `pause`, `stop`, `play`, `mute`, `unmute`
+   376→- `openWallpaper -file <path> [-monitor <idx>] [-location <id>] [-playInWindow <name>] [-width N] [-height N] [-x N] [-y N] [-preset <name>] [-activate] [-borderless]`
+   377→- `closeWallpaper [-monitor <idx>] [-location <id>]`
+   378→- `nextWallpaper [-monitor <idx>]`
+   379→- `openPlaylist -file <path> [-monitor <idx>]`
+   380→- `applyPreset -preset <name>`
+   381→- `settings <json>` — push settings changes
+   382→- `hideDesktopIcons`, `showDesktopIcons`
+   383→- `getCurrentWallpaper` — query which wallpaper is active
+   384→
+   385→This CLI IPC is **separate from** the mobile pairing protocol (which lives on UDP 7884 + TCP 7889 — see Task 1-B). For our emulated WE: from our Android app's Java code we can shell-exec `wallpaper32.exe -control openWallpaper -file "C:\..."` inside the Wine prefix to programmatically switch wallpapers, query current wallpaper, etc. — but the actual mobile pairing protocol is what WE itself uses to talk to the Android app, and that's what we need to reverse-engineer.
+   386→
+   387→### How WE Sends Wallpapers to Android App
+   388→
+   389→Two delivery mechanisms (both documented at `help.wallpaperengine.io/en/mobile/pairing.html` + `pairing-fixes.html`):
+   390→
+   391→1. **Wireless pairing**: UDP 7884 (discovery/broadcast) + TCP 7889 (control channel). User opens WE on Windows, clicks "Connect new Device", WE shows a 4-digit PIN. Android app scans local network for WE instances (mDNS-like UDP broadcast on 7884), picks the PC, enters PIN. Once paired, the user clicks "Send to Mobile Device" on a wallpaper in WE and the WE server pushes the wallpaper to the connected Android client over the same TCP 7889 channel.
+   392→2. **Manual `.mpkg` import** (backup solution if pairing fails): right-click a wallpaper in WE → "Send to Mobile Device" → "Export .mpkg". WE produces a `.mpkg` file (mobile package format). User transfers it via USB/SD card/file sharing. Android app's "Import File" function ingests it.
+   393→
+   394→**`.mpkg` format** is undocumented and proprietary. Based on WE's Android rendering capability (the official Android app can render scene/video/web/image wallpapers), `.mpkg` almost certainly contains: the original `project.json` + the original wallpaper payload (scene.pkg / .mp4 / index.html / .jpg) — likely **transcoded** for the Android renderer (e.g., 4K video → 1080p video; LZ4 `.tex` → standard PNG; HLSL shaders → GLSL shaders for the Android renderer; possibly pre-baked scene textures). The Android WE app ships its own scene/video/web renderer (per the Linux/Mac FAQ, "part of the work that went into the Android port can also be reused for Linux and OSX" — implying the Android port has its own renderer, not Wine). So `.mpkg` content is in **WE-Android-compatible form**, not raw workshop form.
+   395→
+   396→**Implication for our project**: Our emulated "PC" must speak the WE pairing protocol (UDP 7884 + TCP 7889 + 4-digit PIN auth) AND must produce/transcode `.mpkg`-compatible content for the Android app to consume. This is the central architectural concern — the transcoding pipeline (real WE running in Winlator reads workshop `.pkg` → renders to texture → encodes → streams to Android app via the pairing channel) needs to be reverse-engineered. **The Task 1-B reverse engineering effort should focus on `what the WE Android app expects to receive over TCP 7889` — i.e., the content-transfer sub-protocol, not just the pairing handshake.**
+   397→
+   398→### Critical Unknowns
+   399→
+   400→1. **Exact pairing protocol on UDP 7884 + TCP 7889** — hand-off to Task 1-B. Need: broadcast packet format, handshake/auth flow with 4-digit PIN, content-transfer sub-protocol on TCP 7889.
+   401→2. **`.mpkg` file format** — needs binary analysis of one exported `.mpkg` file. The WE on Windows can produce these (right-click → Export .mpkg) and they're trivially obtainable once we have a running WE. Probably magic bytes + JSON manifest + transcoded assets.
+   402→3. **WE Android APK reverse engineering** — APK available at `https://www.wallpaperengine.io/android/apk/wallpaper-engine.apk` (145MB, freely downloadable, no Google Play needed). Package name `io.wallpaperengine.weclient` on Play Store. Decompiling with jadx + apktool will reveal: (a) the pairing client implementation (UDP 7884 listener + TCP 7889 client), (b) the `.mpkg` parser, (c) the renderer's expectations (codec/bitrate for video, scene format, web wallpaper sandbox). This is the **single highest-leverage next step** for Task 1-B.
+   403→4. **Steam Web API key tier needed for `IPublishedFileService/QueryFiles`** — confirmed it requires a `key=` parameter. Untested whether a regular user Web API key (from `steamcommunity.com/dev/apikey`) suffices or whether it must be a Steamworks partner key. Need to verify with the user's own key once they have one. If only a regular user key is needed, our app can prompt the user for it (one-time) and use the proper search/sort API; if a partner key is needed, we must fall back to HTML scraping.
+   404→5. **Whether the WE Android app, once paired, can be tricked into accepting our emulated "PC" as the source** — depends entirely on Task 1-B's pairing protocol reverse engineering. If WE uses a shared secret derived from a Steam ID handshake (not just a 4-digit PIN), our app may need to authenticate as the user's Steam account too. If the 4-digit PIN is the entire auth, we can fully impersonate a PC.
+   405→6. **Transcoding pipeline**: does the WE Android app expect a specific video codec/bitrate for video wallpapers? Does it expect pre-decoded scene textures? Does it expect the original `.pkg` format? Decompiling the APK's renderer modules will answer this.
+   406→7. **LWE GPL3 contamination boundary**: if we extract LWE's parsers into our Android app, the whole app must be GPL3. Need to decide: (a) use RePKG's MIT-licensed format knowledge as reference for a fresh Kotlin implementation (clean), or (b) accept GPL3 contamination for the parsing module only and publish that module separately under GPL3 while keeping the rest of the app closed (legally murky — dynamic linking spreads GPL3). For a single-user personal project this matters less, but worth deciding early.
+   407→8. **CEF on Android for web wallpapers** if we pursue the LWE alt-path: CEF has no official Android build. We'd need to either (a) use Android WebView with custom WE API shims, or (b) ship the LWE-on-Wayland + CEF-on-Linux-ARM64 build in a Termux+X11 sandbox inside our APK. The latter is its own research task.
+   408→
+   409→### Key URLs
+   410→
+   411→**Steam IDs / official pages:**
+   412→- WE Steam store page: https://store.steampowered.com/app/431960/Wallpaper_Engine/
+   413→- WE Steam Workshop browse (HTML, anonymously scrapable): https://steamcommunity.com/workshop/browse?appid=431960
+   414→- WE sharedfiles item detail (HTML, anonymously scrapable): https://steamcommunity.com/sharedfiles/filedetails/?id=1845706469
+   415→- WE official site: https://www.wallpaperengine.io/
+   416→- WE Android app page: https://www.wallpaperengine.io/android/en
+   417→- WE Android APK direct download (145MB, freely downloadable): https://www.wallpaperengine.io/android/apk/wallpaper-engine.apk
+   418→- WE Android Google Play: https://play.google.com/store/apps/details?id=io.wallpaperengine.weclient
+   419→
+   420→**Steam Workshop Web API:**
+   421→- Workshop feature overview: https://partner.steamgames.com/doc/features/workshop
+   422→- Workshop Implementation Guide: https://partner.steamgames.com/doc/features/workshop/implementation
+   423→- Web API Overview (auth): https://partner.steamgames.com/doc/webapi
+   424→- Web API key registration: https://steamcommunity.com/dev/apikey
+   425→- Anonymous-tested endpoint (works): `POST https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/`
+   426→- Anonymous-tested endpoint (works): `POST https://api.steampowered.com/ISteamRemoteStorage/GetCollectionDetails/v1/`
+   427→- Key-required endpoint (tested 403/401 without key): `GET https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/`
+   428→- Key-required endpoint (tested 401 without key): `GET https://api.steampowered.com/IPublishedFileService/GetDetails/v1/`
+   429→
+   430→**WE help / creator docs:**
+   431→- WE help (troubleshooting root): https://help.wallpaperengine.io/en/
+   432→- WE CLI controls (`-control` IPC API): https://help.wallpaperengine.io/en/functionality/cli.html
+   433→- WE mobile pairing protocol (UDP 7884 + TCP 7889 + 4-digit PIN): https://help.wallpaperengine.io/en/mobile/pairing.html
+   434→- WE mobile pairing problem solving + `.mpkg` backup: https://help.wallpaperengine.io/en/mobile/pairing-fixes.html
+   435→- WE mobile FAQ (confirms no Workshop access on Android): https://help.wallpaperengine.io/en/mobile/faq.html
+   436→- WE Linux/Mac FAQ (custom engine, partial Android port reuse): https://help.wallpaperengine.io/en/functionality/linuxmacos.html
+   437→- WE 32-bit/64-bit detail (`webwallpaper32.exe` always 32-bit): https://help.wallpaperengine.io/en/general/bits.html
+   438→- WE editing-downloaded-wallpapers (`.pkg` is "packed" + project.json schema): https://help.wallpaperengine.io/en/functionality/editingwallpapers.html
+   439→- WE creator doc sitemap (only `scene/` + `web/` trees exist): https://docs.wallpaperengine.io/sitemap.xml
+   440→- WE creator doc root: https://docs.wallpaperengine.io/en/
+   441→- WE SceneScript API reference: https://docs.wallpaperengine.io/en/scene/scenescript/reference.html
+   442→- WE custom shader language: https://docs.wallpaperengine.io/en/scene/shader/overview.html
+   443→- WE shader mobile notes: https://docs.wallpaperengine.io/en/scene/shader/mobile.html
+   444→- WE web wallpaper API (iCUE/RGB/propertylistener): https://docs.wallpaperengine.io/en/web/api/rgb.html, https://docs.wallpaperengine.io/en/web/api/icue.html, https://docs.wallpaperengine.io/en/web/api/propertylistener.html
+   445→- WE LAV Filters / DirectShow video support: https://help.wallpaperengine.io/en/videos/lav.html
+   446→
+   447→**linux-wallpaperengine (alternative parser/renderer path):**
+   448→- Repo: https://github.com/Almamu/linux-wallpaperengine (GPL3, C++20, CMake, native ARM64 support)
+   449→- README: https://raw.githubusercontent.com/Almamu/linux-wallpaperengine/main/README.md
+   450→- LICENSE (GPL3): https://raw.githubusercontent.com/Almamu/linux-wallpaperengine/main/LICENSE
+   451→- CMakeLists.txt (CEF 135 / Chromium 135 + ARM64 target): https://raw.githubusercontent.com/Almamu/linux-wallpaperengine/main/CMakeLists.txt
+   452→- `.gitmodules` (quickjs/glslang/SPIRV-Cross/stb/json deps): https://raw.githubusercontent.com/Almamu/linux-wallpaperengine/main/.gitmodules
+   453→- Source tree root: https://github.com/Almamu/linux-wallpaperengine/tree/main/src
+   454→- `.pkg` parser source: https://github.com/Almamu/linux-wallpaperengine/blob/main/src/WallpaperEngine/Data/Parsers/PackageParser.cpp
+   455→- `.tex` parser source (LZ4 + TEXB header + animated): https://github.com/Almamu/linux-wallpaperengine/blob/main/src/WallpaperEngine/Data/Parsers/TextureParser.cpp
+   456→- `project.json` parser source (only scene/video/web types supported): https://github.com/Almamu/linux-wallpaperengine/blob/main/src/WallpaperEngine/Data/Parsers/ProjectParser.cpp
+   457→- Type-specific renderers (CScene/CVideo/CWeb): https://github.com/Almamu/linux-wallpaperengine/tree/main/src/WallpaperEngine/Render/Wallpapers
+   458→- FileSystem adapters (Package/Directory/Virtual/MediaCover): https://github.com/Almamu/linux-wallpaperengine/tree/main/src/WallpaperEngine/FileSystem/Adapters
+   459→- WebBrowser context (CEF integration): https://github.com/Almamu/linux-wallpaperengine/tree/main/src/WallpaperEngine/WebBrowser
+   460→- MPV video playback: https://github.com/Almamu/linux-wallpaperengine/tree/main/src/WallpaperEngine/VideoPlayback/MPV
+   461→- Showcase gallery (working examples): https://wpengine.alma.mu/
+   462→
+   463→**RePKG (the reference .pkg/.tex parser, MIT, C#):**
+   464→- Repo: https://github.com/notscuffed/repkg
+   465→- README: https://raw.githubusercontent.com/notscuffed/repkg/master/README.md
+   466→- LICENSE (MIT): https://raw.githubusercontent.com/notscuffed/repkg/master/LICENSE
+   467→- Acknowledged by linux-wallpaperengine README "Special Thanks" for "texture flag insights"
+   468→
+   469→**SteamCMD:**
+   470→- (Official Valve wiki at `developer.valvesoftware.com/wiki/SteamCMD` was unreachable from this sandbox — returned 405-byte redirect, blocked. Reliable community knowledge: SteamCMD supports `+workshop_download_item <appid> <publishedfileid>` but only after `+login <username> <password>`; anonymous SteamCMD logins do NOT support workshop item downloads for non-Source apps; for paid apps like WE the user must own the app on the logged-in Steam account.)
+   471→- Workshop Implementation Guide (covers `steamcmd.exe +workshop_build_item <vdf>` and the VDF format with `appid`/`publishedfileid`/`contentfolder`/`previewfile`/`visibility`/`title`/`description`/`changenote` keys): https://partner.steamgames.com/doc/features/workshop/implementation
+   472→
+   473→
+   474→---
+   475→Task ID: 1-B
+   476→Agent: general-purpose research
+   477→Task: Research Wallpaper Engine pairing protocol
+   478→
+   479→Work Log:
+   480→- Read `/home/z/my-project/worklog.md` to load project context (WepWawet, single-user "fake PC on phone" use case via Winlator + Wine + Steam + WE on a rooted SD8Gen2+ device, self-pair via localhost is the target topology).
+   481→- Reviewed Task 1-A findings: Winlator v11.2 + Box64 + whitebelyash Turnip Mesa chosen as primary emulation stack; the WE Android app's pairing protocol flagged as the single biggest unproven item ("WE Android pairing protocol is unproven against a Wine-translated WE install on the same device via localhost").
+   482→- Web tooling inventory: `curl` confirmed working. Bing RSS (`bing.com/search?format=rss`) returns generic wallpaper-download-site results regardless of query terms — fundamentally broken for phrase queries (Bing treats all space-separated tokens as OR). DuckDuckGo HTML (`html.duckduckgo.com/html/`) works for ~5–10 queries then CAPTCHAs ("Select all squares containing a duck"); repeatedly hits the same challenge code `4458`. Reddit (api.reddit.com, old.reddit.com) returns the new SPA HTML or "Blocked" page from this sandbox's IP — no JSON access. SteamDB is behind a Cloudflare "Access Restricted — ASN flagged for abuse" wall. APKMirror is behind an interactive Cloudflare challenge. GitHub REST API is rate-limited (60/hr unauthenticated IP). Steam Community forums work via plain HTTP (no auth, no Cloudflare). GitHub `raw.githubusercontent.com` and `github.com/<owner>/<repo>` HTML scraping work without rate-limiting. Official WE help site (`help.wallpaperengine.io`) and `wallpaperengine.io` work cleanly.
+   483→- Fetched and parsed the WE official Android download page: https://www.wallpaperengine.io/android — confirms the Android app exists, transfers wallpapers "wirelessly onto your phone via Wallpaper Engine on your computer", no protocol detail on the page itself.
+   484→- Fetched and parsed the WE help site index: https://help.wallpaperengine.io — discovered two pairing-specific articles: `/en/mobile/pairing.html` and `/en/mobile/pairing-fixes.html`. Also found `/en/mobile/faq.html`, `/en/functionality/cli.html`, `/en/functionality/linuxmacos.html`.
+   485→- Fetched and parsed all four help articles in full. Pairing article gave the canonical 4-step user-facing flow (install Android app → open WE on Windows → click Mobile → Connect new Device → 4-digit PIN → Android searches local network → enter PIN). Troubleshooting article gave the **decisive network facts**: WE uses **UDP 7884 (discovery broadcast)** and **TCP 7889 (connection)**, the executable to firewall-allow is `ui32.exe` (with `ui32`/`ui64` and "Wallpaper Engine UI" as firewall rule names), same local network required, manual IP entry is a fallback if broadcasts are blocked, UPnP is recommended (suggests optional UPnP/SSDP involvement), VPNs/proxies break it, and a backup `.mpkg` export path exists for USB-only transfer.
+   486→- Fetched the Steam Community discussion "Unexpected Flood of UDP Packets" (https://steamcommunity.com/app/431960/discussions/1/572639314705505863/, 15 Aug 2025) which contains a user's packet capture revealing the **discovery broadcast payload format**: WE sends UDP packets to port `7884` addressed to **`192.168.0.255` (subnet broadcast) AND `239.100.0.1` (an administratively-scoped IPv4 multicast group, NOT mDNS / NOT 224.0.0.251)**, with packet contents of the form `WallpaperEngine/Ping:00000:DESKTOP-NAME:4:Probably-Interface-ID`. The official WE developer "Tim" (Kristjan Skutta / Skutta Software GmbH) replies confirming: "It's a broadcast on your local network to discover mobile devices running the Wallpaper Engine companion app… this only happens while a mobile device is registered". So the discovery protocol is a custom UDP broadcast — not mDNS, not Bonjour, not SSDP, not Steamworks P2P.
+   487→- Fetched the Steam Community discussion "Android Connectivity Failed" (https://steamcommunity.com/app/431960/discussions/10/3187989286470636609/, Feb 2022). Developer "Tim" re-confirms `ui32.exe` and ports `7884 (UDP)` and `7889 (TCP)`, plus: "The computer will only allow known devices to connect, if you want to connect to a new device, you first need to click on 'connect new device' on the computer so that it shows the PIN screen. Otherwise the computer will not show up on your phone at all if it's not already paired." So pairing is PIN-gated and persistent — the PC keeps a list of known devices and broadcasts only when at least one known device is registered.
+   488→- Fetched the Steam Community discussion "I know Linux is not supported, but is it possible to at least send wallpapers from Linux to my Android?" (https://steamcommunity.com/app/431960/discussions/2/3412054783669870742/, Jun 2022). This thread gave the **decisive Wine/Linux blocker**: developer "Biohazard" (WE dev) wrote: "the direct connection won't work because Wine/Proton is missing an API in the Windows bcrypt library that we are using. You can still try exporting a project and then sending it to the phone directly." This is the single most important finding for our project: WE's TCP 7889 pairing handshake uses a Windows CNG **bcrypt** primitive that Wine/Proton's bcrypt stub does not implement. Discovery (UDP 7884) works on Wine — the Linux user reported their PC was visible on the phone — but the TCP handshake fails. The dev also confirmed that "Pre-rendered High Performance" mobile conversion uses "Media Foundation" (MFPlat / Media Foundation Transform) which is the same Wine-stub class of problem (and consistent with Box64 issue #4007 audio/video bugs called out in Task 1-A).
+   489→- Fetched the WE changelog / news article "Wallpaper Engine 2.0.44 - Windows Firewall Detection and Android Fixes" (https://www.updatemonitor.com/app/431960/news/4224936215387896675) which states: "Wallpaper Engine on Windows will now also use additional methods to broadcast itself on your network which will also make it more accessible to Android devices under certain network configurations." This means as of 2.0.44 the discovery protocol is NOT just the `WallpaperEngine/Ping` UDP broadcast — there are additional broadcast mechanisms (likely SSDP/mDNS supplements, but the actual mechanisms are not documented). The same article confirms `ui32.exe` as the networked process and that the firewall rule check runs from the pairing screen.
+   490→- Discovered and fetched a Ghidra decompilation of WE's `wallpaper64.exe` hosted on GitHub at https://github.com/UniVitaPorts/WallpaperEngine (raw `wallpaper64.exe.c`, 14.3 MB). Grepped it exhaustively. Confirmed: (a) `wallpaper64.exe` spawns `bin/ui32.exe` with command-line flags including `-weuimain -buildv <version> -skin <skin> -language <lang> -steamlanguage <lang> -monitordetection managed -monitormap <IDs>` and a `-messagehandler <name>` (e.g. `WPEhandlerWelcomeDialog`, `WPEhandlerBrowseWallpapers`) — exactly matching the live `ui32.exe` command line reported in the Steam UDP flood thread; (b) the main renderer binary does NOT contain winsock calls — `WSAStartup`, `sendto`, `recvfrom`, `bind`, `htons` etc. all return zero hits in `wallpaper64.exe.c`, confirming the entire network discovery/pairing stack lives in `ui32.exe` (and `ui64.exe` on 64-bit); (c) `wallpaper64.exe` invokes a `wallpaper32.exe -control aws` sub-process for auto-wake-suspend and exposes an IPC scheme via window classes `WPEEventWindow`, `WPEEventWindowSC`, `WPEShellHookMsgWnd`, `WPEUIFadeWindow`, mutex `cxWallpaperEngineGlobalMutex`, and a "WPEWebIpcHandler" string (the IPC channel between renderer and UI for web wallpapers); (d) registry hive `HKCU\Software\WallpaperEngine\` is used for settings storage. The UniVitaPorts repo only has `wallpaper64.exe.c` — no `ui32.exe.c`, no `ui64.exe.c`, so the actual network protocol code is not directly available in any decompiled form I could find.
+   491→- Fetched the WE Command-Line Controls help article (https://help.wallpaperengine.io/en/functionality/cli.html). Confirmed the WE on-Windows RPC surface: `wallpaper32.exe -control <command>` (or `wallpaper64.exe -control <command>`), with commands: `pause`, `stop`, `play`, `mute`, `unmute`, `openWallpaper -file <path> [-location <id>] [-monitor <n>] [-playInWindow <name>] [-width <n>] [-height <n>] [-x <n>] [-y <n>] [-preset <name>] [-activate]`, and (truncated in the article) more for `closeWallpaper`, `nextWallpaper`, `previousWallpaper`, `setVolume`, `applyPreset`, etc. This is the **in-process control channel on the PC** — entirely orthogonal to the Android→PC TCP 7889 protocol. Important for our project because it means we can drive the actual WE render pipeline directly via this CLI without going through the Android pairing channel — but the Android app will still need to satisfy pairing on its own.
+   492→- Fetched the WE "Linux or Mac OS" help article (https://help.wallpaperengine.io/en/functionality/linuxmacos.html). Confirmed WE dev's position: no Linux/Mac port planned, Android companion was a deliberate choice because the user base is much larger than Linux (0.25% Steam Linux share). Also: "Part of the work that went into the Android port can also be reused for Linux and OSX at a later point in time" — i.e. the Android companion shares code with a hypothetical future Linux/Mac WE, meaning the pairing protocol is likely OS-portable C++ that uses Windows CNG (bcrypt) on Windows and would use a different crypto on Linux/Mac. This strengthens the bcrypt blocker finding.
+   493→- Fetched the WE mobile FAQ (https://help.wallpaperengine.io/en/mobile/faq.html) — no protocol detail, but confirms "Live wallpapers on Android do not play any sound", "Android wallpaper regularly disappears or crashes silently" (Android power-saving killer), and the Android-side `.mpkg` import path uses the Android `Downloads` directory because of Android's scoped-storage restrictions.
+   494→- Pulled the Steam Community discussion list for WE's "Android App" subforum (`/app/431960/discussions/10/`) and confirmed the Android beta-test package name is `io.wallpaperengine.weclient` (from the pinned "Android Beta Test" announcement, posted by Tim, 11 Jan 2022). The Android beta signup URL is `https://play.google.com/apps/testing/io.wallpaperengine.weclient`. This is the Android app's package name and the APK we would need to inspect.
+   495→- Fetched the WE GitHub org page (https://github.com/Official-Wallpaper-Engine/) and its `.github` profile README — only marketing material, copyright "© 2016–2025 Skutta Software GmbH". No public source, no protocol docs.
+   496→- Fetched the README of `notscuffed/repkg` (3.8k stars, the canonical WE `.pkg`/`.tex` reverse-engineering reference) and inspected its source tree. Confirmed RePKG handles the workshop `.pkg` wallpaper-package format (containers with magic header, entries, metadata) and the `.tex` texture format (TexHeader with format, flags, dimensions) — but does NOT touch the network protocol or the `.mpkg` mobile package format. So `.pkg` = workshop wallpaper archive (Windows), `.tex` = WE's texture format inside `.pkg`; `.mpkg` = a separate format the Android app imports (likely derived but distinct).
+   497→- Fetched the README of `CREAMSOU/wallpaper-engine-ui-fix` (a Windows ACL repair tool for the WE `ui\uicache` profile folder) which gave the canonical WE Windows install process architecture: `wallpaperui.exe` (= `ui32.exe`/`ui64.exe`) renders through an embedded Chromium `libcef.dll`; the renderer `wallpaper64.exe` never touches the `ui\uicache` profile folder; `wallpaperservice64.exe` is the service process. CEF requires a writable profile folder for its `ProcessSingleton` lock. This is the process taxonomy we need to mimic on Android.
+   498→- Fetched the GamePretty guide "How to Fix Infinite Circle Issue (Android Mobile)" (https://gamepretty.com/wallpaper-engine-how-to-fix-infinite-circle-issue-android-mobile/, 28 Nov 2021) — community corroboration that the "infinite loading circle" pairing-failure symptom is overwhelmingly caused by Windows Firewall blocking `ui32.exe`; reinforces that the broadcast comes from `ui32.exe` and that the phone-side waiting spinner is the symptom when the TCP 7889 handshake cannot complete.
+   499→- Discovered the file.net entry for `ui32.exe` and the Solvusoft entry — both confirm it is signed by "Kristjan Skutta" (the WE developer) and is part of the Wallpaper Engine installation. No protocol detail.
+
+[showing lines 200-499 of 916; use offset=500 with limit to continue reading]

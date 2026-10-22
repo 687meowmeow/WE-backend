@@ -1,0 +1,222 @@
+<!doctype html>
+<html  dir="ltr"   lang="en"  class="guest-user"  data-theme="auto" data-colored-header="false">
+    <head>
+        <meta charset="utf-8">
+        <title>android 17 - ACCESS_LOCAL_NETWORK - GrapheneOS Discussion Forum</title>
+
+        
+        
+        
+        
+        <style>body{margin:0;background:#fff}[data-theme^=dark] body{background:hsl(214,20%,10%)}#flarum-loading{text-align:center;padding:50px 0;font-size:18px;color:#aaa}</style>        <script>(function(){var s="auto";if(s==="auto")s=window.matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light";document.documentElement.setAttribute("data-theme",s)})()</script>
+<link rel="stylesheet" href="https://discuss.grapheneos.org/assets/forum.css?v=5398bf6d" fetchpriority="high">
+<link rel="canonical" href="https://discuss.grapheneos.org/d/33471-android-17-access-local-network">
+<link rel="preload" href="https://discuss.grapheneos.org/assets/forum.js?v=027b27fd" as="script" fetchpriority="high">
+<link rel="preload" href="https://discuss.grapheneos.org/assets/forum-en.js?v=bf6e7a67" as="script" fetchpriority="high">
+<link rel="preload" href="https://discuss.grapheneos.org/assets/fonts/fa-solid-900.woff2?v=25c180abcedebc3db94288ae031e0008" as="font" type="font/woff2" crossorigin="">
+<link rel="preload" href="https://discuss.grapheneos.org/assets/fonts/fa-regular-400.woff2?v=a901fa2f6953ab68301c5e7774c337d1" as="font" type="font/woff2" crossorigin="">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="GrapheneOS discussion forum">
+<meta name="theme-color" content="#4D698E">
+<script>(function(){try{if(typeof XSLTProcessor!=="undefined"&&new XSLTProcessor())return;}catch(e){}document.write('<script src='+"https://discuss.grapheneos.org/assets/xslt-polyfill/xslt-polyfill.min.js?v=1.0.21"+'><\/script>');})();</script>
+
+<meta name="msapplication-TileColor" content="#ffffff"/>
+<meta name="twitter:site" content="@GrapheneOS"/>
+<meta property="og:image" content="https://discuss.grapheneos.org/opengraph.png"/>
+<meta property="og:image:width" content="512"/>
+<meta property="og:image:height" content="512"/>
+<meta property="og:image:alt" content="GrapheneOS logo"/>
+<meta property="og:site_name" content="GrapheneOS Discussion Forum"/>
+<link rel="icon" href="/favicon.ico"/>
+<link rel="icon" sizes="any" type="image/svg+xml" href="/favicon.svg"/>
+<link rel="mask-icon" href="/780febcc.mask-icon.svg" color="#1a1a1a"/>
+<link rel="apple-touch-icon" href="/apple-touch-icon.png"/>
+<link rel="manifest" href="/manifest.webmanifest"/>
+            
+    </head>
+
+    <body>
+        <div id="app" class="App">
+
+    <a href="#content" class="sr-only sr-only-focusable-custom">Skip to content</a>
+
+    <div id="app-navigation" class="App-navigation"></div>
+
+    <div id="drawer" class="App-drawer">
+
+        <header id="header" class="App-header">
+            <div id="header-navigation" class="Header-navigation"></div>
+            <div class="container">
+                <div class="Header-title">
+                    <a href="https://discuss.grapheneos.org" id="home-link">
+                                                    GrapheneOS Discussion Forum
+                                            </a>
+                </div>
+                <div id="header-primary" class="Header-primary"></div>
+                <div id="header-secondary" class="Header-secondary"></div>
+            </div>
+        </header>
+
+    </div>
+
+    <main class="App-content">
+        <div id="notices"></div>
+
+        <div id="content"></div>
+
+        <div id="flarum-loading" style="display: none">
+    Loading...
+</div>
+
+<noscript>
+    <div class="Alert">
+        <div class="container">
+            This site is best viewed in a modern browser with JavaScript enabled.
+        </div>
+    </div>
+</noscript>
+
+<div id="flarum-loading-error" style="display: none">
+    <div class="Alert">
+        <div class="container">
+            Something went wrong while trying to load the full version of this site. Try hard-refreshing this page to fix the error.
+        </div>
+    </div>
+</div>
+
+<noscript id="flarum-content">
+    <div class="container">
+    <h1>android 17 - ACCESS_LOCAL_NETWORK</h1>
+
+    <div>
+                    <article>
+                                <div class="PostUser"><h3 class="PostUser-name">cherepavel</h3></div>
+                <div class="Post-body">
+                    <p>Android 17 will finally feature protection against loopback 127.0.0.1, through which apps send all sorts of information to each other.<br>
+<a href="https://developer.android.com/reference/android/Manifest.permission#ACCESS_LOCAL_NETWORK" rel="ugc nofollow">https://developer.android.com/reference/android/Manifest.permission#ACCESS_LOCAL_NETWORK</a></p>
+                </div>
+            </article>
+
+            <hr>
+                    <article>
+                                <div class="PostUser"><h3 class="PostUser-name">DeletedUser728</h3></div>
+                <div class="Post-body">
+                    <p><a href="https://discuss.grapheneos.org/d/33471-android-17-access-local-network/1" class="PostMention" data-id="222007"><i class="icon fas fa-reply"></i>cherepavel</a> so it's only IPC left unprotected</p> 
+                </div>
+            </article>
+
+            <hr>
+                    <article>
+                                <div class="PostUser"><h3 class="PostUser-name">Elysium</h3></div>
+                <div class="Post-body">
+                    <p><a href="https://developer.android.com/privacy-and-security/local-network-definition" rel="ugc nofollow">https://developer.android.com/privacy-and-security/local-network-definition</a></p>
+
+<p>Hm, is localhost even in their definition of local network? I am no expert with networking etc. Doesn't seem like it?</p>
+
+<blockquote><p>A local network in this project refers to an IP network that utilizes a<br>
+broadcast-capable network interface, such as Wi-Fi or Ethernet, but excludes<br>
+cellular (WWAN) or VPN connections.</p>
+
+<ul><li>169.254.0.0/16 //Link Local</li>
+<li>100.64.0.0/10 // CGNAT</li>
+<li>10.0.0.0/8 // RFC1918</li>
+<li>172.16.0.0/12 // RFC1918</li>
+<li>192.168.0.0/16 // RFC1918</li>
+<li>Link-local</li>
+<li>Directly-connected routes</li>
+<li>Stub networks like Thread</li>
+<li>Multiple-subnets<br>
+Additionally, both multicast addresses (224.0.0.0/4, ff00::/8) and the IPv4<br>
+broadcast address (255.255.255.255) are classified as local network addresses.</li></ul></blockquote>
+
+<p>While local is 127.0.0.1 ?</p>
+                </div>
+            </article>
+
+            <hr>
+                    <article>
+                                <div class="PostUser"><h3 class="PostUser-name">DeletedUser728</h3></div>
+                <div class="Post-body">
+                    <p><a href="https://discuss.grapheneos.org/d/33471-android-17-access-local-network/3" class="PostMention" data-id="222024"><i class="icon fas fa-reply"></i>Elysium</a> indeed, thank you. None of loopback, 127.0.0.1 is mentioned either there or here <a href="https://developer.android.com/privacy-and-security/local-network-permission" rel="ugc nofollow">https://developer.android.com/privacy-and-security/local-network-permission</a></p>
+
+<p>So OP seems to be wrong or hasn't provided enough evidence.</p> 
+
+<p><a href="https://discuss.grapheneos.org/u/cherepavel" class="UserMention">@cherepavel</a>?</p> 
+                </div>
+            </article>
+
+            <hr>
+                    <article>
+                                <div class="PostUser"><h3 class="PostUser-name">xbxbz</h3></div>
+                <div class="Post-body">
+                    <p><a href="https://discuss.grapheneos.org/d/33471-android-17-access-local-network/1" class="PostMention" data-id="222007"><i class="icon fas fa-reply"></i>cherepavel</a></p> 
+
+<p>The Android 17 ACCESS_LOCAL_NETWORK permission does not solve the cross-profile localhost communication issue described in GrapheneOS/os-issue-tracker#4768.</p> 
+
+<p>The vulnerability allows apps in separate user profiles to communicate over 127.0.0.1, bypassing profile isolation.</p>
+
+<p>This occurs because Android shares the network namespace across profiles, enabling localhost connections between them.</p>
+
+<p>The ACCESS_LOCAL_NETWORK permission only controls discovery of devices on the local network (e.g., LAN), not loopback interface (localhost) access.</p>
+
+<p>The real fix requires separate network namespaces per user profile, which is not implemented in Android 17.</p>
+                </div>
+            </article>
+
+            <hr>
+            </div>
+
+    
+    </div>
+
+</noscript>
+
+
+        <div class="App-composer">
+            <div class="container">
+                <div id="composer"></div>
+            </div>
+        </div>
+    </main>
+
+    <footer class="App-footer" id="footer"></footer>
+
+</div>
+
+
+
+
+        <div id="modal"></div>
+        <div id="alerts"></div>
+
+        <script>
+            document.getElementById('flarum-loading').style.display = 'block';
+            var flarum = {extensions: {}, debug: false};
+        </script>
+
+        <script src="https://discuss.grapheneos.org/assets/forum.js?v=027b27fd"></script>
+<script src="https://discuss.grapheneos.org/assets/forum-en.js?v=bf6e7a67"></script>
+
+        <script id="flarum-rev-manifest" type="application/json">{"admin-en.css":"empty","admin-en.js":"e919cb81","admin.css":"43aa7ebf","admin.js":"36ef70b1","common-en.css":"empty","common-en.js":"empty","common.css":"empty","common.js":"empty","forum-en.css":"empty","forum-en.js":"bf6e7a67","forum.css":"5398bf6d","forum.js":"027b27fd","js\/core\/admin\/components\/FailedJobsModal.js":"d4394966","js\/core\/admin\/components\/FontAwesomePreviewModal.js":"1ca48f07","js\/core\/admin\/components\/ResetExtensionSettingsModal.js":"4d456c0c","js\/core\/admin\/utils\/loadSortable.js":"cfcbc0b2","js\/core\/common\/components\/EditUserModal.js":"545c0dec","js\/core\/common\/components\/SearchModal.js":"5c97631e","js\/core\/forum\/components\/Composer.js":"00f54243","js\/core\/forum\/components\/DiscussionComposer.js":"1862cfb3","js\/core\/forum\/components\/DiscussionsUserPage.js":"a3cd4e83","js\/core\/forum\/components\/EditPostComposer.js":"f02958af","js\/core\/forum\/components\/LogInModal.js":"23d68332","js\/core\/forum\/components\/NotificationsPage.js":"16a30a7a","js\/core\/forum\/components\/PostStream.js":"e8d4431a","js\/core\/forum\/components\/PostStreamScrubber.js":"c9e16eb1","js\/core\/forum\/components\/ReplyComposer.js":"92d49695","js\/core\/forum\/components\/SettingsPage.js":"7c475d41","js\/core\/forum\/components\/SignUpModal.js":"38fa4cfe","js\/core\/forum\/components\/UserSecurityPage.js":"11fa6e94","js\/flarum-audit\/admin\/components\/LimitedSettingsModal.js":"205f5356","js\/flarum-audit\/forum\/components\/ActorAuditModal.js":"515e7913","js\/flarum-audit\/forum\/components\/AuditModal.js":"065ba8a7","js\/flarum-audit\/forum\/components\/DiscussionAuditModal.js":"bcc2135f","js\/flarum-audit\/forum\/components\/UserAuditModal.js":"88c2b6cf","js\/flarum-flags\/forum\/components\/FlagPostModal.js":"9c63dd64","js\/flarum-messages\/forum\/components\/DialogDropdownList.js":"3a5a01a3","js\/flarum-messages\/forum\/components\/MessageComposer.js":"7f2701e5","js\/flarum-messages\/forum\/components\/MessagesPage.js":"fba16ac0","js\/flarum-tags\/common\/components\/TagSelectionModal.js":"8c9be611","js\/flarum-tags\/forum\/components\/TagDiscussionModal.js":"72b6e29b","js\/fof-anti-spam\/admin\/components\/RawDataModal.js":"2e1ee579","js\/fof-anti-spam\/forum\/components\/HandleSpammerModal.js":"c1aa6b5e","js\/fof-moderator-notes\/forum\/components\/ModeratorNotesPage.js":"971b22f5","js\/fof-moderator-warnings\/forum\/components\/WarningModal.js":"cae6dd8f","js\/fof-moderator-warnings\/forum\/components\/WarningPage.js":"da7a3b18"}</script>
+
+        <script id="flarum-json-payload" type="application/json">{"resources":[{"type":"forums","id":"1","links":{"self":"\/forums\/1"},"attributes":{"title":"GrapheneOS Discussion Forum","description":"GrapheneOS discussion forum","showLanguageSelector":true,"showThemeSelector":true,"baseUrl":"https:\/\/discuss.grapheneos.org","basePath":"","baseOrigin":"https:\/\/discuss.grapheneos.org","debug":"","apiUrl":"https:\/\/discuss.grapheneos.org\/api","welcomeTitle":"Welcome to the GrapheneOS Discussion Forum","welcomeMessage":"Official forum for discussing GrapheneOS and related topics.","themePrimaryColor":"#4D698E","themeSecondaryColor":"#4D698E","colorScheme":"auto","logoUrl":null,"logoDarkModeUrl":null,"faviconUrl":null,"headerHtml":"","footerHtml":null,"allowSignUp":true,"defaultRoute":"\/all","canViewForum":true,"canStartDiscussion":false,"canSearchUsers":false,"canCreateAccessToken":false,"canModerateAccessTokens":false,"canEditUserCredentials":false,"assetsBaseUrl":"https:\/\/discuss.grapheneos.org\/assets","jsChunksBaseUrl":"https:\/\/discuss.grapheneos.org\/assets\/js","canAudit":false,"canAuditUser":false,"canAuditDiscussion":false,"auditFilters":[],"auditActions":[],"canViewFlags":false,"guidelinesUrl":null,"canBypassTagCounts":false,"minPrimaryTags":"1","maxPrimaryTags":"1","minSecondaryTags":"0","maxSecondaryTags":"5","canProcessErasureRequests":false,"erasureAnonymizationAllowed":true,"erasureDeletionAllowed":true,"canSuspendUsers":false,"allowUsernameMentionFormat":true,"fof-user-bio.maxLength":200,"fof-user-bio.maxLines":5,"fof-anti-spam.formToken":null,"excerptDisplayEnabled":true,"onlyStickyUnreadDiscussions":true},"relationships":{"groups":{"data":[{"type":"groups","id":"1"},{"type":"groups","id":"2"},{"type":"groups","id":"3"},{"type":"groups","id":"4"}]},"actor":{"data":null},"tags":{"data":[{"type":"tags","id":"1"},{"type":"tags","id":"3"},{"type":"tags","id":"4"},{"type":"tags","id":"26"},{"type":"tags","id":"43"},{"type":"tags","id":"27"},{"type":"tags","id":"23"},{"type":"tags","id":"28"},{"type":"tags","id":"33"}]}}},{"type":"groups","id":"1","links":{"self":"\/groups\/1"},"attributes":{"nameSingular":"Admin","namePlural":"Admins","color":"#B72A2A","icon":"fas fa-wrench","isHidden":false,"position":0}},{"type":"groups","id":"2","links":{"self":"\/groups\/2"},"attributes":{"nameSingular":"Guest","namePlural":"Guests","color":null,"icon":null,"isHidden":false,"position":1}},{"type":"groups","id":"3","links":{"self":"\/groups\/3"},"attributes":{"nameSingular":"Member","namePlural":"Members","color":null,"icon":null,"isHidden":false,"position":2}},{"type":"groups","id":"4","links":{"self":"\/groups\/4"},"attributes":{"nameSingular":"Mod","namePlural":"Mods","color":"#80349E","icon":"fas fa-bolt","isHidden":false,"position":3}},{"type":"tags","id":"1","links":{"self":"\/tags\/1"},"attributes":{"name":"General","description":"","slug":"general","color":"#c7c7c7","icon":"","isHidden":false,"isPrimary":true,"discussionCount":12146,"position":0,"defaultSort":null,"isChild":false,"lastPostedAt":"2026-10-21T02:10:15+00:00","canStartDiscussion":false,"canAddToDiscussion":false},"relationships":{"lastPostedDiscussion":{"data":{"type":"discussions","id":"42960"}},"parent":{"data":null}}},{"type":"tags","id":"3","links":{"self":"\/tags\/3"},"attributes":{"name":"Off Topic","description":"","slug":"off-topic","color":"#c55bec","icon":"","isHidden":false,"isPrimary":true,"discussionCount":4702,"position":2,"defaultSort":null,"isChild":false,"lastPostedAt":"2026-10-21T02:20:36+00:00","canStartDiscussion":false,"canAddToDiscussion":false},"relationships":{"lastPostedDiscussion":{"data":{"type":"discussions","id":"42743"}},"parent":{"data":null}}},{"type":"tags","id":"4","links":{"self":"\/tags\/4"},"attributes":{"name":"Development","description":"","slug":"development","color":"#2e52e0","icon":"","isHidden":false,"isPrimary":true,"discussionCount":318,"position":3,"defaultSort":null,"isChild":false,"lastPostedAt":"2026-10-21T01:04:22+00:00","canStartDiscussion":false,"canAddToDiscussion":false},"relationships":{"lastPostedDiscussion":{"data":{"type":"discussions","id":"897"}},"parent":{"data":null}}},{"type":"tags","id":"26","links":{"self":"\/tags\/26"},"attributes":{"name":"Announcements","description":"","slug":"announcements","color":"#f00a0a","icon":"","isHidden":false,"isPrimary":true,"discussionCount":949,"position":4,"defaultSort":null,"isChild":false,"lastPostedAt":"2026-10-21T02:29:06+00:00","canStartDiscussion":false,"canAddToDiscussion":false},"relationships":{"lastPostedDiscussion":{"data":{"type":"discussions","id":"42878"}},"parent":{"data":null}}},{"type":"tags","id":"43","links":{"self":"\/tags\/43"},"attributes":{"name":"Third party apps and services","description":"","slug":"third-party-apps-and-services","color":"#994ce6","icon":"","isHidden":false,"isPrimary":true,"discussionCount":4127,"position":1,"defaultSort":null,"isChild":false,"lastPostedAt":"2026-10-21T02:21:52+00:00","canStartDiscussion":false,"canAddToDiscussion":false},"relationships":{"lastPostedDiscussion":{"data":{"type":"discussions","id":"42974"}},"parent":{"data":null}}},{"type":"tags","id":"27","links":{"self":"\/tags\/27"},"attributes":{"name":"Solved","description":"","slug":"solved","color":"#2fac16","icon":"","isHidden":false,"isPrimary":false,"discussionCount":3517,"position":null,"defaultSort":null,"isChild":false,"lastPostedAt":"2026-10-21T02:21:52+00:00","canStartDiscussion":false,"canAddToDiscussion":false},"relationships":{"lastPostedDiscussion":{"data":{"type":"discussions","id":"42974"}},"parent":{"data":null}}},{"type":"tags","id":"23","links":{"self":"\/tags\/23"},"attributes":{"name":"Pixel 6a","description":"","slug":"pixel-6a","color":"#7659e8","icon":"","isHidden":false,"isPrimary":false,"discussionCount":1078,"position":null,"defaultSort":null,"isChild":false,"lastPostedAt":"2026-10-18T13:48:58+00:00","canStartDiscussion":false,"canAddToDiscussion":false},"relationships":{"lastPostedDiscussion":{"data":{"type":"discussions","id":"42914"}},"parent":{"data":null}}},{"type":"tags","id":"28","links":{"self":"\/tags\/28"},"attributes":{"name":"Pixel 7","description":"","slug":"pixel-7","color":"#7659e8","icon":"","isHidden":false,"isPrimary":false,"discussionCount":888,"position":null,"defaultSort":null,"isChild":false,"lastPostedAt":"2026-10-20T14:10:58+00:00","canStartDiscussion":false,"canAddToDiscussion":false},"relationships":{"lastPostedDiscussion":{"data":{"type":"discussions","id":"42973"}},"parent":{"data":null}}},{"type":"tags","id":"33","links":{"self":"\/tags\/33"},"attributes":{"name":"Pixel 8","description":"","slug":"pixel-8","color":"#7659e8","icon":"","isHidden":false,"isPrimary":false,"discussionCount":843,"position":null,"defaultSort":null,"isChild":false,"lastPostedAt":"2026-10-20T19:01:11+00:00","canStartDiscussion":false,"canAddToDiscussion":false},"relationships":{"lastPostedDiscussion":{"data":{"type":"discussions","id":"42928"}},"parent":{"data":null}}}],"session":{"userId":0,"csrfToken":"DizDFxZaJ83Oh1TvoL0Ukrrm1z3P24VPcZg72crS"},"locales":{"en":"English"},"locale":"en","assetsRevision":"659caf035f96e94765b246fffdfa2ee4","apiDocument":{"data":{"type":"discussions","id":"33471","links":{"self":"\/discussions\/33471"},"attributes":{"title":"android 17 - ACCESS_LOCAL_NETWORK","slug":"33471-android-17-access-local-network","commentCount":5,"participantCount":4,"createdAt":"2026-03-24T09:18:53+00:00","lastPostedAt":"2026-03-24T11:37:49+00:00","lastPostNumber":5,"canReply":false,"canRename":false,"canDelete":false,"canHide":false,"canTag":false,"isApproved":true,"subscription":null,"isSticky":false,"canSticky":false,"isLocked":false,"canLock":false},"relationships":{"posts":{"data":[{"type":"posts","id":"222007"},{"type":"posts","id":"222016"},{"type":"posts","id":"222024"},{"type":"posts","id":"222028"},{"type":"posts","id":"222039"}]},"hideUser":{"data":null},"tags":{"data":[{"type":"tags","id":"1"}]},"lastPost":{"data":{"type":"posts","id":"222039"}},"lastPostedUser":{"data":{"type":"users","id":"30580"}},"firstPost":{"data":{"type":"posts","id":"222007"}},"user":{"data":{"type":"users","id":"30596"}}}},"included":[{"type":"tags","id":"1","links":{"self":"\/tags\/1"},"attributes":{"name":"General","description":"","slug":"general","color":"#c7c7c7","icon":"","isHidden":false,"isPrimary":true,"discussionCount":12146,"position":0,"defaultSort":null,"isChild":false,"lastPostedAt":"2026-10-21T02:10:15+00:00","canStartDiscussion":false,"canAddToDiscussion":false},"relationships":{"lastPostedDiscussion":{"data":{"type":"discussions","id":"42960"}},"parent":{"data":null}}},{"type":"users","id":"30580","links":{"self":"\/users\/30580"},"attributes":{"username":"xbxbz","displayName":"xbxbz","avatarUrl":null,"avatarSrcset":null,"hasUploadedAvatar":false,"slug":"xbxbz","joinTime":"2026-03-23T22:02:19+00:00","discussionCount":2,"commentCount":20,"canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":false,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0},"relationships":{"groups":{"data":[]}}},{"type":"users","id":"30596","links":{"self":"\/users\/30596"},"attributes":{"username":"cherepavel","displayName":"cherepavel","avatarUrl":null,"avatarSrcset":null,"hasUploadedAvatar":false,"slug":"cherepavel","joinTime":"2026-03-24T09:15:42+00:00","discussionCount":1,"commentCount":1,"lastSeenAt":"2026-03-28T10:10:54+00:00","canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":false,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0},"relationships":{"groups":{"data":[]}}},{"type":"users","id":"25693","links":{"self":"\/users\/25693"},"attributes":{"username":"Johnnyloans","displayName":"Johnnyloans","avatarUrl":"https:\/\/discuss.grapheneos.org\/assets\/avatars\/8kISEGEKi8V2AJUh.png","avatarSrcset":null,"hasUploadedAvatar":true,"slug":"Johnnyloans","joinTime":"2025-10-17T23:49:31+00:00","discussionCount":6,"commentCount":3539,"canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":false,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0}},{"type":"users","id":"28914","links":{"self":"\/users\/28914"},"attributes":{"username":"DeletedUser728","displayName":"DeletedUser728","avatarUrl":null,"avatarSrcset":null,"hasUploadedAvatar":false,"slug":"DeletedUser728","joinTime":"2026-04-30T00:00:01+00:00","discussionCount":6,"commentCount":440,"lastSeenAt":null,"canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":true,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0}},{"type":"users","id":"29902","links":{"self":"\/users\/29902"},"attributes":{"username":"DeletedUser787","displayName":"DeletedUser787","avatarUrl":null,"avatarSrcset":null,"hasUploadedAvatar":false,"slug":"DeletedUser787","joinTime":"2026-06-17T00:00:02+00:00","discussionCount":7,"commentCount":107,"lastSeenAt":null,"canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":true,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0}},{"type":"users","id":"18083","links":{"self":"\/users\/18083"},"attributes":{"username":"Elysium","displayName":"Elysium","avatarUrl":null,"avatarSrcset":null,"hasUploadedAvatar":false,"slug":"Elysium","joinTime":"2025-01-08T15:52:30+00:00","discussionCount":7,"commentCount":130,"canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":false,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0}},{"type":"users","id":"21511","links":{"self":"\/users\/21511"},"attributes":{"username":"userofgos","displayName":"userofgos","avatarUrl":"https:\/\/discuss.grapheneos.org\/assets\/avatars\/VHnAok9JwqO2ReCw.png","avatarSrcset":null,"hasUploadedAvatar":true,"slug":"userofgos","joinTime":"2025-05-30T11:51:25+00:00","discussionCount":2,"commentCount":1461,"lastSeenAt":"2026-10-21T01:40:00+00:00","canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":false,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0}},{"type":"users","id":"8940","links":{"self":"\/users\/8940"},"attributes":{"username":"Lion","displayName":"Lion","avatarUrl":null,"avatarSrcset":null,"hasUploadedAvatar":false,"slug":"Lion","joinTime":"2023-08-07T11:56:39+00:00","discussionCount":1,"commentCount":25,"canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":false,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0}},{"type":"users","id":"1837","links":{"self":"\/users\/1837"},"attributes":{"username":"Oggyo","displayName":"Oggyo","avatarUrl":null,"avatarSrcset":null,"hasUploadedAvatar":false,"slug":"Oggyo","joinTime":"2022-11-29T17:09:56+00:00","discussionCount":22,"commentCount":729,"canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":false,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0}},{"type":"posts","id":"222007","links":{"self":"\/posts\/222007"},"attributes":{"number":1,"createdAt":"2026-03-24T09:18:53+00:00","contentType":"comment","contentHtml":"\u003Cp\u003EAndroid 17 will finally feature protection against loopback 127.0.0.1, through which apps send all sorts of information to each other.\u003Cbr\u003E\n\u003Ca href=\u0022https:\/\/developer.android.com\/reference\/android\/Manifest.permission#ACCESS_LOCAL_NETWORK\u0022 rel=\u0022ugc nofollow\u0022\u003Ehttps:\/\/developer.android.com\/reference\/android\/Manifest.permission#ACCESS_LOCAL_NETWORK\u003C\/a\u003E\u003C\/p\u003E","renderFailed":null,"editedAt":null,"canEdit":false,"canDelete":false,"canHide":false,"canFlag":false,"isApproved":true,"canApprove":false,"canLike":false,"mentionedByCount":2,"likesCount":4},"relationships":{"likes":{"data":[{"type":"users","id":"25693"},{"type":"users","id":"28914"},{"type":"users","id":"29902"},{"type":"users","id":"18083"}]},"mentionedBy":{"data":[{"type":"posts","id":"222016"},{"type":"posts","id":"222039"}]},"eventPostMentionsTags":{"data":[]},"flags":{"data":[]},"hiddenUser":{"data":null},"editedUser":{"data":null},"discussion":{"data":{"type":"discussions","id":"33471"}},"user":{"data":{"type":"users","id":"30596"}}}},{"type":"posts","id":"222016","links":{"self":"\/posts\/222016"},"attributes":{"number":2,"createdAt":"2026-03-24T09:57:02+00:00","contentType":"comment","contentHtml":"\u003Cp\u003E\u003Ca href=\u0022https:\/\/discuss.grapheneos.org\/d\/33471-android-17-access-local-network\/1\u0022 class=\u0022PostMention\u0022 data-id=\u0022222007\u0022\u003E\u003Ci class=\u0022icon fas fa-reply\u0022\u003E\u003C\/i\u003Echerepavel\u003C\/a\u003E so it\u0027s only IPC left unprotected\u003C\/p\u003E ","renderFailed":null,"editedAt":null,"canEdit":false,"canDelete":false,"canHide":false,"canFlag":false,"isApproved":true,"canApprove":false,"canLike":false,"mentionedByCount":0,"likesCount":0},"relationships":{"likes":{"data":[]},"mentionedBy":{"data":[]},"eventPostMentionsTags":{"data":[]},"flags":{"data":[]},"hiddenUser":{"data":null},"editedUser":{"data":null},"discussion":{"data":{"type":"discussions","id":"33471"}},"user":{"data":{"type":"users","id":"28914"}}}},{"type":"posts","id":"222024","links":{"self":"\/posts\/222024"},"attributes":{"number":3,"createdAt":"2026-03-24T10:27:44+00:00","contentType":"comment","contentHtml":"\u003Cp\u003E\u003Ca href=\u0022https:\/\/developer.android.com\/privacy-and-security\/local-network-definition\u0022 rel=\u0022ugc nofollow\u0022\u003Ehttps:\/\/developer.android.com\/privacy-and-security\/local-network-definition\u003C\/a\u003E\u003C\/p\u003E\n\n\u003Cp\u003EHm, is localhost even in their definition of local network? I am no expert with networking etc. Doesn\u0027t seem like it?\u003C\/p\u003E\n\n\u003Cblockquote\u003E\u003Cp\u003EA local network in this project refers to an IP network that utilizes a\u003Cbr\u003E\nbroadcast-capable network interface, such as Wi-Fi or Ethernet, but excludes\u003Cbr\u003E\ncellular (WWAN) or VPN connections.\u003C\/p\u003E\n\n\u003Cul\u003E\u003Cli\u003E169.254.0.0\/16 \/\/Link Local\u003C\/li\u003E\n\u003Cli\u003E100.64.0.0\/10 \/\/ CGNAT\u003C\/li\u003E\n\u003Cli\u003E10.0.0.0\/8 \/\/ RFC1918\u003C\/li\u003E\n\u003Cli\u003E172.16.0.0\/12 \/\/ RFC1918\u003C\/li\u003E\n\u003Cli\u003E192.168.0.0\/16 \/\/ RFC1918\u003C\/li\u003E\n\u003Cli\u003ELink-local\u003C\/li\u003E\n\u003Cli\u003EDirectly-connected routes\u003C\/li\u003E\n\u003Cli\u003EStub networks like Thread\u003C\/li\u003E\n\u003Cli\u003EMultiple-subnets\u003Cbr\u003E\nAdditionally, both multicast addresses (224.0.0.0\/4, ff00::\/8) and the IPv4\u003Cbr\u003E\nbroadcast address (255.255.255.255) are classified as local network addresses.\u003C\/li\u003E\u003C\/ul\u003E\u003C\/blockquote\u003E\n\n\u003Cp\u003EWhile local is 127.0.0.1 ?\u003C\/p\u003E","renderFailed":null,"editedAt":null,"canEdit":false,"canDelete":false,"canHide":false,"canFlag":false,"isApproved":true,"canApprove":false,"canLike":false,"mentionedByCount":1,"likesCount":0},"relationships":{"likes":{"data":[]},"mentionedBy":{"data":[{"type":"posts","id":"222028"}]},"eventPostMentionsTags":{"data":[]},"flags":{"data":[]},"hiddenUser":{"data":null},"editedUser":{"data":null},"discussion":{"data":{"type":"discussions","id":"33471"}},"user":{"data":{"type":"users","id":"18083"}}}},{"type":"posts","id":"222028","links":{"self":"\/posts\/222028"},"attributes":{"number":4,"createdAt":"2026-03-24T10:39:11+00:00","contentType":"comment","contentHtml":"\u003Cp\u003E\u003Ca href=\u0022https:\/\/discuss.grapheneos.org\/d\/33471-android-17-access-local-network\/3\u0022 class=\u0022PostMention\u0022 data-id=\u0022222024\u0022\u003E\u003Ci class=\u0022icon fas fa-reply\u0022\u003E\u003C\/i\u003EElysium\u003C\/a\u003E indeed, thank you. None of loopback, 127.0.0.1 is mentioned either there or here \u003Ca href=\u0022https:\/\/developer.android.com\/privacy-and-security\/local-network-permission\u0022 rel=\u0022ugc nofollow\u0022\u003Ehttps:\/\/developer.android.com\/privacy-and-security\/local-network-permission\u003C\/a\u003E\u003C\/p\u003E\n\n\u003Cp\u003ESo OP seems to be wrong or hasn\u0027t provided enough evidence.\u003C\/p\u003E \n\n\u003Cp\u003E\u003Ca href=\u0022https:\/\/discuss.grapheneos.org\/u\/cherepavel\u0022 class=\u0022UserMention\u0022\u003E@cherepavel\u003C\/a\u003E?\u003C\/p\u003E ","renderFailed":null,"editedAt":"2026-03-24T10:39:40+00:00","canEdit":false,"canDelete":false,"canHide":false,"canFlag":false,"isApproved":true,"canApprove":false,"canLike":false,"mentionedByCount":0,"likesCount":0},"relationships":{"likes":{"data":[]},"mentionedBy":{"data":[]},"eventPostMentionsTags":{"data":[]},"flags":{"data":[]},"hiddenUser":{"data":null},"editedUser":{"data":{"type":"users","id":"28914"}},"discussion":{"data":{"type":"discussions","id":"33471"}},"user":{"data":{"type":"users","id":"28914"}}}},{"type":"posts","id":"222039","links":{"self":"\/posts\/222039"},"attributes":{"number":5,"createdAt":"2026-03-24T11:37:49+00:00","contentType":"comment","contentHtml":"\u003Cp\u003E\u003Ca href=\u0022https:\/\/discuss.grapheneos.org\/d\/33471-android-17-access-local-network\/1\u0022 class=\u0022PostMention\u0022 data-id=\u0022222007\u0022\u003E\u003Ci class=\u0022icon fas fa-reply\u0022\u003E\u003C\/i\u003Echerepavel\u003C\/a\u003E\u003C\/p\u003E \n\n\u003Cp\u003EThe Android 17 ACCESS_LOCAL_NETWORK permission does not solve the cross-profile localhost communication issue described in GrapheneOS\/os-issue-tracker#4768.\u003C\/p\u003E \n\n\u003Cp\u003EThe vulnerability allows apps in separate user profiles to communicate over 127.0.0.1, bypassing profile isolation.\u003C\/p\u003E\n\n\u003Cp\u003EThis occurs because Android shares the network namespace across profiles, enabling localhost connections between them.\u003C\/p\u003E\n\n\u003Cp\u003EThe ACCESS_LOCAL_NETWORK permission only controls discovery of devices on the local network (e.g., LAN), not loopback interface (localhost) access.\u003C\/p\u003E\n\n\u003Cp\u003EThe real fix requires separate network namespaces per user profile, which is not implemented in Android 17.\u003C\/p\u003E","renderFailed":null,"editedAt":null,"canEdit":false,"canDelete":false,"canHide":false,"canFlag":false,"isApproved":true,"canApprove":false,"canLike":false,"mentionedByCount":0,"likesCount":5},"relationships":{"likes":{"data":[{"type":"users","id":"28914"},{"type":"users","id":"21511"},{"type":"users","id":"8940"},{"type":"users","id":"1837"}]},"mentionedBy":{"data":[]},"eventPostMentionsTags":{"data":[]},"flags":{"data":[]},"hiddenUser":{"data":null},"editedUser":{"data":null},"discussion":{"data":{"type":"discussions","id":"33471"}},"user":{"data":{"type":"users","id":"30580"}}}},{"type":"users","id":"28914","links":{"self":"\/users\/28914"},"attributes":{"username":"DeletedUser728","displayName":"DeletedUser728","avatarUrl":null,"avatarSrcset":null,"hasUploadedAvatar":false,"slug":"DeletedUser728","joinTime":"2026-04-30T00:00:01+00:00","discussionCount":6,"commentCount":440,"lastSeenAt":null,"canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":true,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0},"relationships":{"groups":{"data":[]}}},{"type":"users","id":"21511","links":{"self":"\/users\/21511"},"attributes":{"username":"userofgos","displayName":"userofgos","avatarUrl":"https:\/\/discuss.grapheneos.org\/assets\/avatars\/VHnAok9JwqO2ReCw.png","avatarSrcset":null,"hasUploadedAvatar":true,"slug":"userofgos","joinTime":"2025-05-30T11:51:25+00:00","discussionCount":2,"commentCount":1461,"lastSeenAt":"2026-10-21T01:40:00+00:00","canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":false,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0}},{"type":"users","id":"8940","links":{"self":"\/users\/8940"},"attributes":{"username":"Lion","displayName":"Lion","avatarUrl":null,"avatarSrcset":null,"hasUploadedAvatar":false,"slug":"Lion","joinTime":"2023-08-07T11:56:39+00:00","discussionCount":1,"commentCount":25,"canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":false,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0}},{"type":"users","id":"1837","links":{"self":"\/users\/1837"},"attributes":{"username":"Oggyo","displayName":"Oggyo","avatarUrl":null,"avatarSrcset":null,"hasUploadedAvatar":false,"slug":"Oggyo","joinTime":"2022-11-29T17:09:56+00:00","discussionCount":22,"commentCount":729,"canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":false,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0}},{"type":"users","id":"30580","links":{"self":"\/users\/30580"},"attributes":{"username":"xbxbz","displayName":"xbxbz","avatarUrl":null,"avatarSrcset":null,"hasUploadedAvatar":false,"slug":"xbxbz","joinTime":"2026-03-23T22:02:19+00:00","discussionCount":2,"commentCount":20,"canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":false,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0},"relationships":{"groups":{"data":[]}}},{"type":"users","id":"18083","links":{"self":"\/users\/18083"},"attributes":{"username":"Elysium","displayName":"Elysium","avatarUrl":null,"avatarSrcset":null,"hasUploadedAvatar":false,"slug":"Elysium","joinTime":"2025-01-08T15:52:30+00:00","discussionCount":7,"commentCount":130,"canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":false,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0},"relationships":{"groups":{"data":[]}}},{"type":"users","id":"25693","links":{"self":"\/users\/25693"},"attributes":{"username":"Johnnyloans","displayName":"Johnnyloans","avatarUrl":"https:\/\/discuss.grapheneos.org\/assets\/avatars\/8kISEGEKi8V2AJUh.png","avatarSrcset":null,"hasUploadedAvatar":true,"slug":"Johnnyloans","joinTime":"2025-10-17T23:49:31+00:00","discussionCount":6,"commentCount":3539,"canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":false,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0}},{"type":"users","id":"29902","links":{"self":"\/users\/29902"},"attributes":{"username":"DeletedUser787","displayName":"DeletedUser787","avatarUrl":null,"avatarSrcset":null,"hasUploadedAvatar":false,"slug":"DeletedUser787","joinTime":"2026-06-17T00:00:02+00:00","discussionCount":7,"commentCount":107,"lastSeenAt":null,"canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":true,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0}},{"type":"users","id":"30596","links":{"self":"\/users\/30596"},"attributes":{"username":"cherepavel","displayName":"cherepavel","avatarUrl":null,"avatarSrcset":null,"hasUploadedAvatar":false,"slug":"cherepavel","joinTime":"2026-03-24T09:15:42+00:00","discussionCount":1,"commentCount":1,"lastSeenAt":"2026-03-28T10:10:54+00:00","canEdit":false,"canEditAvatar":false,"canEditCredentials":false,"canEditGroups":false,"canDelete":false,"anonymized":false,"canModerateExports":false,"canSuspend":false,"canViewBio":false,"canEditBio":false,"canViewWarnings":false,"canManageWarnings":false,"canDeleteWarnings":false,"canSpamblock":false,"visibleWarningCount":0},"relationships":{"groups":{"data":[]}}}],"jsonapi":{"version":"1.1"}}}</script>
+
+        <script>
+            const data = JSON.parse(document.getElementById('flarum-json-payload').textContent);
+            document.getElementById('flarum-loading').style.display = 'none';
+
+            try {
+                app.load(data);
+                app.bootExtensions(flarum.extensions);
+                app.boot();
+            } catch (e) {
+                var error = document.getElementById('flarum-loading-error');
+                error.innerHTML += document.getElementById('flarum-content').textContent;
+                error.style.display = 'block';
+                throw e;
+            }
+        </script>
+
+        
+    </body>
+</html>

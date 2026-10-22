@@ -1,0 +1,78 @@
+{
+  "url": "https://api.github.com/repos/ptitSeb/box64/issues/4403",
+  "repository_url": "https://api.github.com/repos/ptitSeb/box64",
+  "labels_url": "https://api.github.com/repos/ptitSeb/box64/issues/4403/labels{/name}",
+  "comments_url": "https://api.github.com/repos/ptitSeb/box64/issues/4403/comments",
+  "events_url": "https://api.github.com/repos/ptitSeb/box64/issues/4403/events",
+  "html_url": "https://github.com/ptitSeb/box64/issues/4403",
+  "id": 5479704501,
+  "node_id": "I_kwDOEuyQws8AAAABRp2ntQ",
+  "number": 4403,
+  "title": "Valheim dedicated server: crossplay/PlayFab join-code registration never completes (regression since v0.4.0, still present on main)",
+  "user": {
+    "login": "hrossow",
+    "id": 218823231,
+    "node_id": "U_kgDODQr6Pw",
+    "avatar_url": "https://avatars.githubusercontent.com/u/218823231?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/hrossow",
+    "html_url": "https://github.com/hrossow",
+    "followers_url": "https://api.github.com/users/hrossow/followers",
+    "following_url": "https://api.github.com/users/hrossow/following{/other_user}",
+    "gists_url": "https://api.github.com/users/hrossow/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/hrossow/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/hrossow/subscriptions",
+    "organizations_url": "https://api.github.com/users/hrossow/orgs",
+    "repos_url": "https://api.github.com/users/hrossow/repos",
+    "events_url": "https://api.github.com/users/hrossow/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/hrossow/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "labels": [
+
+  ],
+  "state": "open",
+  "locked": false,
+  "assignees": [
+
+  ],
+  "milestone": null,
+  "comments": 6,
+  "created_at": "2026-09-16T20:42:57Z",
+  "updated_at": "2026-10-11T09:28:34Z",
+  "closed_at": null,
+  "assignee": null,
+  "author_association": "NONE",
+  "active_lock_reason": null,
+  "sub_issues_summary": {
+    "total": 0,
+    "completed": 0,
+    "percent_completed": 0
+  },
+  "issue_dependencies_summary": {
+    "blocked_by": 0,
+    "total_blocked_by": 0,
+    "blocking": 0,
+    "total_blocking": 0
+  },
+  "body": "## Description\n\nRunning the Valheim dedicated server (official Linux x86_64 build, Mono/.NET runtime — not the Windows build, no Wine involved) under box64 on a Raspberry Pi 4B (ARM64), crossplay registration (Steam relay / PlayFab-based join-code system) never completes on box64 v0.4.4 or current `main` (commit `cc07741a`), while it works correctly on the older box64 build bundled in the `tsxcloud/valheim-arm` Docker image (an unreleased dev build predating v0.4.0, exact commit unknown).\n\nThis is a regression: the same Valheim server binary, same Mono runtime, same Docker image/entrypoint, same mods, same `.env` config — only the box64 binary differs between a working and a broken run. Since the game/Mono/mod files are byte-for-byte identical across all tests and only the box64 binary is swapped, this points at box64 itself rather than the guest application.\n\n## Environment\n\n- Hardware: Raspberry Pi 4B, Cortex-A72, 4 cores, 8GB RAM\n- OS: Raspberry Pi OS / Debian-based, kernel `6.12.62+rpt-rpi-v8`\n- box64 built from source with:\n  ```\n  cmake .. -D RPI4ARM64=1 -D CMAKE_BUILD_TYPE=RelWithDebInfo -D BOX32=ON -D BOX32_BINFMT=ON\n  make -j4\n  ```\n- Guest app: Valheim dedicated server `l-1.0.12` (network version 40), **official Linux x86_64 build** (`valheim_server.x86_64`), Mono/.NET runtime `4.0.30319.42000` (bundled with the Unity Linux player), BepInEx 5.4.23.3, running inside the `tsxcloud/valheim-arm` Docker image (ARM64 host container, box64 translates the x86_64 Linux binary directly — no Wine/Windows layer involved)\n\n## Versions tested\n\n| box64 version/commit | BepInEx/mod crash | Crossplay join-code registration |\n|---|---|---|\n| unreleased dev build bundled in the Docker image (pre-v0.4.0, exact commit unknown) | crashes when BepInEx plugins are enabled (separate, older known issue — #222) | **works** — clean `Game server connected`, join code generated within seconds |\n| `v0.4.0` (`dae0917`) | crashes with plugins enabled (silent hang, no diagnostic output) | **broken** with plugins disabled too (PlayFab loop, no crash) — confirms this is independent of BepInEx/mods |\n| `v0.4.2` (`7eeb501`) | crashes with plugins enabled (Mono catches a native fault in `System.Threading._ThreadPoolWaitCallback`, or triggers `mono-hang-watchdog` thread-kill) | broken with plugins disabled too (same PlayFab loop) |\n| `v0.4.4` (`2f130fa`) | **fixed**, no crash | **broken** (see below) |\n| `main` HEAD (`cc07741a`, as of 2026-09-16) | **fixed**, confirmed stable over 5+ min of continuous operation | **still broken**, same symptom as v0.4.4 |\n\nWith `ENABLE_PLUGINS=false` (no BepInEx/mods at all — plain vanilla dedicated server), `v0.4.0` and `v0.4.2` no longer crash, which let us isolate the crossplay regression from the BepInEx crash: **the crossplay/join-code registration failure is present as far back as `v0.4.0`, and has nothing to do with mods or BepInEx** — it reproduces on a completely vanilla server.\n\n(The crash fix between v0.4.2 and v0.4.4/main may be related to `9e8d8193 [ARM64_DYNAREC] Fix memory corruption in unaligned LOCK CMPXCHG8B/16B (#4280)` — mentioned here for context only, not the subject of this report, since it now appears fixed.)\n\n## Symptom (crossplay/join-code registration)\n\nOn `v0.4.4`, one manifestation was a tight-loop exception (6000+ occurrences within ~2 minutes) from the game's own `ZNet.GetPublicIP` method, which sequentially queries several IP-echo services reusing one `HttpClient` instance:\n\n```\nException while waiting for respons from https://api6.ipify.org -> System.InvalidOperationException: This instance has already started one or more requests. Properties can only be modified before sending the first request.\n  at System.Net.Http.HttpClient.CheckDisposedOrStarted () [0x00010] in <b40a11c7e558480c8010e5eef077b1e0>:0\n  at System.Net.Http.HttpClient.set_Timeout (System.TimeSpan value) [0x00032] in <b40a11c7e558480c8010e5eef077b1e0>:0\n  at ZNet.<GetPublicIP>g__DownloadStringAsync|15_1 (System.String downloadUrl, System.Int32 timeoutMS) [0x00027] in <e8e9a68025ea4b87bdd407412665a2ad>:0\nCould not extract valid IP address from externalIP download string.\n```\n\nOn both `v0.4.4` and current `main`, a second (and more consistently reproducible) manifestation is an indefinite retry loop against the game's PlayFab-based crossplay backend, never succeeding:\n\n```\nPlayFab reconnect server 'ModTest'\nServer 'ModTest' begin PlayFab create and join network for server\n```\nrepeating roughly every 20-30 seconds, indefinitely, interleaved with recurring:\n```\nGame server connected failed\n```\n\nIn both cases, the server process stays up and otherwise appears healthy (`docker ps` shows `Up`, no crash, no restart), but `Opened Steam server` / a join code is never logged, and the server never becomes reachable via the crossplay path.\n\nOn `v0.4.2` (plugins disabled to avoid the separate crash issue), the registration gets further before looping — worth noting since it shows the network stack *mostly* works, right up until the final step:\n```\nSending PlayFab login request (attempt 1)\nGame server connected failed\n[... attempt 1 fails, attempt 2 begins ~50s later ...]\nPlayFab custom ID set to \"PlayFab_ModTest_2456_<hash>\"\nSending PlayFab login request (attempt 2)\nOpened PlayFab server\nGame server connected failed  [x4]\nLogged in PlayFab user via custom ID\nPlayFab logged in as \"PlayFab_ModTest_2456_<hash>\"\nPlayFab local entity ID is <id>\nRegister PlayFab server \"ModTest\" with IP <correct public IP>:2456\nServer 'ModTest' begin PlayFab create and join network for server\nPlayFab reconnect server 'ModTest'\nServer 'ModTest' begin PlayFab create and join network for server\n[... loops indefinitely from here, no join code ever appears ...]\n```\nSo PlayFab login and server registration (with the correct public IP) do succeed — it's specifically the \"create and join network for server\" step that never completes and falls into the reconnect loop.\n\n## Working comparison (old/dev box64, for contrast)\n\nOn the same hardware/image, with the box64 binary swapped back to the bundled dev build, the exact same server config produces, within seconds of `Steam game server initialized`:\n```\nRegistering lobby\nOpened Steam server\n```\nfollowed shortly by a valid, working join code in the log, and no `HttpClient`/`PlayFab` exceptions at all.\n\n## Ruled out so far\n\n- **Not a memory-ordering/TSO emulation gap**: tried `BOX64_DYNAREC_STRONGMEM` at levels 1 and 4 on `v0.4.4` — no change at either level, same exact failure sequence, just slower to reach it at level 4.\n- **Not mod/BepInEx related**: reproduces on a fully vanilla server (`ENABLE_PLUGINS=false`) on every version tested.\n\n## Question\n\nIs this a known regression? Does anything come to mind that changed in box64's handling of `System.Net.Http`/TLS calls, or timing/threading around async HTTP/socket requests, between the pre-v0.4.0 dev builds and v0.4.4/main? The log mentions `ZPlayFabSocket` for the final failing step, which suggests a persistent socket/connection object rather than a one-shot request like `GetPublicIP`'s. Happy to help bisect further (have `v0.4.0`, `v0.4.2`, `v0.4.4`, and `main` all built and ready to re-test) or provide more logs/repro steps if useful — this is fully reproducible on request.\n",
+  "closed_by": null,
+  "reactions": {
+    "url": "https://api.github.com/repos/ptitSeb/box64/issues/4403/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "timeline_url": "https://api.github.com/repos/ptitSeb/box64/issues/4403/timeline",
+  "performed_via_github_app": null,
+  "state_reason": null,
+  "pinned_comment": null
+}

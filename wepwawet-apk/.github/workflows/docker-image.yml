@@ -1,0 +1,63 @@
+name: Build & push GHCR builder image
+
+# Build the docker image that contains all the build toolchains (NDK, SDK, Wine build deps, etc.)
+# This image is huge (~10 GB) — built weekly OR on Dockerfile changes only.
+#
+# The build is split into multiple jobs that each build one layer of the image and push
+# to GHCR so subsequent rebuilds are incremental (GHCR caches layers).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docker/**'
+  schedule:
+    - cron: '0 4 * * 1'  # Monday 4am UTC — weekly rebuild to catch upstream Wine/Box64 updates
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/builder
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-22.04  # use 22.04 (smaller base) for the image builder
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for image
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-
+
+      - name: Build and push (multi-stage to fit GHCR's 10GB-per-layer cap)
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/
+          file: docker/Dockerfile.builder
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Each layer is cached in GHCR — incremental rebuilds only fetch changed layers
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+          # The image is 8-10GB — give Buildx more time
+          timeout: 90

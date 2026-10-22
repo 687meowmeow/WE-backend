@@ -1,0 +1,81 @@
+{
+  "total_count": 1,
+  "incomplete_results": false,
+  "items": [
+    {
+      "url": "https://api.github.com/repos/brunodev85/winlator/issues/2002",
+      "repository_url": "https://api.github.com/repos/brunodev85/winlator",
+      "labels_url": "https://api.github.com/repos/brunodev85/winlator/issues/2002/labels{/name}",
+      "comments_url": "https://api.github.com/repos/brunodev85/winlator/issues/2002/comments",
+      "events_url": "https://api.github.com/repos/brunodev85/winlator/issues/2002/events",
+      "html_url": "https://github.com/brunodev85/winlator/pull/2002",
+      "id": 4003894701,
+      "node_id": "PR_kwDOJ_-WGc7G-L4i",
+      "number": 2002,
+      "title": "Add container config export/import",
+      "user": {
+        "login": "gigachadmma69",
+        "id": 262407891,
+        "node_id": "U_kgDOD6QG0w",
+        "avatar_url": "https://avatars.githubusercontent.com/u/262407891?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/gigachadmma69",
+        "html_url": "https://github.com/gigachadmma69",
+        "followers_url": "https://api.github.com/users/gigachadmma69/followers",
+        "following_url": "https://api.github.com/users/gigachadmma69/following{/other_user}",
+        "gists_url": "https://api.github.com/users/gigachadmma69/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/gigachadmma69/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/gigachadmma69/subscriptions",
+        "organizations_url": "https://api.github.com/users/gigachadmma69/orgs",
+        "repos_url": "https://api.github.com/users/gigachadmma69/repos",
+        "events_url": "https://api.github.com/users/gigachadmma69/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/gigachadmma69/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "labels": [
+
+      ],
+      "state": "open",
+      "locked": false,
+      "assignees": [
+
+      ],
+      "milestone": null,
+      "comments": 11,
+      "created_at": "2026-02-28T04:50:46Z",
+      "updated_at": "2026-07-13T13:46:46Z",
+      "closed_at": null,
+      "assignee": null,
+      "author_association": "NONE",
+      "active_lock_reason": null,
+      "draft": false,
+      "pull_request": {
+        "url": "https://api.github.com/repos/brunodev85/winlator/pulls/2002",
+        "html_url": "https://github.com/brunodev85/winlator/pull/2002",
+        "diff_url": "https://github.com/brunodev85/winlator/pull/2002.diff",
+        "patch_url": "https://github.com/brunodev85/winlator/pull/2002.patch",
+        "merged_at": null
+      },
+      "body": "## Summary\n\nAllows users to share and reuse container configurations by exporting/importing the settings JSON as a `.wcc` (Winlator Container Config) file.\n\n### Export\n- New **\"Export Config\"** option in the container popup menu (between Duplicate and Remove)\n- Saves to `Downloads/Winlator/<container-name>.wcc`\n- Strips device-specific fields (`id`, `cpuList`, `cpuListWoW64`) that would be invalid on another device\n- File is ~1KB and contains all tuning settings (graphics driver, DX wrapper, env vars, box86/64 preset, win components, etc.)\n\n### Import\n- New **import button** in the containers toolbar (action bar)\n- Opens the system file picker to select a `.wcc` file\n- Creates a new container with the imported settings via the existing `createContainerAsync(JSONObject)` pipeline\n- The pipeline automatically assigns a new ID, creates the directory, extracts the Wine container pattern, and applies all settings\n\n### Architecture\n- Export reuses the existing `.container` JSON format — just reads, strips the ID, and writes\n- Import reuses the existing `createContainerAsync(JSONObject)` — zero new container creation logic needed\n- Follows the same file picker pattern used by `InputControlsFragment` for profile import\n\n## Test plan\n\n- [ ] Open container popup menu → \"Export Config\" appears\n- [ ] Export a container → `.wcc` file appears in `Downloads/Winlator/`\n- [ ] Open `.wcc` file in a text editor → valid JSON with all container settings, no `id` field\n- [ ] Tap import button → file picker opens\n- [ ] Select the exported `.wcc` file → new container appears with matching settings\n- [ ] Verify imported container's settings match the exported container",
+      "reactions": {
+        "url": "https://api.github.com/repos/brunodev85/winlator/issues/2002/reactions",
+        "total_count": 4,
+        "+1": 1,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 3
+      },
+      "timeline_url": "https://api.github.com/repos/brunodev85/winlator/issues/2002/timeline",
+      "performed_via_github_app": null,
+      "state_reason": null,
+      "score": 1.0
+    }
+  ],
+  "search_type": "lexical"
+}

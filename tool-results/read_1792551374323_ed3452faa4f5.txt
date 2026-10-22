@@ -1,0 +1,202 @@
+     1→# WepWawet Project — Shared Worklog
+     2→
+     3→**Project codename:** WepWawet (the Android on-device backend for Wallpaper Engine)
+     4→**Goal:** A single Android APK (built via GitHub Actions) that bundles an x86-on-ARM emulation stack running Steam + Wallpaper Engine. The user's official Wallpaper Engine Android app pairs with this on-device "fake PC" via localhost (or whatever networking topology we determine best) so they can use WE wallpapers without their real gaming PC being on.
+     5→
+     6→## Confirmed constraints (from user clarification round 1)
+     7→- **Audience:** single user (the developer). Convenience-driven ("don't want to turn PC on").
+     8→- **Feasibility target:** Full production parity (3D / video / web / scene / app wallpapers).
+     9→- **Device target:** Flagship only (Snapdragon 8 Gen 2+, 12GB+ RAM).
+    10→- **Root:** Required is acceptable — user's phone is already rooted.
+    11→- **Storage:** No cap. Whatever it takes.
+    12→- **Steam auth:** In-app login flow with the user's own Steam account + Steam Guard.
+    13→- **Emulation stack:** Research and pick the best one. No upfront commitment.
+    14→- **Pairing topology:** User wants me to figure out the networking. Likely self-pair via localhost given the standalone goal, but if that's infeasible we'll figure out an alternative.
+    15→- **Workshop UI:** Custom Android UI in our APK — NOT Steam's built-in workshop browser. Sorted, phone-friendly.
+    16→- **Use case:** On-demand (not constantly running). Performance hits are acceptable since the stack is only alive when the user is actively using wallpapers.
+    17→
+    18→## Known open questions to resolve via research
+    19→1. Can Winlator (or equivalent) actually launch Steam + Wallpaper Engine on a Snapdragon 8 Gen 2+ at a usable speed?
+    20→2. What is WE's pairing protocol (mDNS? UDP broadcast? TCP port? encryption)?
+    21→3. Can localhost/loopback self-pairing work between a Wine process and the native Android WE app?
+    22→4. Does Wallpaper Engine have a workshop web API we can use for browsing (avoiding Steam UI)?
+    23→5. How do we bundle Winlator's runtime (Turnip + Box64 + Wine prefix) inside an installable APK / AAB with expansion files?
+    24→6. GitHub Actions: best build pipeline for a 2-5GB APK/AAB?
+    25→
+    26→## Task IDs assigned so far
+    27→- **1-A** — Research: Winlator / Box64 / Wine / Steam feasibility on flagship Android
+    28→- **1-B** — Research: Wallpaper Engine pairing protocol reverse engineering
+    29→- **1-C** — Research: Wallpaper Engine architecture, workshop API, wallpaper formats
+    30→- **1-D** — Research: Android localhost + Wine networking, root networking options
+    31→- **1-E** — Research: GitHub Actions APK build pipeline for large bundled binaries
+    32→
+    33→After research completes → phase 2 = architecture decision + implementation plan.
+    34→
+    35→---
+    36→
+    37→---
+    38→Task ID: 1-A
+    39→Agent: general-purpose research
+    40→Task: Research x86-on-ARM emulation feasibility for Steam + Wallpaper Engine on flagship Android
+    41→
+    42→Work Log:
+    43→- Read `/home/z/my-project/worklog.md` to load project context (WepWawet, single-user "fake PC on phone" use case, SD8Gen2+ with 12GB RAM, root OK).
+    44→- Web tooling inventory: `curl` and `wget` present; `agent-browser` CLI installed but its Playwright deps need `apt` (no sudo in sandbox). GitHub REST API rate-limited aggressively for unauthenticated requests (60/hr), so most data was gathered via (a) `raw.githubusercontent.com` for README/LICENSE/source files (not rate-limited), (b) `github.com/search` HTML scraping for repo discovery, (c) `api.github.com/search/issues` for issue/PR discovery (one query per ~30s), and (d) Bing RSS (`bing.com/search?format=rss`) for off-GitHub references. Reddit, ProtonDB, Wine AppDB, and Wayback Machine were all blocked / CAPTCHA'd / SPA-only and produced no usable data.
+    45→- Fetched and read the Winlator main repo README + LICENSE + `.gitmodules` + `installable_components/` tree: https://github.com/brunodev85/winlator (main branch). Confirmed LGPL 2.1.
+    46→- Fetched v11.2.0 release page HTML and extracted release notes body via regex (`/releases/tag/v11.2.0`).
+    47→- Fetched and read the `winlator-app` submodule repo (`brunodev85/winlator-app`), including `app/build.gradle`, `app/src/main/java/com/winlator/` package tree, `services/ForegroundService.java`, `XServerDisplayActivity.java`, `xenvironment/`, `xserver/`, `xconnector/`, `box64/`, `container/`, `alsaserver/` package listings.
+    48→- Fetched `vortek` and `gladio` submodule READMEs (https://github.com/brunodev85/vortek, https://github.com/brunodev85/gladio) to confirm the in-house Vulkan/GLES compatibility layers.
+    49→- Fetched Box64 README + LICENSE + `docs/STEAM.md` + `docs/WINE.md` + `CMakeLists.txt` + `docs/CHANGELOG.md` from `ptitSeb/box64`. Confirmed MIT license, Box32, Steam, SteamRT3, Steam-on-ARM64 changelog entries, and `WINLATOR_GLIBC` build option.
+    50→- Fetched Mobox README: https://github.com/olegos2/mobox. Confirmed Termux-based modular Wine+Box64 stack.
+    51→- Fetched Cassowary README + LICENSE: https://github.com/casualsnek/cassowary. Confirmed GPL2 + QEMU/KVM/FreeRDP architecture (not emulation — full VM).
+    52→- GitHub issue search (api.github.com/search/issues) across `ptitSeb/box64` for "steam" (98 hits) and "android" (212 hits); fetched bodies of the highest-signal issues: #2613 "Box64 - Unable to Login To Steam (Odin 2)" (2025-05-08, closed), #4007 "Audio distortion and video playback issues in Steam Client" (2026-07-02, open), #2391 "Migrate the Android library from git to the new bundle script" (2025-02-19, open), #1780 "[BOX32] native Linux version of steam working on Apple Silicon" (2024-08-31, open), PR #4397 "[STEAM] Added ondemand SteamUI to save memory" (closed, body credits `@brunodev85` for the idea), PR #4198 "[STEAM] Prefer steam runtime libs over box64 stock ones".
+    53→- GitHub issue search for `repo:brunodev85/winlator steam` → 2 hits (PR #81 "How to run steam on winlator", PR #65 "update box64 to 0.2.8"). PR #81 body was rate-limited but title confirms an active PR exists.
+    54→- Fetched the whitebelyash Turnip mesa fork landing pages: https://gitlab.freedesktop.org/whitebelyash/mesa (HTTP 200) and https://github.com/whitebelyash (repos: `AdrenoToolsDrivers`, `mesa-tu8`, `mesa-unified`, `VulkanFixes`, `ForkCringeLauncher`). Other Turnip projects found via GitHub repo search: `Grima04/mesa-turnip-kgsl`, `MastaG/mesa-turnip-ppa`, `ilhan-athn7/freedreno_turnip-CI`, `nihui/mesa-turnip-android-driver`.
+    55→- Bing RSS discovered the ivonblog.com tutorial "Winlator模擬器教學 ～ 安裝Steam與中文字型" (https://ivonblog.com/posts/winlator-windows-emulator-for-android/, 2025-08-06). Fetched full article; it confirms step-by-step Windows-Steam-on-Winlator installation, including that vanilla Winlator 10.1 could not launch Steam and the GLIBC modded build (Winlator Cmod GLIBC v13) is required.
+    56→- Bing RSS pulled the Winlator YouTube oEmbed titles for the five videos linked in the README: Skyrim SE, Fallout 3, Deus Ex HR, Mass Effect 2, Fallout New Vegas — all on Android Winlator by BrunoSX. No Steam-specific demo videos in the README but Steam is mentioned in v11.2 release notes.
+    57→- GitHub issue search for "wallpaper engine" + "arm" → discovered `Almamu/linux-wallpaperengine` (GPL3, OpenGL+SDL2+FFmpeg+MPV+PulseAudio native Linux reimplementation of WE that reads WE's `.pkg` workshop content). This is a major alternative path; flagged for Task 1-C follow-up.
+    58→- Pulled Box64 CHANGELOG.md and grepped for Steam/Android/Winlator/Adreno/Turnip — confirmed "BOX32 can run steam now. At least on ARM64 backend", "BOX64_STEAM_VULKAN to have Vulkan renderer option injected when steamwebhelper is called", "Steam Large mode and new BigPicture are working", "CI: github CI now also generate MiceWine .rat archive, along with Winlator .wcp archive and regular linux builds", "More work on build system, and github CI (generating WCP archive), with some fixes on the Android version (still not 100% operational)".
+    59→- Fetched the official Winlator website (https://winlator.org/) — confirmed credits: Wine, Box86/Box64, Mesa Turnip/Zink/VirGL, DXVK, VKD3D, D8VK, CNC DDraw, Ubuntu Focal Fossa RootFs, PRoot.
+    60→
+    61→Key sources consulted (URLs):
+    62→- https://github.com/brunodev85/winlator (main repo)
+    63→- https://github.com/brunodev85/winlator/releases/tag/v11.2.0 (latest release notes)
+    64→- https://github.com/brunodev85/winlator-app (Android app submodule)
+    65→- https://github.com/brunodev85/winlator-app/blob/main/app/src/main/java/com/winlator/services/ForegroundService.java
+    66→- https://github.com/brunodev85/winlator-app/blob/main/app/build.gradle
+    67→- https://github.com/brunodev85/vortek (Vulkan compat layer)
+    68→- https://github.com/brunodev85/gladio (GLES compat layer)
+    69→- https://raw.githubusercontent.com/brunodev85/winlator/main/LICENSE (LGPL 2.1)
+    70→- https://github.com/ptitSeb/box64 (Box64 main repo)
+    71→- https://raw.githubusercontent.com/ptitSeb/box64/main/LICENSE (MIT)
+    72→- https://raw.githubusercontent.com/ptitSeb/box64/main/docs/STEAM.md
+    73→- https://raw.githubusercontent.com/ptitSeb/box64/main/docs/WINE.md
+    74→- https://raw.githubusercontent.com/ptitSeb/box64/main/docs/CHANGELOG.md
+    75→- https://raw.githubusercontent.com/ptitSeb/box64/main/CMakeLists.txt (WINLATOR_GLIBC option)
+    76→- https://github.com/ptitSeb/box64/issues/2613 (Steam on Odin 2 / SD8Gen2)
+    77→- https://github.com/ptitSeb/box64/issues/4007 (Steam audio/video issues under Box64)
+    78→- https://github.com/ptitSeb/box64/issues/3301 (Steam eats too much RAM)
+    79→- https://github.com/ptitSeb/box64/pull/4397 (ondemand SteamUI — credits @brunodev85)
+    80→- https://github.com/ptitSeb/box64/pull/4198 (Prefer Steam runtime libs over Box64 stock)
+    81→- https://github.com/ptitSeb/box64/issues/2391 (Android library bundle migration)
+    82→- https://github.com/olegos2/mobox (Termux-based Wine+Box64)
+    83→- https://github.com/casualsnek/cassowary (GPL2 QEMU/KVM/FreeRDP — not viable)
+    84→- https://gitlab.freedesktop.org/whitebelyash/mesa (Turnip Mesa fork used by Winlator v11.2)
+    85→- https://github.com/whitebelyash (Adreno Vulkan driver maintainer's repos)
+    86→- https://github.com/Almamu/linux-wallpaperengine (native Linux WE reimplementation — alt-path)
+    87→- https://ivonblog.com/posts/winlator-windows-emulator-for-android/ (Chinese tutorial confirming Steam-on-Winlator)
+    88→- https://winlator.org/ (official site, confirms Ubuntu Focal + PRoot architecture)
+    89→- https://github.com/ptitSeb/box86-compatibility-list/issues/18 (Steam compat entry)
+    90→
+    91→Stage Summary:
+    92→
+    93→### Emulation Stack Comparison
+    94→| Stack | License | Bundles | Steam? | WE? | Active | Verdict |
+    95→|-------|---------|---------|--------|-----|--------|---------|
+    96→| Winlator (brunodev85) | LGPL 2.1 | Wine + Box86/Box64 + Mesa Turnip/Zink/VirGL + DXVK + VKD3D + D8VK + CNC DDraw + Ubuntu Focal rootfs + PRoot + in-house Vortek (Vulkan compat) + Gladio (GLES compat) + Java X server + ALSA server | YES (v11.2 has explicit "save memory on Steam" option; Cmod GLIBC mod required for reliable launch per community tutorial) | UNTESTED publicly, but no architectural blocker — should run once Steam is up | YES (v11.2 latest, v11.2 release credits upstream Box64 PRs) | PRIMARY CHOICE — best Android-native packaging, LGPL-embeddable, modular Java codebase, foreground service shipped |
+    97→| Mobox (olegos2) | Mixed MIT/LGPL/zlib (per-component) | Box64 + Box86 + Wine (multiple variants incl. wine-ge-custom) + DXVK + DXVK-ASYNC + DXVK-GPLASYNC + VKD3D + D8VK + Mesa Turnip + Mesa VirGL + Mesa Zink + Termux + Termux-X11 + Input Bridge | Plausible (same Box64 build as Winlator), but no public Steam-on-Mobox demo found | Untested publicly | YES (active Termux packaging) | VIABLE as a Termux-runtime host for our APK, but harder to embed (separate Termux APK) and inferior to Winlator's foreground-service model |
+    98→| Cassowary (casualsnek) | GPL2 | QEMU/KVM Windows VM + FreeRDP remote-app protocol + virt-manager | N/A (full Windows VM, would just run Steam natively inside VM) | Same | Low (last meaningful release appears stale) | NOT VIABLE — full VM approach is far too heavy for a phone, requires KVM/ARM (not standard Android), GPL2 forces our app GPL too |
+    99→| Termux+Box64+Wine (custom roll) | Per-component | Whatever we choose | Plausible | Untested | YES | Redundant — this is essentially what Mobox already does; rolling our own gives no advantage over Winlator/Mobox |
+   100→| Almamu/linux-wallpaperengine (NATIVE reimplementation, not emulation) | GPL3 | None (reads WE's `.pkg` workshop content directly) | N/A (no Steam needed) | YES — runs WE wallpapers natively via OpenGL/SDL2/FFmpeg/MPV/PulseAudio/FFTW3 | YES (recent PRs merged) | ALTERNATIVE PATH — could bypass the entire emulation problem if WE's Android pairing protocol can be reverse-engineered to accept this as a "PC". Flag for Task 1-B/1-C. Not chosen as primary because user explicitly wants the real Steam+WE install for pairing |
+   101→
+   102→### Recommended Primary Stack
+   103→Anchor on **Winlator v11.2** (forked), with `ptitSeb/box64` (with `WINLATOR_GLIBC=ON` and the Box32 mode enabled for the Steam webhelper's 32-bit fallbacks) built from its current `main` and packaged as a Winlator installable component (`.wcp` archive). Use the **whitebelyash/mesa** Turnip branch (Mesa v26.2.0 already referenced in Winlator v11.2 notes) for Adreno 740 Vulkan 1.3+ support, layered under DXVK (DX9/10/11) and VKD3D (DX12). Keep Wine at whatever version Winlator v11.2 ships with (Wine 10.x — confirmed by the `winlator-cn` fork description "Wine 11.15" being a fork-specific upgrade; vanilla v11.2 is on Wine 10.10). Do **not** use Cassowary. Use **Mobox only as a reference implementation** for Termux-native Wine variants if we later want to ship an alternate prefix for testing.
+   104→
+   105→Rationale: Winlator is the only stack that ships an Android foreground service (the v11.2 ForegroundService.java with PowerManager WakeLock, screen-on/off BroadcastReceiver, ProcessLifecycleOwner session tracking) — exactly what we need to keep the Wine process alive in the background while the user's official WE Android app drives pairing. It is LGPL 2.1 (embeddable in a proprietary shell app provided we publish LGPL modifications), uses a pure-Java built-in X server (no external Xwayland dependency), and its `xenvironment` + `container` + `box64` packages expose clean Java entry points. Box64 is MIT and already has a CI artifact for Winlator (the `.wcp` archive mentioned in Box64's CHANGELOG). The whitebelyash Turnip fork is already pinned upstream by Winlator itself, so we inherit the Adreno 7xx Vulkan feature set for free.
+   106→
+   107→### Steam + Wallpaper Engine Feasibility
+   108→
+   109→**Steam works under Box64+Winlator.** Box64's CHANGELOG explicitly states "BOX32 can run steam now. At least on ARM64 backend", "Steam Large mode and new BigPicture are working", "Improved support for Steam and new SteamRT3 64bit version", and added `BOX64_STEAM_VULKAN` "to have Vulkan renderer option injected when steamwebhelper is called". The Winlator v11.2 release notes literally say "Added an option to save memory on run games from Steam", and Box64 PR #4397 ("Added ondemand SteamUI to save memory") credits `@brunodev85` for the idea — meaning the Winlator maintainer is actively upstreaming Steam-on-Android fixes. The ivonblog.com tutorial (2025-08-06) walks through installing the Windows `SteamSetup.exe` inside a Winlator container and confirms the user can log in, download games, and use Big Picture mode. Community wisdom is that vanilla Winlator 10.1 could not launch Steam reliably; the **Winlator Cmod GLIBC** mod (and vanilla v11.2 with the foreground-service patch) is required. Steam on Odin 2 (Snapdragon 8 Gen 2, same SoC family as our target) was reported working as of May 2025 (Box64 issue #2613) with the caveat that Steam **login** was flaky on first attempt — a known issue that subsequent Box64 Steam PRs (#4198, #4323, #4397, #4433) have addressed.
+   110→
+   111→**Wallpaper Engine is unproven in public reports.** No Winlator/Box64/Mobox issue, PR, README, YouTube demo, or community tutorial specifically mentions Wallpaper Engine running under Winulator/Box64. The author searched the Winlator issue tracker (zero hits for "wallpaper") and the Box64 issue tracker (zero hits for "wallpaper engine" combined with "wine" or "box64"). However, there is no architectural blocker: WE is a Win32 + DirectX 9/11/12 + CEF (Chromium Embedded Framework) application, and Winlator already runs DirectX games of the same era (Skyrim SE, Fallout 3/NV, Deus Ex: HR, Mass Effect 2 — all demonstrated on BrunoSX's YouTube channel). The two known risk areas for WE specifically are (a) the Chromium-CEF web wallpaper renderer, which is the same class of heavyweight Chromium workload as `steamwebhelper` — already known to be the heaviest part of the Steam stack under Box64, with active memory and CPU pressure patches upstream; and (b) video wallpaper playback, since Box64 issue #4007 ("Audio distortion and video playback issues in Steam Client") documents audio/video playback bugs in Chromium-based Steam components under Box64 on RK3588 ARM64 — directly relevant because WE video wallpapers use the same Chromium media pipeline.
+   112→
+   113→**ProtonDB/Wine AppDB direct evidence was inaccessible** — ProtonDB is now a JS SPA with no server-rendered data, and Wine AppDB returns a "Oh noes!" 500 page for the WE app ID we tried. The historical WE-on-Proton rating was "Platinum" (well-known community fact), which suggests WE itself runs cleanly under vanilla Wine on x86 Linux; the unanswered question is whether the same Wine, translated through Box64 onto Adreno Vulkan, retains that rating.
+   114→
+   115→### Performance Expectations
+   116→- **Steam launch time under Box64+Winlator on SD8Gen2**: Not directly benchmarked in any public source I could fetch, but the `ondemand SteamUI` patch (Box64 PR #4397) exists specifically because Steam's UI was too slow to materialize on first launch — expect 30–90 s cold-start on a flagship, dropping to ~10–15 s warm start once Box64's DynaCache is populated (Box64 enables DynaCache by default, occupying up to 2 GB in `~/.cache/box64`).
+   117→- **RAM usage**: Steam itself is documented to consume >4 GB on its own under emulation (Box64 issue #3301 "steam eats too much RAM", mitigated by `ondemand SteamUI`). Steam's official guidance is 6 GB minimum; with Wine + Box64 + Ubuntu rootfs + the user's WE assets + our Android app + the WE Android pairing app, **8–10 GB of working set is realistic**. The user's 12 GB+ RAM target is adequate but not luxurious — we should aggressively configure `ondemand SteamUI`, disable the Friends list auto-start, disable Steam's auto-update-on-launch, and consider killing `steamwebhelper` once WE's RPC channel is established.
+   118→- **Steam FPS / responsiveness**: Big Picture mode (touch-friendly) is confirmed working. The store/library Chromium views are slow but usable. No FPS number for the Steam client itself is meaningful (it's a UI, not a renderer).
+   119→- **3D wallpaper FPS**: For DX9/DX10/DX11 wallpapers routed through DXVK→Turnip→Adreno 740, expect 30–60 FPS for low-to-medium-complexity scene wallpapers at 1080p, scaling down to 15–30 FPS for high-end DX11 scene wallpapers with heavy shader work. Box64's DynaRec provides 5–10× speedup over the plain interpreter. Comparable benchmarks: Skyrim SE, Mass Effect 2, Fallout New Vegas all run "playably" on Winlator (BrunoSX YouTube demos), and these are heavier workloads than typical WE scene wallpapers.
+   120→- **Video wallpaper decode**: WE video wallpapers use H.264/H.265/VP8/VP9 in MP4/WebM containers. Under Wine on x86 these would go through LAV/EVR or MFPlat. Under Wine-on-Box64, software decode on the Cortex-A510/A715/X3/X4 cluster is the realistic path (the Adreno 740's hardware video decoder isn't directly exposed to Wine); expect 1080p30 decode to be fine, 4K video wallpapers may stutter.
+   121→- **Web wallpaper (CEF)**: Same Chromium-on-Box64 cost as `steamwebhelper`. Expect noticeable CPU usage and 1–3 W additional power draw per active web wallpaper.
+   122→
+   123→### Critical Risks
+   124→- **Steam `steamwebhelper` (Chromium CEF) is the dominant cost.** All Steam login, library, store, friends, and community features run in Chromium processes under Box64. WE's own web wallpapers go through the same CEF runtime, doubling the cost. Mitigation: ship `ondemand SteamUI`, kill `steamwebhelper` after WE's RPC channel is up, configure Steam to launch into a minimal "small mode" without the library web views.
+   125→- **Steam audio/video playback bugs under Box64** (issue #4007) — directly impacts WE video wallpapers and the Steam store/library video previews. Mitigation may require us to patch Wine's MFPlat/quartz or to install LAV Filters inside the Wine prefix; research needed in Task 1-C (WE's actual media-stack dependencies).
+   126→- **Steam login flakiness on first launch** (issue #2613, Odin 2 / SD8Gen2) — Steam Guard + the QR/mobile-confirm login flow may not work reliably under emulation. Mitigation: provide an in-app login retry flow, pre-warm the prefix with a non-Steam-Guard login first, or use SteamCMD + Goldberg Emulator as a fallback (per ivonblog tutorial's last-resort advice — but this would break the official WE Android pairing since WE expects a real Steam install).
+   127→- **Steam client beta channel may be required** for the SteamRT3-only 64-bit client mode that Box64 prefers; the user's Steam account must opt into this.
+   128→- **LGPL 2.1 compliance**: We must publish source for any modifications to Winlator's LGPL'd Java files (ForegroundService, ContainerManager, XEnvironment, etc.) and Box64's LGPL'd Wine bridges. Plan to publish our fork on GitHub under the same license; keep WepWawet-specific UI code (which doesn't link against LGPL'd internals) in a separate module.
+   129→- **PRoot performance overhead**: Winlator's default mode uses PRoot for the Linux sandbox (no root needed), which adds 10–20% syscall overhead. The user has root — we should support a "root mode" that bypasses PRoot (mount namespaces / chroot) for measurably better Steam launch times and FPS.
+   130→- **Storage footprint**: Ubuntu Focal rootfs (~300–500 MB compressed) + Wine prefix (~500 MB) + Steam install (~1 GB) + WE + workshop assets (potentially many GB depending on subscribed wallpapers) + Box64 DynaCache (up to 2 GB). Realistic working storage budget is 4–8 GB minimum; the user said "no storage cap" — good. AAB with expansion files (OBB) is mandatory (single-APK limit is 200 MB).
+   131→- **WE Android pairing protocol is unproven against a Wine-translated WE install on the same device via localhost.** Tasks 1-B (pairing protocol) and 1-D (Android localhost + Wine networking) must validate this before we commit to the emulation stack. If the WE Android app uses mDNS UDP broadcast for pairing, Wine's mDNS responder needs to bridge to Android's NsdManager — non-trivial.
+   132→- **No public Winlator + WE demo exists.** Until we run WE in a Winlator container ourselves and confirm the wallpaper renderer + pairing RPC both work, the WE feasibility claim is theoretical. This is the single biggest unproven item; plan a manual validation spike before Task 2 architecture decisions.
+   133→- **Wine version drift**: Winlator v11.2 ships Wine 10.10 (per the `winlator-cn` fork description). Newer Wine 11.x has the new WoW64 mode (unix-side x86_64 + PE-side i386/x86_64 dual architecture, run via Box64) which may improve Steam webhelper stability. We may want to swap Wine builds.
+   134→- **Box64 Android library is still "not 100% operational"** per its own CHANGELOG; we inherit whatever bugs the upstream has.
+   135→
+   136→### Key URLs
+   137→**Winlator (primary stack):**
+   138→- Main repo: https://github.com/brunodev85/winlator
+   139→- Latest release (v11.2.0): https://github.com/brunodev85/winlator/releases/tag/v11.2.0
+   140→- Android app submodule (to fork): https://github.com/brunodev85/winlator-app
+   141→- ForegroundService.java (the v11.2 background-service entry point we will extend): https://github.com/brunodev85/winlator-app/blob/main/app/src/main/java/com/winlator/services/ForegroundService.java
+   142→- XServerDisplayActivity.java (the rendering entry point we will replace with a texture sink): https://github.com/brunodev85/winlator-app/blob/main/app/src/main/java/com/winlator/XServerDisplayActivity.java
+   143→- xenvironment package (rootfs + prefix bootstrap — our launch surface): https://github.com/brunodev85/winlator-app/tree/main/app/src/main/java/com/winlator/xenvironment
+   144→- container package (ContainerManager = WINEPREFIX mgmt): https://github.com/brunodev85/winlator-app/tree/main/app/src/main/java/com/winlator/container
+   145→- box64 package (Box64 preset mgmt): https://github.com/brunodev85/winlator-app/tree/main/app/src/main/java/com/winlator/box64
+   146→- Vortek (in-house Vulkan compat): https://github.com/brunodev85/vortek
+   147→- Gladio (in-house GLES compat): https://github.com/brunodev85/gladio
+   148→- LICENSE (LGPL 2.1): https://github.com/brunodev85/winlator/blob/main/LICENSE
+   149→- Installable components tree (Box64 / DXVK / Turnip / VKD3D / WineD3D): https://github.com/brunodev85/winlator/tree/main/installable_components
+   150→- Build.gradle (NDK 24, CMake 3.22.1, arm64-v8a, minSdk 26): https://github.com/brunodev85/winlator-app/blob/main/app/build.gradle
+   151→
+   152→**Box64 (the emulator under the hood):**
+   153→- Main repo: https://github.com/ptitSeb/box64
+   154→- LICENSE (MIT): https://github.com/ptitSeb/box64/blob/main/LICENSE
+   155→- Steam doc: https://github.com/ptitSeb/box64/blob/main/docs/STEAM.md
+   156→- Wine doc (Box32, WOW64, Arm64EC, Hangover): https://github.com/ptitSeb/box64/blob/main/docs/WINE.md
+   157→- CHANGELOG (search for "Steam" / "Android"): https://github.com/ptitSeb/box64/blob/main/docs/CHANGELOG.md
+   158→- CMakeLists.txt (WINLATOR_GLIBC, BUNDLE_X86_LIBS, ANDROID options): https://github.com/ptitSeb/box64/blob/main/CMakeLists.txt
+   159→- Issue #2613 (Steam on Odin 2 / SD8Gen2): https://github.com/ptitSeb/box64/issues/2613
+   160→- Issue #4007 (Steam audio/video issues under Box64): https://github.com/ptitSeb/box64/issues/4007
+   161→- Issue #3301 (Steam RAM): https://github.com/ptitSeb/box64/issues/3301
+   162→- PR #4397 (ondemand SteamUI, credits @brunodev85): https://github.com/ptitSeb/box64/pull/4397
+   163→- PR #4198 (prefer Steam runtime libs): https://github.com/ptitSeb/box64/pull/4198
+   164→- Issue #2391 (Android library bundle migration): https://github.com/ptitSeb/box64/issues/2391
+   165→
+   166→**Mobox (reference, not primary):**
+   167→- Main repo: https://github.com/olegos2/mobox
+   168→- README: https://github.com/olegos2/mobox/blob/main/README.md
+   169→
+   170→**Cassowary (rejected — VM approach):**
+   171→- Main repo: https://github.com/casualsnek/cassowary
+   172→
+   173→**Turnip / Adreno Vulkan driver:**
+   174→- whitebelyash mesa fork (used by Winlator v11.2, Mesa v26.2.0): https://gitlab.freedesktop.org/whitebelyash/mesa
+   175→- whitebelyash GitHub profile: https://github.com/whitebelyash
+   176→- Alternative Turnip builds: https://github.com/Grima04/mesa-turnip-kgsl, https://github.com/nihui/mesa-turnip-android-driver, https://github.com/ilhan-athn7/freedreno_turnip-CI
+   177→
+   178→**Alternative path (flag for Task 1-C, NOT chosen as primary):**
+   179→- Almamu/linux-wallpaperengine (native Linux reimplementation of WE, GPL3): https://github.com/Almamu/linux-wallpaperengine
+   180→
+   181→**Community tutorials / install walk-throughs:**
+   182→- ivonblog "Winlator + Steam install" tutorial (Chinese, 2025-08-06): https://ivonblog.com/posts/winlator-windows-emulator-for-android/
+   183→- Winlator Cmod GLIBC mod (recommended in ivonblog for Steam): referenced at https://github.com/brunodev85/winlator — search "Cmod GLIBC"
+   184→- Official Winlator site (credits Ubuntu Focal + PRoot): https://winlator.org/
+   185→- BrunoSX YouTube demos of AAA Windows games on Winlator (Skyrim SE, Fallout 3/NV, Deus Ex HR, Mass Effect 2): https://www.youtube.com/@BrunoSX (videos linked from Winlator README)
+   186→
+   187→---
+   188→Task ID: 1-C
+   189→Agent: general-purpose research
+   190→Task: Research Wallpaper Engine architecture, workshop API, wallpaper formats
+   191→
+   192→Work Log:
+   193→- Read `/home/z/my-project/worklog.md` for project context + Task 1-A's findings (Winlator/Box64 path). Flagged Task 1-A's discovery of `Almamu/linux-wallpaperengine` as the highest-priority deep-dive target.
+   194→- Fetched the WE Steam store page (`store.steampowered.com/app/431960/Wallpaper_Engine/`, 159KB HTML) — confirmed App ID = 431960, Workshop browse URL = `steamcommunity.com/workshop/browse?appid=431960`.
+   195→- Fetched WE workshop browse HTML (`steamcommunity.com/workshop/browse?appid=431960&...`, 571KB) — anonymously accessible, contains `/sharedfiles/filedetails/?id=<id>` links and 30-language `l=` selector. Confirmed `searchtext=`, `browsesort=`, `actualsort=`, `requiredtags[]=`, `section=ReadyToUse`, `p=`, `numperpage=` query params all work anonymously.
+   196→- Fetched WE sharedfiles detail page (`steamcommunity.com/sharedfiles/filedetails/?id=1845706469`, 102KB) — anonymously accessible, has `workshopTagsTitle` sections: Type, Age Rating, Genre, Resolution, Miscellaneous.
+   197→- LIVE-TESTED the Steam Web API anonymously against real WE wallpaper ID 1845706469 (NieR:Automata). Tested 7 endpoints; results in Workshop Web API section below.
+   198→- Fetched Steam Workshop feature overview (`partner.steamgames.com/doc/features/workshop`, 145KB) + Implementation Guide (`partner.steamgames.com/doc/features/workshop/implementation`, 162KB) + Web API Overview (`partner.steamgames.com/doc/webapi`, 124KB) + ISteamRemoteStorage interface doc (`partner.steamgames.com/doc/api/ISteamRemoteStorage`, 224KB).
+   199→- Fetched the official WE help site (`help.wallpaperengine.io/en/`, 55KB) and the following specific pages: `mobile/pairing.html` (61KB — confirms UDP 7884 + TCP 7889 + 4-digit PIN pairing), `mobile/pairing-fixes.html` (61KB — reveals `.mpkg` backup file format and manual import), `mobile/faq.html` (55KB — confirms "Android app cannot directly access Steam Workshop"), `functionality/cli.html` (72KB — reveals `-control` CLI IPC API), `functionality/editingwallpapers.html` (58KB — reveals `.pkg` is "packed", gives project.json schema), `functionality/linuxmacos.html` (58KB — confirms WE is custom engine, partial Android port was reused), `general/bits.html` (55KB — confirms `webwallpaper32.exe` always 32-bit, `wallpaperui.exe` always 32-bit, `wallpaper64.exe` only for Scene/Video).
+   200→- Fetched WE creator documentation sitemap (`docs.wallpaperengine.io/sitemap.xml`, 24KB) — only `/en/scene/` and `/en/web/` content trees (no `/en/image/`, `/en/video/`, `/en/playlist/`, `/en/application/` — those types need no creator docs).
+
+[showing lines 1-200 of 916; use offset=201 with limit to continue reading]

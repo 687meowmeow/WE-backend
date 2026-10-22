@@ -1,0 +1,85 @@
+{
+  "total_count": 1,
+  "incomplete_results": false,
+  "items": [
+    {
+      "url": "https://api.github.com/repos/olegos2/mobox/issues/60",
+      "repository_url": "https://api.github.com/repos/olegos2/mobox",
+      "labels_url": "https://api.github.com/repos/olegos2/mobox/issues/60/labels{/name}",
+      "comments_url": "https://api.github.com/repos/olegos2/mobox/issues/60/comments",
+      "events_url": "https://api.github.com/repos/olegos2/mobox/issues/60/events",
+      "html_url": "https://github.com/olegos2/mobox/issues/60",
+      "id": 2058481247,
+      "node_id": "I_kwDOKxKziM56se5f",
+      "number": 60,
+      "title": "No sound and aaudio-sink causes new problems",
+      "user": {
+        "login": "DefeatWinter",
+        "id": 33851957,
+        "node_id": "MDQ6VXNlcjMzODUxOTU3",
+        "avatar_url": "https://avatars.githubusercontent.com/u/33851957?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/DefeatWinter",
+        "html_url": "https://github.com/DefeatWinter",
+        "followers_url": "https://api.github.com/users/DefeatWinter/followers",
+        "following_url": "https://api.github.com/users/DefeatWinter/following{/other_user}",
+        "gists_url": "https://api.github.com/users/DefeatWinter/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/DefeatWinter/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/DefeatWinter/subscriptions",
+        "organizations_url": "https://api.github.com/users/DefeatWinter/orgs",
+        "repos_url": "https://api.github.com/users/DefeatWinter/repos",
+        "events_url": "https://api.github.com/users/DefeatWinter/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/DefeatWinter/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "labels": [
+
+      ],
+      "state": "open",
+      "locked": true,
+      "assignees": [
+
+      ],
+      "milestone": null,
+      "comments": 24,
+      "created_at": "2023-12-28T14:06:13Z",
+      "updated_at": "2024-09-02T09:47:18Z",
+      "closed_at": null,
+      "assignee": null,
+      "author_association": "NONE",
+      "active_lock_reason": null,
+      "sub_issues_summary": {
+        "total": 0,
+        "completed": 0,
+        "percent_completed": 0
+      },
+      "issue_dependencies_summary": {
+        "blocked_by": 0,
+        "total_blocked_by": 0,
+        "blocking": 0,
+        "total_blocking": 0
+      },
+      "body": "In winecfg, I cannot hear anything after clicking \"test sound\". I dunno what's happening from debug log. I also played some MP3 file using winamp, it did play, but no sound.\r\n[mobox_log.txt](https://github.com/olegos2/mobox/files/13786920/mobox_log.txt)\r\n\r\nAnother problem is the system freezes every 3-4 seconds. After booting, waiting for a few seconds, I cannot move the cursor anymore. But after I change the foreground app from X11 to others and then back to X11, I can move my cursor for 3-4 sec before it freeze again.\r\nI could fix it on my device in an awkward way: make termux a floating window, since I need to prevent it from low memory killer anyway.\r\n\r\nInfo of my device:\r\nHuawei matepad pro\r\nkirin 990\r\nharmonicOS 4.0\r\n\r\nPS: I tried exagear and winlator before, and mobox is the only one that can run dohna dohna without black screen, so I really want to fix the sound issue lol",
+      "reactions": {
+        "url": "https://api.github.com/repos/olegos2/mobox/issues/60/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      },
+      "timeline_url": "https://api.github.com/repos/olegos2/mobox/issues/60/timeline",
+      "performed_via_github_app": null,
+      "state_reason": "reopened",
+      "pinned_comment": null,
+      "score": 1.0
+    }
+  ],
+  "search_type": "lexical"
+}

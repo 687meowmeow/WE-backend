@@ -1,0 +1,589 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<!--[if IE 6]><html class="ie6" xmlns="http://www.w3.org/1999/xhtml"><![endif]-->
+<!--[if IE 7]><html class="lt-ie8 lt-ie9" xmlns="http://www.w3.org/1999/xhtml"><![endif]-->
+<!--[if IE 8]><html class="lt-ie9" xmlns="http://www.w3.org/1999/xhtml"><![endif]-->
+<!--[if gt IE 8]><!--><html xmlns="http://www.w3.org/1999/xhtml"><!--<![endif]-->
+<head>
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=1" />
+  <meta name="referrer" content="origin" />
+  <meta name="HandheldFriendly" content="true" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>android process network namespace netns at DuckDuckGo</title>
+  <link title="DuckDuckGo (HTML)" type="application/opensearchdescription+xml" rel="search" href="//duckduckgo.com/opensearch_html_v2.xml" />
+  <link href="//duckduckgo.com/favicon.ico" rel="shortcut icon" />
+  <link rel="icon" href="//duckduckgo.com/favicon.ico" type="image/x-icon" />
+  <link id="icon60" rel="apple-touch-icon" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_60x60.png?v=2"/>
+  <link id="icon76" rel="apple-touch-icon" sizes="76x76" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_76x76.png?v=2"/>
+  <link id="icon120" rel="apple-touch-icon" sizes="120x120" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_120x120.png?v=2"/>
+  <link id="icon152" rel="apple-touch-icon" sizes="152x152" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_152x152.png?v=2"/>
+  <link rel="image_src" href="//duckduckgo.com/assets/icons/meta/DDG-icon_256x256.png">
+  <link rel="stylesheet" media="handheld, all" href="//duckduckgo.com/dist/h.12e359033b8c1146e5f7.css" type="text/css"/>
+</head>
+
+<body class="body--html">
+  <a name="top" id="top"></a>
+
+  <form action="/html/" method="post">
+    <input type="text" name="state_hidden" id="state_hidden" />
+  </form>
+
+  <div>
+    <div class="site-wrapper-border"></div>
+
+    <div id="header" class="header cw header--html">
+      <a title="DuckDuckGo" href="/html/" class="header__logo-wrap"></a>
+
+      <form name="x" class="header__form" action="/html/" method="post">
+        <div class="search search--header">
+          <input name="q" autocomplete="off" class="search__input" id="search_form_input_homepage" type="text" value="android process network namespace netns" />
+          <input name="b" id="search_button_homepage" class="search__button search__button--html" value="" title="Search" alt="Search" type="submit" />
+        </div>
+
+        
+        
+        
+        
+
+        <div class="frm__select">
+          <select name="kl">
+            
+              <option value="" >All Regions</option>
+            
+              <option value="ar-es" >Argentina</option>
+            
+              <option value="au-en" >Australia</option>
+            
+              <option value="at-de" >Austria</option>
+            
+              <option value="be-fr" >Belgium (fr)</option>
+            
+              <option value="be-nl" >Belgium (nl)</option>
+            
+              <option value="br-pt" >Brazil</option>
+            
+              <option value="bg-bg" >Bulgaria</option>
+            
+              <option value="ca-en" >Canada (en)</option>
+            
+              <option value="ca-fr" >Canada (fr)</option>
+            
+              <option value="ct-ca" >Catalonia</option>
+            
+              <option value="cl-es" >Chile</option>
+            
+              <option value="cn-zh" >China</option>
+            
+              <option value="co-es" >Colombia</option>
+            
+              <option value="hr-hr" >Croatia</option>
+            
+              <option value="cz-cs" >Czech Republic</option>
+            
+              <option value="dk-da" >Denmark</option>
+            
+              <option value="ee-et" >Estonia</option>
+            
+              <option value="fi-fi" >Finland</option>
+            
+              <option value="fr-fr" >France</option>
+            
+              <option value="de-de" >Germany</option>
+            
+              <option value="gr-el" >Greece</option>
+            
+              <option value="hk-tzh" >Hong Kong</option>
+            
+              <option value="hu-hu" >Hungary</option>
+            
+              <option value="is-is" >Iceland</option>
+            
+              <option value="in-en" >India (en)</option>
+            
+              <option value="id-en" >Indonesia (en)</option>
+            
+              <option value="ie-en" >Ireland</option>
+            
+              <option value="il-en" >Israel (en)</option>
+            
+              <option value="it-it" >Italy</option>
+            
+              <option value="jp-jp" >Japan</option>
+            
+              <option value="kr-kr" >Korea</option>
+            
+              <option value="lv-lv" >Latvia</option>
+            
+              <option value="lt-lt" >Lithuania</option>
+            
+              <option value="my-en" >Malaysia (en)</option>
+            
+              <option value="mx-es" >Mexico</option>
+            
+              <option value="nl-nl" >Netherlands</option>
+            
+              <option value="nz-en" >New Zealand</option>
+            
+              <option value="no-no" >Norway</option>
+            
+              <option value="pk-en" >Pakistan (en)</option>
+            
+              <option value="pe-es" >Peru</option>
+            
+              <option value="ph-en" >Philippines (en)</option>
+            
+              <option value="pl-pl" >Poland</option>
+            
+              <option value="pt-pt" >Portugal</option>
+            
+              <option value="ro-ro" >Romania</option>
+            
+              <option value="ru-ru" >Russia</option>
+            
+              <option value="xa-ar" >Saudi Arabia</option>
+            
+              <option value="sg-en" >Singapore</option>
+            
+              <option value="sk-sk" >Slovakia</option>
+            
+              <option value="sl-sl" >Slovenia</option>
+            
+              <option value="za-en" >South Africa</option>
+            
+              <option value="es-ca" >Spain (ca)</option>
+            
+              <option value="es-es" >Spain (es)</option>
+            
+              <option value="se-sv" >Sweden</option>
+            
+              <option value="ch-de" >Switzerland (de)</option>
+            
+              <option value="ch-fr" >Switzerland (fr)</option>
+            
+              <option value="tw-tzh" >Taiwan</option>
+            
+              <option value="th-en" >Thailand (en)</option>
+            
+              <option value="tr-tr" >Turkey</option>
+            
+              <option value="us-en" >US (English)</option>
+            
+              <option value="us-es" >US (Spanish)</option>
+            
+              <option value="ua-uk" >Ukraine</option>
+            
+              <option value="uk-en" >United Kingdom</option>
+            
+              <option value="vn-en" >Vietnam (en)</option>
+            
+          </select>
+        </div>
+
+        <div class="frm__select frm__select--last">
+          <select class="" name="df">
+            
+              <option value="" selected>Any Time</option>
+            
+              <option value="d" >Past Day</option>
+            
+              <option value="w" >Past Week</option>
+            
+              <option value="m" >Past Month</option>
+            
+              <option value="y" >Past Year</option>
+            
+          </select>
+        </div>
+      </form>
+    </div>
+
+    
+
+    
+      <!-- Web results are present -->
+      <div>
+        <div class="serp__results">
+          <div id="links" class="results">
+            
+
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fandroidmobiles.org%2Fhow%2Dto%2Dimplement%2Dlinux%2Dnamespaces%2Dfor%2Dandroid%2Dapp%2Disolation%2Da%2Dstep%2Dby%2Dstep%2Dsecurity%2Dguide%2F&amp;rut=7eec8d92666546dad8bde607975db04c1b1e02a01ad43e88af5e9305c240eac4">How to Implement Linux Namespaces for Android App Isolation: A Step-by ...</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fandroidmobiles.org%2Fhow%2Dto%2Dimplement%2Dlinux%2Dnamespaces%2Dfor%2Dandroid%2Dapp%2Disolation%2Da%2Dstep%2Dby%2Dstep%2Dsecurity%2Dguide%2F&amp;rut=7eec8d92666546dad8bde607975db04c1b1e02a01ad43e88af5e9305c240eac4">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/androidmobiles.org.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fandroidmobiles.org%2Fhow%2Dto%2Dimplement%2Dlinux%2Dnamespaces%2Dfor%2Dandroid%2Dapp%2Disolation%2Da%2Dstep%2Dby%2Dstep%2Dsecurity%2Dguide%2F&amp;rut=7eec8d92666546dad8bde607975db04c1b1e02a01ad43e88af5e9305c240eac4">
+                            androidmobiles.org/how-to-implement-linux-namespaces-for-android-app-isolation-a-step-by-step-security-guide/
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fandroidmobiles.org%2Fhow%2Dto%2Dimplement%2Dlinux%2Dnamespaces%2Dfor%2Dandroid%2Dapp%2Disolation%2Da%2Dstep%2Dby%2Dstep%2Dsecurity%2Dguide%2F&amp;rut=7eec8d92666546dad8bde607975db04c1b1e02a01ad43e88af5e9305c240eac4">Key Types of <b>Namespaces</b> Relevant to <b>Android</b> Isolation: PID <b>Namespace</b> (CLONE_NEWPID): Isolates the <b>process</b> ID space. Processes inside a PID <b>namespace</b> have a distinct set of PIDs that are independent of other <b>namespaces</b>. A <b>process</b> with PID 1 in a child <b>namespace</b> is not necessarily PID 1 in the parent.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F73366795%2Fhow%2Dto%2Dprovide%2Dseparate%2Dnetwork%2Dname%2Dspaces%2Dfor%2Dandroid%2Dapplications%2Din%2Dandroid&amp;rut=5fd7fc68e5d9ac5bdfb2c58ec56d5b42961c70a8e00b391657f33fd6af117e66">How to provide separate network name spaces for android applications in ...</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F73366795%2Fhow%2Dto%2Dprovide%2Dseparate%2Dnetwork%2Dname%2Dspaces%2Dfor%2Dandroid%2Dapplications%2Din%2Dandroid&amp;rut=5fd7fc68e5d9ac5bdfb2c58ec56d5b42961c70a8e00b391657f33fd6af117e66">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/stackoverflow.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F73366795%2Fhow%2Dto%2Dprovide%2Dseparate%2Dnetwork%2Dname%2Dspaces%2Dfor%2Dandroid%2Dapplications%2Din%2Dandroid&amp;rut=5fd7fc68e5d9ac5bdfb2c58ec56d5b42961c70a8e00b391657f33fd6af117e66">
+                            stackoverflow.com/questions/73366795/how-to-provide-separate-network-name-spaces-for-android-applications-in-android
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F73366795%2Fhow%2Dto%2Dprovide%2Dseparate%2Dnetwork%2Dname%2Dspaces%2Dfor%2Dandroid%2Dapplications%2Din%2Dandroid&amp;rut=5fd7fc68e5d9ac5bdfb2c58ec56d5b42961c70a8e00b391657f33fd6af117e66">Furthermore, I know how to do it (creating separate <b>network</b> <b>name</b> <b>spaces)</b> in a Linux environment and of course in our Andoid shell using ip <b>netns</b> exec command. Here we can run commands like wget or ping in these separate <b>namespaces</b>. I can check dumpsys netd command to see the default set <b>network</b> netId and other defined netId s. What I need to know: Is there any way to use multiple <b>networks</b> ...</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.man7.org%2Flinux%2Fman%2Dpages%2Fman7%2Fnetwork_namespaces.7.html&amp;rut=8880c2a2227a919185d65c9dc1bb18e11740245ff95ba9b263a6f26cd887e054">network_namespaces (7) - Linux manual page - man7.org</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.man7.org%2Flinux%2Fman%2Dpages%2Fman7%2Fnetwork_namespaces.7.html&amp;rut=8880c2a2227a919185d65c9dc1bb18e11740245ff95ba9b263a6f26cd887e054">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/www.man7.org.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.man7.org%2Flinux%2Fman%2Dpages%2Fman7%2Fnetwork_namespaces.7.html&amp;rut=8880c2a2227a919185d65c9dc1bb18e11740245ff95ba9b263a6f26cd887e054">
+                            www.man7.org/linux/man-pages/man7/network_namespaces.7.html
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.man7.org%2Flinux%2Fman%2Dpages%2Fman7%2Fnetwork_namespaces.7.html&amp;rut=8880c2a2227a919185d65c9dc1bb18e11740245ff95ba9b263a6f26cd887e054">A physical <b>network</b> device can live in exactly one <b>network</b> <b>namespace</b>. When a <b>network</b> <b>namespace</b> is freed (i.e., when the last <b>process</b> in the <b>namespace</b> terminates), its physical <b>network</b> devices are moved back to the initial <b>network</b> <b>namespace</b> (not to the <b>namespace</b> of the parent of the <b>process</b>).</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Ffaysalmehedi%2Flinux%2Dnetwork%2Dnamespaces%2Dhands%2Don&amp;rut=e7d5c715df93cfe5fbdb378eed5436cd8224e792c2d91933332f0ecc1dfd2a94">linux-network-namespaces-hands-on - GitHub</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Ffaysalmehedi%2Flinux%2Dnetwork%2Dnamespaces%2Dhands%2Don&amp;rut=e7d5c715df93cfe5fbdb378eed5436cd8224e792c2d91933332f0ecc1dfd2a94">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/github.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Ffaysalmehedi%2Flinux%2Dnetwork%2Dnamespaces%2Dhands%2Don&amp;rut=e7d5c715df93cfe5fbdb378eed5436cd8224e792c2d91933332f0ecc1dfd2a94">
+                            github.com/faysalmehedi/linux-network-namespaces-hands-on
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Ffaysalmehedi%2Flinux%2Dnetwork%2Dnamespaces%2Dhands%2Don&amp;rut=e7d5c715df93cfe5fbdb378eed5436cd8224e792c2d91933332f0ecc1dfd2a94">Linux <b>namespace</b> is an abstraction over resources in the operating system. We can think of a <b>namespace</b> as a box. Inside this box are these system resources, which ones exactly depend on the box&#x27;s (<b>namespace&#x27;s</b>) type. There are currently 7 types of <b>namespaces</b> Cgroup, IPC, <b>Network</b>, Mount, PID, User, UTS.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.man7.org%2Flinux%2Fman%2Dpages%2Fman8%2Fip%2Dnetns.8.html&amp;rut=274c8d4ff2e58208c1157da569757ad287563d36d2ba3afc5b8a0a27f405a167">ip-netns (8) - Linux manual page - man7.org</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.man7.org%2Flinux%2Fman%2Dpages%2Fman8%2Fip%2Dnetns.8.html&amp;rut=274c8d4ff2e58208c1157da569757ad287563d36d2ba3afc5b8a0a27f405a167">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/www.man7.org.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.man7.org%2Flinux%2Fman%2Dpages%2Fman8%2Fip%2Dnetns.8.html&amp;rut=274c8d4ff2e58208c1157da569757ad287563d36d2ba3afc5b8a0a27f405a167">
+                            www.man7.org/linux/man-pages/man8/ip-netns.8.html
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.man7.org%2Flinux%2Fman%2Dpages%2Fman8%2Fip%2Dnetns.8.html&amp;rut=274c8d4ff2e58208c1157da569757ad287563d36d2ba3afc5b8a0a27f405a167">Once it is assigned, it&#x27;s not possible to change it. ip <b>netns</b> identify [PID] - Report <b>network</b> <b>namespaces</b> names for <b>process</b> This command walks through /var/run/<b>netns</b> and finds all the <b>network</b> <b>namespace</b> names for <b>network</b> <b>namespace</b> of the specified <b>process</b>, if PID is not specified then the current <b>process</b> will be used. ip <b>netns</b> pids NAME - Report ...</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fkernel%2Dinternals.org%2Fnet%2Fnet%2Dnamespaces%2F&amp;rut=7b6df01602745bbf0941a26555c481eec9e86584aae9863e4de9104569c16ffb">Network Namespaces - Linux Kernel Internals</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fkernel%2Dinternals.org%2Fnet%2Fnet%2Dnamespaces%2F&amp;rut=7b6df01602745bbf0941a26555c481eec9e86584aae9863e4de9104569c16ffb">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/kernel-internals.org.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fkernel%2Dinternals.org%2Fnet%2Fnet%2Dnamespaces%2F&amp;rut=7b6df01602745bbf0941a26555c481eec9e86584aae9863e4de9104569c16ffb">
+                            kernel-internals.org/net/net-namespaces/
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fkernel%2Dinternals.org%2Fnet%2Fnet%2Dnamespaces%2F&amp;rut=7b6df01602745bbf0941a26555c481eec9e86584aae9863e4de9104569c16ffb"><b>Network</b> <b>Namespaces</b> Per-<b>namespace</b> <b>network</b> stacks, device migration, and container networking isolation What <b>network</b> <b>namespaces</b> provide Each <b>network</b> <b>namespace</b> has its own: <b>Network</b> interfaces (lo, eth0, etc.) IP addresses and routing tables iptables/nftables rules netfilter connection tracking Unix domain socket <b>namespace</b> Port numbers (independent ...</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Funix.stackexchange.com%2Fquestions%2F113530%2Fhow%2Dto%2Dfind%2Dout%2Dnamespace%2Dof%2Da%2Dparticular%2Dprocess&amp;rut=59073f12cc2cc8c473ae095cfb66b73391388f083ed55fc8a3385c0d9a1359b3">How to find out namespace of a particular process?</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Funix.stackexchange.com%2Fquestions%2F113530%2Fhow%2Dto%2Dfind%2Dout%2Dnamespace%2Dof%2Da%2Dparticular%2Dprocess&amp;rut=59073f12cc2cc8c473ae095cfb66b73391388f083ed55fc8a3385c0d9a1359b3">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/unix.stackexchange.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Funix.stackexchange.com%2Fquestions%2F113530%2Fhow%2Dto%2Dfind%2Dout%2Dnamespace%2Dof%2Da%2Dparticular%2Dprocess&amp;rut=59073f12cc2cc8c473ae095cfb66b73391388f083ed55fc8a3385c0d9a1359b3">
+                            unix.stackexchange.com/questions/113530/how-to-find-out-namespace-of-a-particular-process
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Funix.stackexchange.com%2Fquestions%2F113530%2Fhow%2Dto%2Dfind%2Dout%2Dnamespace%2Dof%2Da%2Dparticular%2Dprocess&amp;rut=59073f12cc2cc8c473ae095cfb66b73391388f083ed55fc8a3385c0d9a1359b3">Note that it&#x27;s only for <b>network</b> <b>namespaces</b> and only ones created using ip <b>netns</b> (or at least created by something that bind-mounts the <b>namespace</b> doors in /run/<b>netns</b> like ip <b>netns</b> does).</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgist.github.com%2Frohan%2Dmolloy%2F35d5ccf03e4e6cbd03c3c45528775ab3&amp;rut=b7b66bd3cb5c7350dff1b42434f8c530067379eac634482a64681a24fd0d9082">This tutorial will look at how network namespaces can be defined in ...</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgist.github.com%2Frohan%2Dmolloy%2F35d5ccf03e4e6cbd03c3c45528775ab3&amp;rut=b7b66bd3cb5c7350dff1b42434f8c530067379eac634482a64681a24fd0d9082">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/gist.github.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgist.github.com%2Frohan%2Dmolloy%2F35d5ccf03e4e6cbd03c3c45528775ab3&amp;rut=b7b66bd3cb5c7350dff1b42434f8c530067379eac634482a64681a24fd0d9082">
+                            gist.github.com/rohan-molloy/35d5ccf03e4e6cbd03c3c45528775ab3
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgist.github.com%2Frohan%2Dmolloy%2F35d5ccf03e4e6cbd03c3c45528775ab3&amp;rut=b7b66bd3cb5c7350dff1b42434f8c530067379eac634482a64681a24fd0d9082">A <b>network</b> <b>namespace</b> (<b>netns</b>) allows a running <b>process</b> to see different <b>network</b> interfaces, routes, and firewall rules from the rest of the system. There are a number of use cases for <b>network</b> <b>namespaces</b>, such as running multiple servers, testing/staging environments and providing isolation of services.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.openstack.org%2Fneutron%2Flatest%2Fadmin%2Fintro%2Dnetwork%2Dnamespaces.html&amp;rut=9a9f8ccdacc5191e5fd1494dd7118e69cfee57084bbeb17d7a99c4ac6bf6f6ba">Network namespaces — Neutron 29.1.0.dev174 documentation</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.openstack.org%2Fneutron%2Flatest%2Fadmin%2Fintro%2Dnetwork%2Dnamespaces.html&amp;rut=9a9f8ccdacc5191e5fd1494dd7118e69cfee57084bbeb17d7a99c4ac6bf6f6ba">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/docs.openstack.org.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.openstack.org%2Fneutron%2Flatest%2Fadmin%2Fintro%2Dnetwork%2Dnamespaces.html&amp;rut=9a9f8ccdacc5191e5fd1494dd7118e69cfee57084bbeb17d7a99c4ac6bf6f6ba">
+                            docs.openstack.org/neutron/latest/admin/intro-network-namespaces.html
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.openstack.org%2Fneutron%2Flatest%2Fadmin%2Fintro%2Dnetwork%2Dnamespaces.html&amp;rut=9a9f8ccdacc5191e5fd1494dd7118e69cfee57084bbeb17d7a99c4ac6bf6f6ba">Any given Linux <b>process</b> runs in a particular <b>network</b> <b>namespace</b>. By default this is inherited from its parent <b>process</b>, but a <b>process</b> with the right capabilities can switch itself into a different <b>namespace</b>; in practice this is mostly done using the ip <b>netns</b> exec <b>NETNS</b> COMMAND... invocation, which starts COMMAND running in the <b>namespace</b> named <b>NETNS</b>.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+
+            
+              
+              
+                <div class="nav-link">
+                  <form action="/html/" method="post">
+                    <input type="submit" class='btn btn--alt' value="Next" />
+                    <input type="hidden" name="q" value="android process network namespace netns" />
+                    <input type="hidden" name="s" value="10" />
+                    <input type="hidden" name="nextParams" value="" />
+                    <input type="hidden" name="v" value="l" />
+                    <input type="hidden" name="o" value="json" />
+                    <input type="hidden" name="dc" value="10" />
+                    <input type="hidden" name="api" value="d.js" />
+                    <input type="hidden" name="vqd" value="4-117792858956197844060726439550899467125" />
+
+                    
+                    
+                    
+                      <input name="kl" value="wt-wt" type="hidden" />
+                    
+                    
+                    
+                    
+                  </form>
+                </div>
+              
+            
+
+            <div class="feedback-btn">
+              <a rel="nofollow" href="//duckduckgo.com/feedback.html" target="_new">Feedback</a>
+            </div>
+            <div class="clear"></div>
+          </div>
+        </div>
+      </div> <!-- links wrapper //-->
+    
+  </div>
+
+  <div id="bottom_spacing2"></div>
+
+  
+    <img src="//duckduckgo.com/t/sl_h"/>
+  
+</body>
+</html>

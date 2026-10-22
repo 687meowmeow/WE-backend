@@ -1,0 +1,626 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<!--[if IE 6]><html class="ie6" xmlns="http://www.w3.org/1999/xhtml"><![endif]-->
+<!--[if IE 7]><html class="lt-ie8 lt-ie9" xmlns="http://www.w3.org/1999/xhtml"><![endif]-->
+<!--[if IE 8]><html class="lt-ie9" xmlns="http://www.w3.org/1999/xhtml"><![endif]-->
+<!--[if gt IE 8]><!--><html xmlns="http://www.w3.org/1999/xhtml"><!--<![endif]-->
+<head>
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=1" />
+  <meta name="referrer" content="origin" />
+  <meta name="HandheldFriendly" content="true" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>android loopback localhost between apps selinux at DuckDuckGo</title>
+  <link title="DuckDuckGo (HTML)" type="application/opensearchdescription+xml" rel="search" href="//duckduckgo.com/opensearch_html_v2.xml" />
+  <link href="//duckduckgo.com/favicon.ico" rel="shortcut icon" />
+  <link rel="icon" href="//duckduckgo.com/favicon.ico" type="image/x-icon" />
+  <link id="icon60" rel="apple-touch-icon" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_60x60.png?v=2"/>
+  <link id="icon76" rel="apple-touch-icon" sizes="76x76" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_76x76.png?v=2"/>
+  <link id="icon120" rel="apple-touch-icon" sizes="120x120" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_120x120.png?v=2"/>
+  <link id="icon152" rel="apple-touch-icon" sizes="152x152" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_152x152.png?v=2"/>
+  <link rel="image_src" href="//duckduckgo.com/assets/icons/meta/DDG-icon_256x256.png">
+  <link rel="stylesheet" media="handheld, all" href="//duckduckgo.com/dist/h.12e359033b8c1146e5f7.css" type="text/css"/>
+</head>
+
+<body class="body--html">
+  <a name="top" id="top"></a>
+
+  <form action="/html/" method="post">
+    <input type="text" name="state_hidden" id="state_hidden" />
+  </form>
+
+  <div>
+    <div class="site-wrapper-border"></div>
+
+    <div id="header" class="header cw header--html">
+      <a title="DuckDuckGo" href="/html/" class="header__logo-wrap"></a>
+
+      <form name="x" class="header__form" action="/html/" method="post">
+        <div class="search search--header">
+          <input name="q" autocomplete="off" class="search__input" id="search_form_input_homepage" type="text" value="android loopback localhost between apps selinux" />
+          <input name="b" id="search_button_homepage" class="search__button search__button--html" value="" title="Search" alt="Search" type="submit" />
+        </div>
+
+        
+        
+        
+        
+
+        <div class="frm__select">
+          <select name="kl">
+            
+              <option value="" >All Regions</option>
+            
+              <option value="ar-es" >Argentina</option>
+            
+              <option value="au-en" >Australia</option>
+            
+              <option value="at-de" >Austria</option>
+            
+              <option value="be-fr" >Belgium (fr)</option>
+            
+              <option value="be-nl" >Belgium (nl)</option>
+            
+              <option value="br-pt" >Brazil</option>
+            
+              <option value="bg-bg" >Bulgaria</option>
+            
+              <option value="ca-en" >Canada (en)</option>
+            
+              <option value="ca-fr" >Canada (fr)</option>
+            
+              <option value="ct-ca" >Catalonia</option>
+            
+              <option value="cl-es" >Chile</option>
+            
+              <option value="cn-zh" >China</option>
+            
+              <option value="co-es" >Colombia</option>
+            
+              <option value="hr-hr" >Croatia</option>
+            
+              <option value="cz-cs" >Czech Republic</option>
+            
+              <option value="dk-da" >Denmark</option>
+            
+              <option value="ee-et" >Estonia</option>
+            
+              <option value="fi-fi" >Finland</option>
+            
+              <option value="fr-fr" >France</option>
+            
+              <option value="de-de" >Germany</option>
+            
+              <option value="gr-el" >Greece</option>
+            
+              <option value="hk-tzh" >Hong Kong</option>
+            
+              <option value="hu-hu" >Hungary</option>
+            
+              <option value="is-is" >Iceland</option>
+            
+              <option value="in-en" >India (en)</option>
+            
+              <option value="id-en" >Indonesia (en)</option>
+            
+              <option value="ie-en" >Ireland</option>
+            
+              <option value="il-en" >Israel (en)</option>
+            
+              <option value="it-it" >Italy</option>
+            
+              <option value="jp-jp" >Japan</option>
+            
+              <option value="kr-kr" >Korea</option>
+            
+              <option value="lv-lv" >Latvia</option>
+            
+              <option value="lt-lt" >Lithuania</option>
+            
+              <option value="my-en" >Malaysia (en)</option>
+            
+              <option value="mx-es" >Mexico</option>
+            
+              <option value="nl-nl" >Netherlands</option>
+            
+              <option value="nz-en" >New Zealand</option>
+            
+              <option value="no-no" >Norway</option>
+            
+              <option value="pk-en" >Pakistan (en)</option>
+            
+              <option value="pe-es" >Peru</option>
+            
+              <option value="ph-en" >Philippines (en)</option>
+            
+              <option value="pl-pl" >Poland</option>
+            
+              <option value="pt-pt" >Portugal</option>
+            
+              <option value="ro-ro" >Romania</option>
+            
+              <option value="ru-ru" >Russia</option>
+            
+              <option value="xa-ar" >Saudi Arabia</option>
+            
+              <option value="sg-en" >Singapore</option>
+            
+              <option value="sk-sk" >Slovakia</option>
+            
+              <option value="sl-sl" >Slovenia</option>
+            
+              <option value="za-en" >South Africa</option>
+            
+              <option value="es-ca" >Spain (ca)</option>
+            
+              <option value="es-es" >Spain (es)</option>
+            
+              <option value="se-sv" >Sweden</option>
+            
+              <option value="ch-de" >Switzerland (de)</option>
+            
+              <option value="ch-fr" >Switzerland (fr)</option>
+            
+              <option value="tw-tzh" >Taiwan</option>
+            
+              <option value="th-en" >Thailand (en)</option>
+            
+              <option value="tr-tr" >Turkey</option>
+            
+              <option value="us-en" >US (English)</option>
+            
+              <option value="us-es" >US (Spanish)</option>
+            
+              <option value="ua-uk" >Ukraine</option>
+            
+              <option value="uk-en" >United Kingdom</option>
+            
+              <option value="vn-en" >Vietnam (en)</option>
+            
+          </select>
+        </div>
+
+        <div class="frm__select frm__select--last">
+          <select class="" name="df">
+            
+              <option value="" selected>Any Time</option>
+            
+              <option value="d" >Past Day</option>
+            
+              <option value="w" >Past Week</option>
+            
+              <option value="m" >Past Month</option>
+            
+              <option value="y" >Past Year</option>
+            
+          </select>
+        </div>
+      </form>
+    </div>
+
+    
+
+    
+      <!-- Web results are present -->
+      <div>
+        <div class="serp__results">
+          <div id="links" class="results">
+            
+
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fsource.android.com%2Fdocs%2Fsecurity%2Ffeatures%2Fselinux&amp;rut=8105b04eb52d520fcb8cebd26672de740a7261a021ead978d9f1c0ff5495ecde">Security-Enhanced Linux in Android - Android Open Source Project</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fsource.android.com%2Fdocs%2Fsecurity%2Ffeatures%2Fselinux&amp;rut=8105b04eb52d520fcb8cebd26672de740a7261a021ead978d9f1c0ff5495ecde">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/source.android.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fsource.android.com%2Fdocs%2Fsecurity%2Ffeatures%2Fselinux&amp;rut=8105b04eb52d520fcb8cebd26672de740a7261a021ead978d9f1c0ff5495ecde">
+                            source.android.com/docs/security/features/selinux
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fsource.android.com%2Fdocs%2Fsecurity%2Ffeatures%2Fselinux&amp;rut=8105b04eb52d520fcb8cebd26672de740a7261a021ead978d9f1c0ff5495ecde">As part of the <b>Android</b> security model, <b>Android</b> uses Security-Enhanced Linux (<b>SELinux</b>) to enforce mandatory access control (MAC) over all processes, even processes running with root/superuser privileges (Linux capabilities). Many companies and organizations have contributed to <b>Android&#x27;s</b> <b>SELinux</b> implementation. With <b>SELinux</b>, <b>Android</b> can better protect and confine system services, control access ...</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fsource.android.com%2Fdocs%2Fsecurity%2Ffeatures%2Fselinux%2Fimplement&amp;rut=825fc564fb064c3e10308f6d8b405d046bbeeb4c81cebd1289a290421a70343a">Implement SELinux | Security | Android Open Source Project</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fsource.android.com%2Fdocs%2Fsecurity%2Ffeatures%2Fselinux%2Fimplement&amp;rut=825fc564fb064c3e10308f6d8b405d046bbeeb4c81cebd1289a290421a70343a">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/source.android.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fsource.android.com%2Fdocs%2Fsecurity%2Ffeatures%2Fselinux%2Fimplement&amp;rut=825fc564fb064c3e10308f6d8b405d046bbeeb4c81cebd1289a290421a70343a">
+                            source.android.com/docs/security/features/selinux/implement
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fsource.android.com%2Fdocs%2Fsecurity%2Ffeatures%2Fselinux%2Fimplement&amp;rut=825fc564fb064c3e10308f6d8b405d046bbeeb4c81cebd1289a290421a70343a">Key files To enable <b>SELinux</b>, integrate the latest <b>Android</b> kernel and then incorporate the files found in the system/sepolicy directory. When compiled, those files comprise the <b>SELinux</b> kernel security policy and cover the upstream <b>Android</b> operating system. In general, you shouldn&#x27;t modify the system/sepolicy files directly.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Fqtjay%2FOptsyncthing%2Dandroid%2Fblob%2Fmain%2Fwiki%2Ftips%2Dand%2Dtricks%2FLocalhost%2Dconnection%2Dbetween%2Dtwo%2Dinstances%2Ddifferent%2Duser%2Dprofiles.md&amp;rut=bcbbf5ae5e89c00d5dbee9962df3ff983dd35302f51778d91ebbc627815a3307">Optsyncthing-android/wiki/tips-and-tricks/Localhost-connection-between ...</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Fqtjay%2FOptsyncthing%2Dandroid%2Fblob%2Fmain%2Fwiki%2Ftips%2Dand%2Dtricks%2FLocalhost%2Dconnection%2Dbetween%2Dtwo%2Dinstances%2Ddifferent%2Duser%2Dprofiles.md&amp;rut=bcbbf5ae5e89c00d5dbee9962df3ff983dd35302f51778d91ebbc627815a3307">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/github.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Fqtjay%2FOptsyncthing%2Dandroid%2Fblob%2Fmain%2Fwiki%2Ftips%2Dand%2Dtricks%2FLocalhost%2Dconnection%2Dbetween%2Dtwo%2Dinstances%2Ddifferent%2Duser%2Dprofiles.md&amp;rut=bcbbf5ae5e89c00d5dbee9962df3ff983dd35302f51778d91ebbc627815a3307">
+                            github.com/qtjay/Optsyncthing-android/blob/main/wiki/tips-and-tricks/Localhost-connection-between-two-instances-different-user-profiles.md
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Fqtjay%2FOptsyncthing%2Dandroid%2Fblob%2Fmain%2Fwiki%2Ftips%2Dand%2Dtricks%2FLocalhost%2Dconnection%2Dbetween%2Dtwo%2Dinstances%2Ddifferent%2Duser%2Dprofiles.md&amp;rut=bcbbf5ae5e89c00d5dbee9962df3ff983dd35302f51778d91ebbc627815a3307"><b>Localhost</b> connection <b>between</b> two instances in different user profiles <b>Android</b> 17+ restricts <b>apps</b> from connecting to their other instance over <b>localhost</b> when they are running in different user profiles. This affects both actual users and also profiles. For example private space or work profile. For folks who run multiple instances of the <b>app</b> to sync files locally <b>between</b> users, the traffic is ...</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F78982651%2Fandroid%2Dloopback%2Dserver%2Drestrict%2Dapi%2Dcalls%2Dto%2Donly%2Dapps%2Dinstalled%2Din%2Dthe%2Dmanage&amp;rut=1e3cae48989100374a4525ac3d1dd8a3da9a993cc11365ad33eda2c31c632322">ktor - Android Loopback Server: Restrict API calls to only apps ...</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F78982651%2Fandroid%2Dloopback%2Dserver%2Drestrict%2Dapi%2Dcalls%2Dto%2Donly%2Dapps%2Dinstalled%2Din%2Dthe%2Dmanage&amp;rut=1e3cae48989100374a4525ac3d1dd8a3da9a993cc11365ad33eda2c31c632322">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/stackoverflow.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F78982651%2Fandroid%2Dloopback%2Dserver%2Drestrict%2Dapi%2Dcalls%2Dto%2Donly%2Dapps%2Dinstalled%2Din%2Dthe%2Dmanage&amp;rut=1e3cae48989100374a4525ac3d1dd8a3da9a993cc11365ad33eda2c31c632322">
+                            stackoverflow.com/questions/78982651/android-loopback-server-restrict-api-calls-to-only-apps-installed-in-the-manage
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F78982651%2Fandroid%2Dloopback%2Dserver%2Drestrict%2Dapi%2Dcalls%2Dto%2Donly%2Dapps%2Dinstalled%2Din%2Dthe%2Dmanage&amp;rut=1e3cae48989100374a4525ac3d1dd8a3da9a993cc11365ad33eda2c31c632322">I have an <b>app</b> installed on a managed work profile with a <b>loopback</b> server, that starts a <b>localhost</b> webserver. I want the 3rd party <b>app</b> to make request calls with my local server. I have no access to the 3rd party <b>apps</b>. how i can differ the request API call <b>between</b> calls coming from Personal profile and calls coming from work managed profile.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fandroidmobiles.org%2Fpractical%2Dguide%2Ddeveloping%2Dapps%2Dthat%2Dinteract%2Dseamlessly%2Dwith%2Dselinux%2Dhardened%2Dnon%2Drooted%2Dandroid%2F&amp;rut=cf0455fb939849913d4e7e7bda45670d5967b8a3f7381679f373d7e1c1ab4af3">Practical Guide: Developing Apps That Interact Seamlessly with SELinux ...</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fandroidmobiles.org%2Fpractical%2Dguide%2Ddeveloping%2Dapps%2Dthat%2Dinteract%2Dseamlessly%2Dwith%2Dselinux%2Dhardened%2Dnon%2Drooted%2Dandroid%2F&amp;rut=cf0455fb939849913d4e7e7bda45670d5967b8a3f7381679f373d7e1c1ab4af3">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/androidmobiles.org.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fandroidmobiles.org%2Fpractical%2Dguide%2Ddeveloping%2Dapps%2Dthat%2Dinteract%2Dseamlessly%2Dwith%2Dselinux%2Dhardened%2Dnon%2Drooted%2Dandroid%2F&amp;rut=cf0455fb939849913d4e7e7bda45670d5967b8a3f7381679f373d7e1c1ab4af3">
+                            androidmobiles.org/practical-guide-developing-apps-that-interact-seamlessly-with-selinux-hardened-non-rooted-android/
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fandroidmobiles.org%2Fpractical%2Dguide%2Ddeveloping%2Dapps%2Dthat%2Dinteract%2Dseamlessly%2Dwith%2Dselinux%2Dhardened%2Dnon%2Drooted%2Dandroid%2F&amp;rut=cf0455fb939849913d4e7e7bda45670d5967b8a3f7381679f373d7e1c1ab4af3">On all modern <b>Android</b> devices, <b>SELinux</b> operates in &quot;enforcing&quot; mode by default, strictly dictating what processes can access which resources. This guide aims to demystify the interaction <b>between</b> your <b>Android</b> applications and this powerful security mechanism, specifically on non-rooted devices where modifying <b>SELinux</b> policy is impossible.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2FExclaveNetwork%2FExclave%2Fissues%2F430&amp;rut=a53cb2df1dbb69059af87f7d6b56d7574a029c608affa38fc407a5ce0942245f">&quot;Android 17 blocks cross-profile loopback traffic for all apps ... - GitHub</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2FExclaveNetwork%2FExclave%2Fissues%2F430&amp;rut=a53cb2df1dbb69059af87f7d6b56d7574a029c608affa38fc407a5ce0942245f">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/github.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2FExclaveNetwork%2FExclave%2Fissues%2F430&amp;rut=a53cb2df1dbb69059af87f7d6b56d7574a029c608affa38fc407a5ce0942245f">
+                            github.com/ExclaveNetwork/Exclave/issues/430
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2FExclaveNetwork%2FExclave%2Fissues%2F430&amp;rut=a53cb2df1dbb69059af87f7d6b56d7574a029c608affa38fc407a5ce0942245f">&quot;<b>Android</b> 17 blocks cross-profile <b>loopback</b> traffic for all <b>apps</b>, breaking cross-profile <b>localhost</b> proxy&quot; thing, what if there may be a way ? :-) (feature suggestion / research suggestion) #430</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdiscuss.grapheneos.org%2Fd%2F33471%2Dandroid%2D17%2Daccess%2Dlocal%2Dnetwork&amp;rut=7e8d81bc9f776e843b7805544db7d06741fa271c9b489aad7d7813661353fc6b">android 17 - ACCESS_LOCAL_NETWORK - GrapheneOS Discussion Forum</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdiscuss.grapheneos.org%2Fd%2F33471%2Dandroid%2D17%2Daccess%2Dlocal%2Dnetwork&amp;rut=7e8d81bc9f776e843b7805544db7d06741fa271c9b489aad7d7813661353fc6b">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/discuss.grapheneos.org.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdiscuss.grapheneos.org%2Fd%2F33471%2Dandroid%2D17%2Daccess%2Dlocal%2Dnetwork&amp;rut=7e8d81bc9f776e843b7805544db7d06741fa271c9b489aad7d7813661353fc6b">
+                            discuss.grapheneos.org/d/33471-android-17-access-local-network
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdiscuss.grapheneos.org%2Fd%2F33471%2Dandroid%2D17%2Daccess%2Dlocal%2Dnetwork&amp;rut=7e8d81bc9f776e843b7805544db7d06741fa271c9b489aad7d7813661353fc6b">This occurs because <b>Android</b> shares the network namespace across profiles, enabling <b>localhost</b> connections <b>between</b> them. The ACCESS_LOCAL_NETWORK permission only controls discovery of devices on the local network (e.g., LAN), not <b>loopback</b> interface (<b>localhost</b>) access.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdeveloper.android.com%2Fwork%2Fversions%2Fandroid%2D17&amp;rut=4a185fabf46e549bcf94177af19896c14a01b89077a7a85497da1e3afb9956c5">What&#x27;s new for enterprise in Android 17 - Android Developers</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdeveloper.android.com%2Fwork%2Fversions%2Fandroid%2D17&amp;rut=4a185fabf46e549bcf94177af19896c14a01b89077a7a85497da1e3afb9956c5">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/developer.android.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdeveloper.android.com%2Fwork%2Fversions%2Fandroid%2D17&amp;rut=4a185fabf46e549bcf94177af19896c14a01b89077a7a85497da1e3afb9956c5">
+                            developer.android.com/work/versions/android-17
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdeveloper.android.com%2Fwork%2Fversions%2Fandroid%2D17&amp;rut=4a185fabf46e549bcf94177af19896c14a01b89077a7a85497da1e3afb9956c5"><b>Localhost</b> Restriction Cross-profile <b>loopback</b> traffic (e.g., to 127.0.0.1) is restricted in <b>Android</b> 17 to safeguard corporate data. Read the behavior change guide on blocking cross profile <b>loopback</b> traffic for details. Local Network Protection</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fandroidmobiles.org%2Ftroubleshooting%2Dselinux%2Dpolicy%2Dconflicts%2Da%2Ddebugging%2Dplaybook%2Dfor%2Dandroid%2Ddevelopers%2F&amp;rut=af1d61d41400e037ef0a3ae467851b8ab9391de6d97ff6b894ae05861a1d6d1e">Troubleshooting SELinux Policy Conflicts: A Debugging Playbook for ...</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fandroidmobiles.org%2Ftroubleshooting%2Dselinux%2Dpolicy%2Dconflicts%2Da%2Ddebugging%2Dplaybook%2Dfor%2Dandroid%2Ddevelopers%2F&amp;rut=af1d61d41400e037ef0a3ae467851b8ab9391de6d97ff6b894ae05861a1d6d1e">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/androidmobiles.org.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fandroidmobiles.org%2Ftroubleshooting%2Dselinux%2Dpolicy%2Dconflicts%2Da%2Ddebugging%2Dplaybook%2Dfor%2Dandroid%2Ddevelopers%2F&amp;rut=af1d61d41400e037ef0a3ae467851b8ab9391de6d97ff6b894ae05861a1d6d1e">
+                            androidmobiles.org/troubleshooting-selinux-policy-conflicts-a-debugging-playbook-for-android-developers/
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fandroidmobiles.org%2Ftroubleshooting%2Dselinux%2Dpolicy%2Dconflicts%2Da%2Ddebugging%2Dplaybook%2Dfor%2Dandroid%2Ddevelopers%2F&amp;rut=af1d61d41400e037ef0a3ae467851b8ab9391de6d97ff6b894ae05861a1d6d1e">This article provides a comprehensive debugging playbook to help you diagnose and resolve <b>SELinux</b> policy conflicts. <b>Android</b> leverages <b>SELinux</b> to enforce isolation <b>between</b> system components, applications, and hardware resources.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fventraldigital.github.io%2FInterProfileSharing%2F&amp;rut=c3182f25670982137d7297f85f1f509534e3474fd803dd881138b53639d5e961">Inter Profile Sharing — Android 17+ Workaround</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fventraldigital.github.io%2FInterProfileSharing%2F&amp;rut=c3182f25670982137d7297f85f1f509534e3474fd803dd881138b53639d5e961">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/ventraldigital.github.io.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fventraldigital.github.io%2FInterProfileSharing%2F&amp;rut=c3182f25670982137d7297f85f1f509534e3474fd803dd881138b53639d5e961">
+                            ventraldigital.github.io/InterProfileSharing/
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fventraldigital.github.io%2FInterProfileSharing%2F&amp;rut=c3182f25670982137d7297f85f1f509534e3474fd803dd881138b53639d5e961"><b>Android</b> 17+ Workaround The Inter Profile Sharing <b>app</b> offers sharing information <b>between</b> <b>Android</b> User profiles in a way that doesn&#x27;t require you to use cloud synchronization, messengers or USB sticks. To do so, it uses the <b>localhost</b> <b>loopback</b> (127.0.0.1) - a loophole that was never intended to work for cross-profile communications.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+
+            
+              
+              
+                <div class="nav-link">
+                  <form action="/html/" method="post">
+                    <input type="submit" class='btn btn--alt' value="Next" />
+                    <input type="hidden" name="q" value="android loopback localhost between apps selinux" />
+                    <input type="hidden" name="s" value="10" />
+                    <input type="hidden" name="nextParams" value="" />
+                    <input type="hidden" name="v" value="l" />
+                    <input type="hidden" name="o" value="json" />
+                    <input type="hidden" name="dc" value="11" />
+                    <input type="hidden" name="api" value="d.js" />
+                    <input type="hidden" name="vqd" value="4-168262261858447053310222254093866458716" />
+
+                    
+                    
+                    
+                      <input name="kl" value="wt-wt" type="hidden" />
+                    
+                    
+                    
+                    
+                  </form>
+                </div>
+              
+            
+
+            <div class="feedback-btn">
+              <a rel="nofollow" href="//duckduckgo.com/feedback.html" target="_new">Feedback</a>
+            </div>
+            <div class="clear"></div>
+          </div>
+        </div>
+      </div> <!-- links wrapper //-->
+    
+  </div>
+
+  <div id="bottom_spacing2"></div>
+
+  
+    <img src="//duckduckgo.com/t/sl_h"/>
+  
+</body>
+</html>

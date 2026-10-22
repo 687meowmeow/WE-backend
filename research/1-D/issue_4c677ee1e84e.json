@@ -1,0 +1,112 @@
+{
+  "url": "https://api.github.com/repos/termux/termux-app/issues/2366",
+  "repository_url": "https://api.github.com/repos/termux/termux-app",
+  "labels_url": "https://api.github.com/repos/termux/termux-app/issues/2366/labels{/name}",
+  "comments_url": "https://api.github.com/repos/termux/termux-app/issues/2366/comments",
+  "events_url": "https://api.github.com/repos/termux/termux-app/issues/2366/events",
+  "html_url": "https://github.com/termux/termux-app/issues/2366",
+  "id": 1039220971,
+  "node_id": "I_kwDOAquoeM498UDr",
+  "number": 2366,
+  "title": "[Bug]: Android 12 Phantom Processes Killed \"[Process completed (signal 9) - press Enter]\"",
+  "user": {
+    "login": "V-no-A",
+    "id": 88114646,
+    "node_id": "MDQ6VXNlcjg4MTE0NjQ2",
+    "avatar_url": "https://avatars.githubusercontent.com/u/88114646?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/V-no-A",
+    "html_url": "https://github.com/V-no-A",
+    "followers_url": "https://api.github.com/users/V-no-A/followers",
+    "following_url": "https://api.github.com/users/V-no-A/following{/other_user}",
+    "gists_url": "https://api.github.com/users/V-no-A/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/V-no-A/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/V-no-A/subscriptions",
+    "organizations_url": "https://api.github.com/users/V-no-A/orgs",
+    "repos_url": "https://api.github.com/users/V-no-A/repos",
+    "events_url": "https://api.github.com/users/V-no-A/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/V-no-A/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "labels": [
+    {
+      "id": 276900803,
+      "node_id": "MDU6TGFiZWwyNzY5MDA4MDM=",
+      "url": "https://api.github.com/repos/termux/termux-app/labels/bug%20report",
+      "name": "bug report",
+      "color": "fc2929",
+      "default": false,
+      "description": null,
+      "archived_at": null,
+      "archived_by": null
+    }
+  ],
+  "state": "closed",
+  "locked": true,
+  "assignees": [
+
+  ],
+  "milestone": null,
+  "comments": 80,
+  "created_at": "2021-10-29T06:40:13Z",
+  "updated_at": "2024-01-01T00:04:05Z",
+  "closed_at": "2022-01-10T19:31:15Z",
+  "assignee": null,
+  "author_association": "NONE",
+  "issue_field_values": [
+
+  ],
+  "type": null,
+  "active_lock_reason": "resolved",
+  "sub_issues_summary": {
+    "total": 0,
+    "completed": 0,
+    "percent_completed": 0
+  },
+  "issue_dependencies_summary": {
+    "blocked_by": 0,
+    "total_blocked_by": 0,
+    "blocking": 0,
+    "total_blocking": 0
+  },
+  "body": "**Edit: Check [this comment](https://github.com/termux/termux-app/issues/2366#issuecomment-1237468220) for solution.**\r\n\r\n---\r\n\r\n### Problem description\r\n\r\nI get a message saying `[Process completed (signal 9) - press Enter]` at, seemingly, random intervals. Once I press Enter, Termux closes. This may happen while I am running a Python script or simply under the \"Welcome to Termux!\" text after leaving Termux idle for a while (leaving the app/turning off the screen) and not having run any commands. \r\n\r\n### Steps to reproduce the behavior.\r\n\r\nI upgraded my Pixel 3a phone to Android 12 and downloaded Termux from F-Droid as well as Termux:API. I did the `termux-setup-storage` command and gave the app unrestricted battery usage under the Android Apps settings. Lastly, I installed Python using `pkg install python`.\r\n\r\n### What is the expected behavior?\r\n\r\nPreviously, on Android 11, I had installed Termux from the Google Play Store. Not once did I ever get that `[Process completed (signal 9) - press Enter]` message. I was able to leave Termux running in the background indefinitely.\r\n\r\n### System information\r\n\r\n* Termux application version:\r\n0.117\r\n* Android OS version:\r\n12\r\n* Device model:\r\nPIxel 3a",
+  "closed_by": {
+    "login": "agnostic-apollo",
+    "id": 31106828,
+    "node_id": "MDQ6VXNlcjMxMTA2ODI4",
+    "avatar_url": "https://avatars.githubusercontent.com/u/31106828?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/agnostic-apollo",
+    "html_url": "https://github.com/agnostic-apollo",
+    "followers_url": "https://api.github.com/users/agnostic-apollo/followers",
+    "following_url": "https://api.github.com/users/agnostic-apollo/following{/other_user}",
+    "gists_url": "https://api.github.com/users/agnostic-apollo/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/agnostic-apollo/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/agnostic-apollo/subscriptions",
+    "organizations_url": "https://api.github.com/users/agnostic-apollo/orgs",
+    "repos_url": "https://api.github.com/users/agnostic-apollo/repos",
+    "events_url": "https://api.github.com/users/agnostic-apollo/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/agnostic-apollo/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/termux/termux-app/issues/2366/reactions",
+    "total_count": 44,
+    "+1": 1,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 7,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 36
+  },
+  "timeline_url": "https://api.github.com/repos/termux/termux-app/issues/2366/timeline",
+  "performed_via_github_app": null,
+  "state_reason": "completed",
+  "pinned_comment": null
+}

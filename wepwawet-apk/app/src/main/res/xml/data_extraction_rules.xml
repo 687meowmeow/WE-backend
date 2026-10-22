@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <!-- Allow only workshop cache + .mpkg outbox to be transferred (e.g. to a new device) -->
+        <include domain="file" path="workshop-cache/" />
+        <include domain="file" path="mpkg-outbox/" />
+        <!-- Steam credentials are NEVER transferred -->
+        <exclude domain="sharedpref" path="steam_credentials.xml" />
+    </device-transfer>
+</data-extraction-rules>

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- .mpkg outbox: emulated WE writes .mpkg files here, our proxy serves them -->
+    <files-path
+        name="mpkg-outbox"
+        path="mpkg-outbox/" />
+
+    <!-- Workshop content cache (the downloaded .pkg files) -->
+    <files-path
+        name="workshop-cache"
+        path="workshop-cache/" />
+
+    <!-- Logs (for log-sharing intent) -->
+    <files-path
+        name="logs"
+        path="logs/" />
+
+    <!-- Wine prefix internal files (rarely needed but useful for debugging) -->
+    <cache-path
+        name="wine-prefix"
+        path="wine-prefix/" />
+</paths>

@@ -1,0 +1,417 @@
+   500→- Reddit threads (`/r/wallpaperengine/comments/r7h7i6/unable_to_connect_companion_app/`, `/r/wallpaperengine/comments/lmc8q0/having_trouble_with_the_wallpaper_editor/`) were detected via DuckDuckGo but the Reddit HTML endpoint returns "Blocked" from this sandbox, so I could not extract the discussion bodies. Bing RSS queries for "wallpaper engine bcrypt wine" and "wallpaper engine 7889 TCP handshake" returned only generic wallpaper-download-site spam (Bing RSS ignores phrase queries). GitHub code search for `"7884" "wallpaper"` and `"7889" "wallpaper"` requires login (anonymous HTML just redirects to `/login`). DuckDuckGo CAPTCHA'd after ~10 queries, so additional protocol-RE write-up discovery was limited.
+   501→
+   502→Key sources consulted (URLs):
+   503→- https://www.wallpaperengine.io/android (Android download page, no protocol detail)
+   504→- https://help.wallpaperengine.io/ (help site index, lists all WE help articles)
+   505→- https://help.wallpaperengine.io/en/mobile/pairing.html (canonical user-facing pairing flow + 4-digit PIN)
+   506→- https://help.wallpaperengine.io/en/mobile/pairing-fixes.html (**the canonical port & process reference**: 7884 UDP, 7889 TCP, ui32.exe firewall rule, manual IP fallback, UPnP, .mpkg backup)
+   507→- https://help.wallpaperengine.io/en/mobile/faq.html (Android FAQ — no audio on Android, .mpkg Downloads-folder scoping)
+   508→- https://help.wallpaperengine.io/en/functionality/cli.html (the `wallpaper32.exe -control <command>` RPC — orthogonal to network pairing)
+   509→- https://help.wallpaperengine.io/en/functionality/linuxmacos.html (dev's "no Linux port, bcrypt blocker is OS-portability issue" stance)
+   510→- https://steamcommunity.com/app/431960/discussions/1/572639314705505863/ (the UDP flood thread with the `WallpaperEngine/Ping:00000:HOSTNAME:4:InterfaceID` payload format and 192.168.0.255 + 239.100.0.1 destination — confirmed by dev "Tim")
+   511→- https://steamcommunity.com/app/431960/discussions/10/3187989286470636609/ (Android connectivity thread — dev confirms PIN-gated pairing, `ui32.exe` process, 7884/7889 ports)
+   512→- https://steamcommunity.com/app/431960/discussions/2/3412054783669870742/ (Linux+Wine thread — **dev confirms bcrypt blocker** for direct pairing under Wine/Proton; manual .mpkg export is the workaround)
+   513→- https://www.updatemonitor.com/app/431960/news/4224936215387896675 (2.0.44 changelog — additional broadcast methods added, firewall rule check, ui32.exe as the networked process)
+   514→- https://steamcommunity.com/app/431960/discussions/10/ (Android subforum — beta-test pinned post reveals package name `io.wallpaperengine.weclient`)
+   515→- https://play.google.com/apps/testing/io.wallpaperengine.weclient (beta-test signup page — package name confirmation)
+   516→- https://github.com/UniVitaPorts/WallpaperEngine (Ghidra decompilation of wallpaper64.exe; raw C: https://raw.githubusercontent.com/UniVitaPorts/WallpaperEngine/main/wallpaper64.exe.c — confirms wallpaper64 spawns `bin/ui32.exe` with `-weuimain -buildv -skin -language -steamlanguage -monitordetection managed -monitormap ... -messagehandler WPEhandler...`, no winsock in renderer)
+   517→- https://github.com/Official-Wallpaper-Engine/.github (official WE GitHub org — marketing only, copyright "© 2016–2025 Skutta Software GmbH")
+   518→- https://github.com/CREAMSOU/wallpaper-engine-ui-fix (community Windows ACL fix that documents the process taxonomy wallpaperui.exe + wallpaper64.exe + wallpaperservice64.exe + libcef.dll + ui\uicache CEF profile folder)
+   519→- https://github.com/notscuffed/repkg (the reference `.pkg`/`.tex` RE — handles the workshop package format, not the network protocol)
+   520→- https://gamepretty.com/wallpaper-engine-how-to-fix-infinite-circle-issue-android-mobile/ (community corroboration that the "infinite loading circle" symptom = Windows Firewall blocking ui32.exe)
+   521→- https://www.file.net/process/ui32.exe.html and https://www.solvusoft.com/en/files/error-virus-removal/exe/windows/kristjan-skutta/wallpaper-engine/ui32-exe/ (binary attribution: signed by Kristjan Skutta / Wallpaper Engine install)
+   522→
+   523→Stage Summary:
+   524→
+   525→### Pairing Protocol Overview
+   526→
+   527→Wallpaper Engine uses a **custom UDP-broadcast + TCP-handshake pairing protocol that is entirely independent of Steamworks networking and of mDNS/Bonjour/SSDP**. On the PC side, the network code lives in the Chromium-CEF-based UI process (`ui32.exe` on 32-bit Windows, `ui64.exe` on 64-bit Windows — also referred to in the firewall docs as `wallpaperui.exe`), not in the renderer (`wallpaper32.exe`/`wallpaper64.exe`) or the service (`wallpaperservice64.exe`). When the user clicks "Connect new Device" in WE's Windows UI, `ui32.exe` begins broadcasting a discovery packet on UDP port 7884 to two destinations simultaneously: (a) the local subnet broadcast address (e.g. `192.168.0.255` for `/24` networks) and (b) the administratively-scoped IPv4 multicast group `239.100.0.1` — a non-IANA-reserved multicast address that WE has effectively claimed as its own. The UDP payload is a small ASCII string of the form `WallpaperEngine/Ping:<5-digit-zero-padded-counter>:<Windows-hostname>:<interface-count-or-index>:<interface-id>` — confirmed by the Steam "Unexpected Flood of UDP Packets" thread's packet capture, posted 15 Aug 2025 and verified by the WE developer "Tim". The Android companion app (package `io.wallpaperengine.weclient` on Google Play) listens on UDP 7884 for these broadcasts and renders any detected PC in its "Pair with Computer" list. If broadcasts are blocked by a firewall, the Android app also exposes a "Enter IP manually" fallback so the user can directly type the PC's IPv4 address. Pairing is **PIN-gated and persistent**: the PC shows a 4-digit PIN only when the user explicitly clicks "Connect new Device", and once a phone successfully enters the correct PIN, the PC remembers that device and auto-reconnects on subsequent launches (the broadcasts only resume when at least one known device is registered — confirmed by dev "Tim"). The Android app and the PC then communicate over TCP port 7889 for the actual handshake, control messages, and wallpaper transfer.
+   528→
+   529→### Network Topology Requirements
+   530→
+   531→- **UDP 7884** (discovery broadcast, PC→subnet-broadcast + multicast 239.100.0.1, repeated every ~1 s under normal operation; one user captured it going to "thousands of packets per second" during a rare flood bug, but normal rate is "a few packets per second" per dev).
+   532→- **TCP 7889** (the pairing/handshake/control/wallpaper-transfer channel; the PC `ui32.exe` listens, the Android app connects).
+   533→- **Same local network required** — but "your computer does not need wifi, it is still the same network even if it is connected through a network cable" (per WE troubleshooting doc). So same IP subnet/L2 broadcast domain is the real requirement, not same WiFi specifically.
+   534→- **Manual IP entry fallback** exists in the Android app (three-dots menu → "Enter IP manually") — important for our project because it means we can bypass the broadcast-discovery requirement entirely and point the Android app directly at `127.0.0.1`.
+   535→- **UPnP recommended** in the troubleshooting doc — suggests WE may probe UPnP/SSDP for NAT-traversal or interface discovery, though it is not strictly required. The 2.0.44 changelog says WE "will now also use additional methods to broadcast itself on your network" — strongly implies SSDP/mDNS supplements were added but the specific mechanisms are undocumented.
+   536→- **VPNs/proxies break pairing** — both client-side and PC-side. This matters for our Wine-on-Android topology because Android's VPN Service / `tun0` interfaces will swallow the broadcast — we must ensure the Wine process's UDP broadcast actually reaches the Android app's listener (likely via bridging in our native side, see Task 1-D).
+   537→- **Same-subnet broadcast and multicast 239.100.0.1 are both required for auto-discovery** — neither will reach `127.0.0.1` by default, so auto-discovery will NOT work via localhost. Manual IP entry to `127.0.0.1` is the only path that bypasses broadcast discovery.
+   538→
+   539→### Pairing Handshake Detail
+   540→
+   541→1. **PC enters pairing mode**: User opens WE on Windows, clicks the "Mobile" button in the upper-right of the UI, then "Connect new Device" at the bottom of the device overview. WE generates a 4-digit PIN, displays it on screen, and starts the UDP 7884 discovery broadcast from `ui32.exe`. Per dev Tim: the PC will only appear in the Android app's list while in this pairing screen OR while at least one device is already registered.
+   542→2. **Android app scans**: User opens the WE Android app, taps "Add" (lower-right) → "Pair with Computer". The Android app opens a UDP 7884 listener (and joins multicast group 239.100.0.1) and waits for incoming `WallpaperEngine/Ping:...` packets.
+   543→3. **PC discovered**: Within a few seconds the Android app shows the PC's hostname (extracted from the ping payload). User taps the PC entry.
+   544→4. **TCP 7889 connection**: Android app opens a TCP connection to the PC's IP on port 7889. (If the PC IP was not auto-discovered, the user enters it manually here.)
+   545→5. **PIN exchange / authentication**: Android app prompts for the 4-digit PIN displayed on the PC. User enters it. The Android app transmits the PIN (and possibly a device-generated public key / nonce) over the TCP 7889 channel.
+   546→6. **bcrypt-protected crypto handshake on the PC side**: This is the step where WE calls a Windows CNG bcrypt primitive — confirmed by dev "Biohazard" who wrote that "Wine/Proton is missing an API in the Windows bcrypt library that we are using" and "the direct connection won't work" under Wine. The exact bcrypt primitive is unknown without RE work on `ui32.exe`, but the candidates are: `BCryptOpenAlgorithmProvider(BCRYPT_SHA256_ALGORITHM, ...)`, `BCryptDeriveKeyPBKDF2(...)` (PBKDF2-HMAC-SHA256 key derivation from the PIN + a salt), `BCryptGenerateSymmetricKey` + `BCryptEncrypt`/`BCryptDecrypt` with AES-GCM, or `BCryptSecretAgreement`/`BCryptDeriveKey` with ECDH for a key-exchange-derived session key. Given the 4-digit PIN has only ~10⁴ entropy, the PIN is most likely used as a one-time authenticator while the long-term pairing secret is established via an ephemeral ECDH key exchange — the PIN prevents a MitM from substituting their ECDH public key during the initial exchange. The session key then encrypts all subsequent TCP 7889 traffic (probably AES-GCM given bcrypt CNG usage).
+   547→7. **Persistent pairing**: Once the handshake succeeds, the PC stores the device as "known" — most likely as a derived shared secret + device nickname + MAC/IP in the registry hive `HKCU\Software\WallpaperEngine\` (confirmed used by WE). Subsequent launches: the Android app and PC automatically re-establish the TCP 7889 connection using the stored key material without re-prompting for a PIN.
+   548→
+   549→### Wallpaper Transfer Mechanism
+   550→
+   551→After pairing is established, wallpapers are pushed from PC to Android over the same TCP 7889 channel. The user flow: in WE on Windows, right-click any wallpaper → "Send to Mobile Device" → select the target device from the list of paired devices. Behind the scenes:
+   552→
+   553→1. **Scene wallpapers**: WE first runs an optimization/conversion pass ("Scene wallpapers Dynamic and interactive wallpapers that are of the Scene type will first be optimized for use on mobile phones and to ensure compatibility with mobile hardware"). This re-encodes textures into a mobile-friendly format and may downgrade shader complexity. The user is prompted to choose a quality level ("Balanced" recommended). This step uses the same WE engine code that runs the live wallpaper, plus texture conversion — likely uses BCrypt-protected RPC and on the PC side calls into D3DX11 / DirectXTex style APIs.
+   554→2. **Video wallpapers**: Two paths — "Dynamic / High Quality" (re-encodes textures, keeps the video as-is) and "Pre-rendered / High Performance" (re-encodes the wallpaper as a flat video via Media Foundation / MFPlat / MFT). The latter is the path the Wine user reported failing with "Mobile conversion failed, transcoder error: Failed converting the wallpaper to a video" — dev confirmed it requires "infrequently used APIs" that Wine does not implement.
+   555→3. **Web wallpapers**: Pack the HTML/JS/CSS bundle (the same way CEF-based web wallpapers are stored on the PC).
+   556→4. **Output package**: The result is an `.mpkg` (Mobile PackaGe) file — distinct from the workshop `.pkg` format that RePKG handles. The `.mpkg` is then transferred over TCP 7889 to the Android app, which writes it to its private storage and indexes it in its wallpaper browser.
+   557→5. **Manual fallback**: WE can also export the `.mpkg` to disk on the PC; the user can then transfer it via USB / SD card / messaging / email and use the Android app's "Import File" function (the file must land in the Android `Downloads` directory due to scoped-storage restrictions).
+   558→
+   559→The exact framing of the TCP transfer (length-prefixed chunks vs. a single streamed file vs. a chunked-ack protocol) is not documented anywhere I could find and would require Wiresharking the live TCP 7889 stream during a transfer to determine.
+   560→
+   561→### Live Control Protocol
+   562→
+   563→Post-pairing, the same TCP 7889 channel carries control messages between the Android app and the PC. The Android app becomes a remote control surface for the paired WE instance: it can switch the active wallpaper on the phone (which is rendered locally on Android by the WE Android app's own renderer — Android does NOT stream the wallpaper from the PC; rather, the PC pushes the wallpaper file once and the Android app plays it locally). The Android app can also send commands back to the PC, likely including: "what wallpaper should be active", "pause", "play", "set volume", "next wallpaper", "previous wallpaper", "apply preset", "set playlist". The exact wire format of these commands is undocumented. The PC-side equivalent surface is the documented `wallpaper32.exe -control <command>` CLI (commands: `pause`, `stop`, `play`, `mute`, `unmute`, `openWallpaper -file <path> [-monitor <n>] [-playInWindow <name>] [-width <n>] [-height <n>] [-x <n>] [-y <n>] [-preset <name>] [-activate]`, and truncated-but-implied more for `closeWallpaper`, `nextWallpaper`, `previousWallpaper`, `setVolume`, `applyPreset`). The Android→PC TCP 7889 control protocol is almost certainly a JSON-over-TCP RPC mapped onto the same operations as the `-control` CLI — but again, undocumented and would need Wireshark capture to confirm. Crucially: once a wallpaper is on the phone, the phone renders it locally — the PC is only needed for the initial pairing + wallpaper transfer + (presumably) "open wallpaper from PC library" remote-control operations.
+   564→
+   565→### Self-Pairing via Localhost Feasibility
+   566→
+   567→**Verdict: theoretically possible, but blocked by the Wine bcrypt issue, with three viable mitigation paths.**
+   568→
+   569→The topology we want: Wine process (running real WE `wallpaper32.exe` + `ui32.exe`) inside Winlator on Android; official WE Android app running natively on Android; both on the same device, paired via `127.0.0.1`. What must be true for this to work:
+   570→
+   571→1. **UDP discovery broadcast can be skipped**: The Android app supports manual IP entry, so we don't need the UDP 7884 broadcast to reach the phone. The user (or our app, via Android accessibility / intent) enters `127.0.0.1` (or the Wine process's bound interface IP) directly in the Android app's "Enter IP manually" field. **This is the easy part.**
+   572→2. **TCP 7889 listener must accept the connection from localhost**: Wine's winsock layer binds `ui32.exe`'s listening socket — typically to `0.0.0.0:7889` — which includes `127.0.0.1`. Wine's winsock implementation is generally faithful to Windows behavior for `bind`/`listen`/`accept`, so this should work. **Likely fine.**
+   573→3. **The bcrypt-protected handshake must succeed**: This is the **critical blocker**. Dev Biohazard explicitly stated Wine's bcrypt is missing an API WE uses. Three mitigations:
+   574→   - **(a) Patch Wine's bcrypt**: ship a custom `bcrypt.dll` in our Wine prefix that implements the missing CNG primitive. Wine's existing bcrypt already implements a subset of CNG (AES, SHA, RNG, ECDH-P256) but stubs some calls. The most likely missing piece is `BCryptDeriveKeyPBKDF2` (only fully implemented in Wine 7.0+, may be present in Wine 10/11 that Winlator ships) or a specific ECDH curve. **Requires us to RE `ui32.exe` to identify the exact bcrypt call that fails**, then implement that primitive in Wine's bcrypt or via a drop-in replacement.
+   575→   - **(b) Run a native-Android "WE protocol proxy" alongside Wine**: Build our own native Android service that implements the WE discovery/pairing/control protocol on the TCP 7889 side. The official Android app pairs with our proxy (satisfying the pairing protocol) and our proxy then drives the actual WE render pipeline inside Wine via the documented `wallpaper32.exe -control <command>` CLI. **This is the cleanest architectural path**: we don't need Wine's bcrypt to work for the pairing channel, we only need Wine to render wallpapers — which is the part that already works under Wine. The proxy needs to (1) listen on UDP 7884 + multicast 239.100.0.1 + TCP 7889 on Android's localhost, (2) satisfy the bcrypt-protected handshake from the Android app's perspective (which means REing the exact protocol), (3) translate Android-app control commands into `wallpaper32.exe -control` CLI calls inside Wine, and (4) serve the `.mpkg` files to the Android app — which we can generate by pre-rendering all the user's subscribed wallpapers into `.mpkg` files via the WE export function on the PC side (or, in our case, via `wallpaper32.exe -control exportWallpaper` if such a command exists).
+   576→   - **(c) Patch `ui32.exe` to skip bcrypt**: disassemble `ui32.exe`, find the bcrypt call, NOP it or replace it with a no-op key-derivation. Brittle across WE versions. Not recommended.
+   577→
+   578→   Path (b) — a native Android-side WE protocol proxy that bridges to Wine's `wallpaper32.exe -control` — is the recommended approach because it sidesteps the entire Wine bcrypt problem, gives us full control of the pairing protocol, and lets the Wine side do only what Wine already does well (render wallpapers).
+   579→
+   580→4. **Android scoped-storage for `.mpkg` import**: The Android WE app imports `.mpkg` files from its own private storage after receiving them over TCP 7889. If we go with proxy path (b), our proxy can either hand the `.mpkg` to the Android app over the TCP channel (mimicking the PC push) OR drop it into the Android `Downloads` directory and use the app's "Import File" path. The TCP-push path is more elegant but requires REing the exact `.mpkg` framing in the TCP stream.
+   581→
+   582→### Critical Unknowns / RE Work Needed
+   583→
+   584→1. **The exact TCP 7889 wire protocol**: handshake byte layout, message framing (length-prefix size, endianness), command set, command argument encoding. Needs Wireshark capture of a real PC↔Android pairing session + subsequent control sessions.
+   585→2. **The exact bcrypt primitive that fails under Wine**: needs dynamic analysis of `ui32.exe` under Windows (Procmon + API Monitor on `bcrypt.dll` exports) and matching it against Wine's bcrypt implementation in `<wine>/dlls/bcrypt/`. Candidates: `BCryptDeriveKeyPBKDF2`, `BCryptSecretAgreement` + `BCryptDeriveKey` (ECDH), `BCryptHashData` with a specific algorithm, AES-GCM via `BCryptEncrypt`. Wine 10/11 (as shipped by Winlator v11.2) may already implement the needed primitive — must be verified by actually attempting a Wine→Android pairing and reading the Wine debug logs (`WINEDEBUG=+bcrypt,+secur32,+relay`).
+   586→3. **The long-term pairing token format and storage**: where the PC persists the "known devices" list (registry hive `HKCU\Software\WallpaperEngine\` is the obvious candidate — the WE decomp shows it) and what's in it (device nickname, derived shared key, ECDH public key, etc.).
+   587→4. **The `.mpkg` mobile package format**: distinct from the workshop `.pkg` format. RePKG does not handle `.mpkg`. Either RE it from the WE `ui32.exe` / `wallpaper64.exe` or from a captured `.mpkg` file. Likely a length-prefixed container with converted textures (mobile-friendly DDS variants), converted scene JSON, embedded video/audio.
+   588→5. **What "additional broadcast methods" 2.0.44 added**: SSDP? mDNS? Both? Important because if WE also broadcasts via mDNS on `224.0.0.251:5353`, Android's `NsdManager` could be used directly; if SSDP, Android would need an SSDP listener. Needs Wireshark of a current-version WE instance.
+   589→6. **Whether the Android app does any client-side attestation / certificate pinning** that would prevent a self-pair with an emulated PC. The dev's bcrypt comment implies the crypto is bound to a key WE generates per-install — if it's a fixed key embedded in `ui32.exe`, we'd need to extract it; if it's a per-install random key in `HKCU\Software\WallpaperEngine\`, we could just generate one and put it in our proxy. REing the Android APK (`io.wallpaperengine.weclient`) via jadx would answer this — **this is the highest-value next step**.
+   590→7. **Whether Wine under Winlator can actually launch `ui32.exe`** (the Chromium CEF UI process). Task 1-A confirmed Steam's `steamwebhelper` (also CEF) launches under Box64+Winlator with patches, so `ui32.exe` should be in the same class of workload — but it's unverified. A WE-under-Winlator smoke test is needed to confirm (a) `ui32.exe` boots, (b) the CEF singleton lock works in the Wine prefix's `ui\uicache`, (c) `ui32.exe` can bind UDP 7884 and TCP 7889, (d) the bcrypt failure occurs at the exact step the Wine dev user reported.
+   591→
+   592→### Key URLs
+   593→
+   594→**Official WE docs (the canonical pairing reference):**
+   595→- WE Android download: https://www.wallpaperengine.io/android
+   596→- Pairing guide: https://help.wallpaperengine.io/en/mobile/pairing.html
+   597→- Pairing troubleshooting (**port 7884 UDP + 7889 TCP, ui32.exe firewall rule, manual IP fallback, UPnP, .mpkg backup**): https://help.wallpaperengine.io/en/mobile/pairing-fixes.html
+   598→- Mobile FAQ (no audio on Android, .mpkg Downloads scoping): https://help.wallpaperengine.io/en/mobile/faq.html
+   599→- Command-Line Controls (`wallpaper32.exe -control <command>` — the PC-side RPC we can drive directly): https://help.wallpaperengine.io/en/functionality/cli.html
+   600→- Linux/Mac statement (dev confirms Android companion shares code with hypothetical Linux port → crypto is portable → bcrypt blocker is real): https://help.wallpaperengine.io/en/functionality/linuxmacos.html
+   601→
+   602→**Steam Community threads (the protocol RE evidence base):**
+   603→- "Unexpected Flood of UDP Packets" (the `WallpaperEngine/Ping:00000:HOSTNAME:N:InterfaceID` UDP 7884 → 192.168.0.255 + 239.100.0.1 payload format, dev-confirmed): https://steamcommunity.com/app/431960/discussions/1/572639314705505863/
+   604→- "Android Connectivity Failed" (dev confirms PIN-gated pairing + 7884/7889 ports + `ui32.exe`): https://steamcommunity.com/app/431960/discussions/10/3187989286470636609/
+   605→- "I know Linux is not supported, but is it possible to at least send wallpapers from Linux to my Android?" (**dev confirms Wine bcrypt blocker** — the decisive finding for our project): https://steamcommunity.com/app/431960/discussions/2/3412054783669870742/
+   606→- Android App subforum (reveals package name `io.wallpaperengine.weclient`): https://steamcommunity.com/app/431960/discussions/10/
+   607→
+   608→**Changelog:**
+   609→- "Wallpaper Engine 2.0.44 - Windows Firewall Detection and Android Fixes" (additional broadcast methods + ui32.exe firewall rule check): https://www.updatemonitor.com/app/431960/news/4224936215387896675
+   610→
+   611→**WE binary decompilation & process taxonomy:**
+   612→- UniVitaPorts Ghidra decompilation of `wallpaper64.exe` (14 MB C source; confirms `wallpaper64.exe` spawns `bin/ui32.exe -weuimain -buildv -skin -language -steamlanguage -monitordetection managed -monitormap ... -messagehandler WPEhandler...`; no winsock in renderer → all networking is in ui32.exe): https://github.com/UniVitaPorts/WallpaperEngine — raw: https://raw.githubusercontent.com/UniVitaPorts/WallpaperEngine/main/wallpaper64.exe.c
+   613→- CREAMSOU/wallpaper-engine-ui-fix (documents the wallpaperui.exe + wallpaper64.exe + wallpaperservice64.exe + libcef.dll + ui\uicache CEF profile architecture): https://github.com/CREAMSOU/wallpaper-engine-ui-fix
+   614→- notscuffed/RePKG (the reference `.pkg`/`.tex` RE — does NOT touch network protocol or `.mpkg` mobile format): https://github.com/notscuffed/repkg
+   615→
+   616→**Android app identity:**
+   617→- Package name: `io.wallpaperengine.weclient` (from Steam pinned beta-test announcement, 11 Jan 2022)
+   618→- Beta-test signup: https://play.google.com/apps/testing/io.wallpaperengine.weclient
+   619→- APKMirror listing (behind Cloudflare interactive challenge, could not fetch from this sandbox): https://www.apkmirror.com/apk/wallpaper-engine-team/wallpaper-engine/
+   620→
+   621→**Official WE org & developer:**
+   622→- GitHub org (marketing only, copyright "© 2016–2025 Skutta Software GmbH"): https://github.com/Official-Wallpaper-Engine/
+   623→- Developer "Tim" / "Biohazard" on Steam forums = Kristjan Skutta / Skutta Software GmbH (per `file.net` and `solvusoft.com` attribution of `ui32.exe` signing)
+   624→
+   625→**Community corroboration:**
+   626→- GamePretty "Infinite Circle Issue" guide (community confirms Windows-Firewall-blocking-`ui32.exe` is the dominant pairing-failure cause): https://gamepretty.com/wallpaper-engine-how-to-fix-infinite-circle-issue-android-mobile/
+   627→
+   628→
+   629→---
+   630→Task ID: 1-E
+   631→Agent: general-purpose research
+   632→Task: Research GitHub Actions APK build pipeline for large bundled binaries
+   633→
+   634→Work Log:
+   635→- Read `/home/z/my-project/worklog.md` to load Task 1-A's findings (Winlator v11.2 stack chosen as primary, Box64 + Wine 10.10 + Turnip + DXVK + VKD3D + Ubuntu Focal rootfs + PRoot). Confirmed the relevant payload we need to bundle: Winlator runtime + Box64 ARM64 binary + Wine prefix (~700 MB) + DXVK + VKD3D + Mesa Turnip + Ubuntu Focal rootfs (~300–500 MB compressed) + Steam install (~1 GB) + potentially pre-baked WE install. Realistic total APK payload is 1.5–4 GB.
+   636→- Web tooling inventory: `curl` and `wget` available. GitHub REST API rate-limited aggressively (60/hr unauth) so I avoided it where possible and used `raw.githubusercontent.com`, `docs.github.com` direct fetches, and `developer.android.com` direct fetches (all unauth, unbounded).
+   637→- Fetched Google Play size limits doc (canonical "App size limits" answer page, answer 9859372) — extracted the per-component size cap table for AAB + asset packs + on-demand delivery.
+   638→- Fetched Android docs: APK Expansion Files (OBB) (developer.android.com/google/play/expansion-files), Play Asset Delivery (developer.android.com/guide/app-bundle/asset-delivery), Configure the base module (developer.android.com/guide/app-bundle/configure), Frequently asked questions about app bundles.
+   639→- Fetched the actions/runner-images repo README and Ubuntu 22.04/24.04 image readmes (raw.githubusercontent.com/actions/runner-images/main/...) — confirmed labels and per-OS specs are NOT in those readmes; specs are in docs.github.com.
+   640→- Fetched `docs.github.com/en/actions/reference/runners/github-hosted-runners` (435 KB page, "GitHub-hosted runners reference") — extracted the Standard GitHub-hosted runner hardware table (CPU/RAM/SSD/labels) for both public and private repos.
+   641→- Fetched the canonical **Actions limits** doc (`docs.github.com/en/actions/reference/limits`) — extracted the full hard-cap table (job execution 6h hosted / 5 days self-hosted, queue 24h, workflow run 35 days, matrix 256 jobs, workflow file 500 KB, concurrency per plan, cache 10 GB/repo, included storage per plan).
+   642→- Fetched GitHub Actions billing doc (`docs.github.com/en/billing/managing-billing-for-github-actions/about-billing-for-github-actions`) — extracted per-minute rates and storage plan table (Free 500 MB / Pro 1 GB / Team 2 GB / Enterprise 50 GB).
+   643→- Fetched `docs.github.com/en/repositories/releasing-projects-on-github/about-releases` — confirmed release asset cap: 2 GiB per file, 1000 assets per release, no total size cap.
+   644→- Fetched `docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows` — confirmed 10 GB/repo cache, 14-day TTL, LRU eviction when over the cap.
+   645→- Fetched `docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry` — confirmed GHCR has a 10 GB **per layer** cap and a 10-minute upload timeout, no max image size cap (stack layers), free for public packages.
+   646→- Fetched `actions/upload-artifact` README and MIGRATION.md (raw.githubusercontent.com/actions/upload-artifact/main/...) — confirmed v4 immutable artifacts, v4 deprecation notice for v3, 500-artifacts-per-job cap, permission-loss caveat requiring `tar` + `archive: false` for executable binaries.
+   647→- Fetched the v4 deprecation blog post (`github.blog/changelog/2024-04-16-deprecation-notice-v3-of-the-artifact-actions/`) — confirmed v3 sunset was January 30, 2025; v4 is mandatory.
+   648→- Fetched Termux app workflow `debug_build.yml` and `attach_debug_apks_to_release.yml` (raw.githubusercontent.com/termux/termux-app/master/.github/workflows/...) — found the canonical pattern for shipping a multi-ABI Android APK with binary payload via Actions: matrix on `package_variant`, Gradle `splits.abi` with `universalApk true` + per-ABI APKs, `hub release edit -a` to attach to GitHub Releases. Termux uses `actions/upload-artifact@v6` (current) per-ABI. The APKs are uploaded individually (not merged) to stay under the 2 GB single-artifact cap.
+   649→- Fetched Termux `app/build.gradle` (raw.githubusercontent.com/termux/termux-app/master/app/build.gradle) — found the **bootstrap-zip download** Gradle task: `downloadBootstrap("aarch64", "<sha256>", "<version>")` fetches `https://github.com/termux/termux-packages/releases/download/bootstrap-<ver>/bootstrap-<arch>.zip` to `src/main/cpp/bootstrap-<arch>.zip` and verifies SHA-256. This is the canonical pattern for fetching large binary payloads at build time and embedding them in the APK.
+   650→- Fetched `app/build.gradle` of Strato emulator (raw.githubusercontent.com/strato-emu/strato/master/app/build.gradle) — found the gold-standard pattern: `abiFilters "arm64-v8a"` + `packagingOptions { jniLibs.useLegacyPackaging = true }` + `jniLibs { srcDir "libraries/vklayers" }` for custom native-lib source dirs.
+   651→- Fetched Strato's `pr_build.yml` and `build.yml` (raw.githubusercontent.com/strato-emu/strato/master/.github/workflows/...) — found `hendrikmuhs/ccache-action@v1.2` with `max-size: 3Gi` and Gradle cache pattern keyed on `hashFiles('**/build.gradle')` + `hashFiles('app/**/*.xml')` + `hashFiles('app/**.kt', 'app/**.java')`. Strato uses `CMAKE_CXX_COMPILER_LAUNCHER=ccache` for C++ compile caching.
+   652→- Fetched Azahar emulator's (post-Citra successor) `build.yml` (raw.githubusercontent.com/azahar-emu/azahar/master/.github/workflows/build.yml) — found the **container-image + ccache + SBOM + attestations** pattern: `container: image: opensauce04/azahar-build-environment:latest`, `actions/cache@v5` on `~/.gradle/caches` + `~/.gradle/wrapper` + `$CCACHE_DIR`, `anchore/sbom-action@v0`, `actions/attest@v4` for supply-chain attestation, separate jobs for `linux-x86_64`, `linux-arm64` (on `ubuntu-24.04-arm`), `macos`, `android`, `docker` (image build) — matrix `["vanilla", "googleplay"]` for Android target variants.
+   653→- Fetched Azahar `.ci/android.sh` and `.ci/pack.sh` (raw.githubusercontent.com/azahar-emu/azahar/master/.ci/...) — found the **base64-keystore-from-secret** signing pattern: `base64 --decode <<< "${ANDROID_KEYSTORE_B64}" > "${GITHUB_WORKSPACE}/ks.jks"` then `./gradlew assembleVanillaRelease` + `./gradlew bundleVanillaRelease` then `rm ks.jks`. This is the canonical CI signing pattern.
+   654→- Fetched Box64's `release.yml` workflow (raw.githubusercontent.com/ptitSeb/box64/main/.github/workflows/release.yml) — found the **WCP archive generation** pipeline that upstream Box64 already uses for Winlator integration: matrix on `platform: [X64, RISCV, RK3588, ARM64, ANDROID, TERMUX, LARCH64, PPC64LE, ANDROID_GLIBC, WOW64, ARM64EC]`, with `ANDROID_GLIBC` (on `ubuntu-22.04-arm`) producing `box64-latest.wcp` via `tar --zstd -cf box64-latest.wcp box64 profile.json` after `patchelf --set-interpreter /data/data/com.winlator/files/imagefs/usr/lib/ld-linux-aarch64.so.1 ./box64`. The `ANDROID` matrix entry (on `ubuntu-latest`) produces `box64-latest.rat` for MiceWine via `7z -tzip -mx=5 a box64-latest.rat files pkg-header`. Both upload via `actions/upload-artifact@v4`. This is a **direct reference implementation** for one of our pipeline stages.
+   655→- Searched GitHub for `winlator-assets-builder` repos and found `idans320/winlator-assets-builder` — fetched its README. Confirmed it's a **Devbox-based cross-compilation build system** that produces Winlator `.wcp`/`.zip` asset packages for Mesa Turnip, FEXCore (Windows ARM64 PE), Wine 11 Proton, Box64, DXVK GPLAsync-LowLatency. It cross-compiles 5 upstream projects for ARM64 Android + Windows-on-ARM. Tuned for Snapdragon 8 Elite X (Oryon-1). This is the **closest existing reference** for our build pipeline; their approach (`devbox run -- bash mesa/build.sh`) could be lifted nearly verbatim into our Actions job with `setup-devbox/build-and-run-action` or by replicating the devbox setup with raw `apt-get`.
+   656→- Searched for the cmod GLIBC variant and found `En-nagakiro/winlator-cmod-zh` — fetched its README. Confirmed the **end-state APK size for a pre-baked Winlator CMOD** is **540.73 MB** (single APK, no expansion files, no asset packs, no Steam install included — just Winlator + Wine + Turnip + Box64 + DXVK + container templates). This is the floor: WepWawet will be substantially larger (add Steam + Wallpaper Engine + WE workshop content).
+   657→- Fetched AGP 4.2 release notes (developer.android.com/build/releases/past-releases/agp-4-2-0-release-notes#useLegacyPackaging-default-changed) — confirmed the default changed to `useLegacyPackaging = false` (compressed, page-aligned) in AGP 4.2+. We need `useLegacyPackaging = true` to force extraction of native libs to the filesystem at install time (required for `dlopen()` of Wine/Box64 binaries that expect to be on disk).
+   658→- Verified `actions/cache@v4` README — confirmed 10 GB per repo default (matches the Actions limits doc) and 7-day TTL eviction (i.e., "Caches that are not accessed within the last week will also be evicted" — note that the official docs say "14 days" while the actions/cache README says "last week"; I'll quote the more conservative 7-day figure for cache planning, then check the other reference for the 14-day figure).
+   659→- Looked for the GitHub-hosted "larger runners" specs table (`ubuntu-24.04-16core` etc.) — found references to labels (`ubuntu-24.04-16core`, `windows-2022-16core`, `macos-26-xlarge`) in the `running-jobs-on-larger-runners` doc but the exact specs (16-core = 64 GB RAM / 80 GB SSD; 32-core = 128 GB RAM / 80 GB SSD; 64-core = 256 GB RAM / 80 GB SSD) require a `Team` or `Enterprise Cloud` plan; standard `ubuntu-latest` runners on Free/Pro are limited to 2-core x64 / 8 GB RAM / 14 GB SSD on private repos (4-core / 16 GB / 14 GB SSD on public repos). The 4-core/16 GB figure is the canonical number published in the reference page I fetched.
+   660→
+   661→Key sources consulted (URLs):
+   662→- https://support.google.com/googleplay/android-developer/answer/9859372 (Google Play max app size limits — base 500 MB, asset pack 1.5 GB, install-time total 4 GB, on-demand total 30 GB, max AAB total 34 GB, legacy APK 100 MB)
+   663→- https://developer.android.com/google/play/expansion-files (OBB — deprecated for new apps Aug 2021)
+   664→- https://developer.android.com/guide/app-bundle/asset-delivery (Play Asset Delivery as OBB successor)
+   665→- https://developer.android.com/build/releases/past-releases/agp-4-2-0-release-notes (useLegacyPackaging default change)
+   666→- https://docs.github.com/en/actions/reference/runners/github-hosted-runners (Standard hosted runner hardware table)
+   667→- https://docs.github.com/en/actions/reference/limits (canonical Actions hard-cap table — 6h job, 35 days workflow, 256 matrix, 500 KB workflow file, 10 GB cache, storage per plan)
+   668→- https://docs.github.com/en/billing/managing-billing-for-github-actions/about-billing-for-github-actions (per-minute rates, included storage per plan)
+   669→- https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases (2 GiB per release asset, 1000 assets per release)
+   670→- https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows (cache eviction policy)
+   671→- https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry (GHCR 10 GB per layer, 10 min upload timeout)
+   672→- https://github.com/actions/upload-artifact/blob/main/README.md (v4 immutable artifacts, 500 per job, permission-loss caveat, compression-level 0 for binaries)
+   673→- https://github.com/actions/upload-artifact/blob/main/docs/MIGRATION.md (v3→v4 breaking changes)
+   674→- https://github.blog/changelog/2024-04-16-deprecation-notice-v3-of-the-artifact-actions/ (v3 sunset Jan 30, 2025)
+   675→- https://github.com/termux/termux-app/blob/master/.github/workflows/debug_build.yml (canonical per-ABI APK matrix build)
+   676→- https://github.com/termux/termux-app/blob/master/.github/workflows/attach_debug_apks_to_release.yml (`hub release edit -a` to attach APKs)
+   677→- https://github.com/termux/termux-app/blob/master/app/build.gradle (bootstrap-zip download with SHA-256 verification, ABI splits, `useLegacyPackaging = true`)
+   678→- https://github.com/strato-emu/strato/blob/master/app/build.gradle (`abiFilters "arm64-v8a"`, `useLegacyPackaging = true`, custom `jniLibs` srcDir)
+   679→- https://github.com/strato-emu/strato/blob/master/.github/workflows/build.yml (`hendrikmuhs/ccache-action@v1.2` with `max-size: 3Gi`, Gradle cache pattern)
+   680→- https://github.com/strato-emu/strato/blob/master/.github/workflows/pr_build.yml (per-PR APK upload pattern)
+   681→- https://github.com/azahar-emu/azahar/blob/master/.github/workflows/build.yml (container-image + ccache + SBOM + attestation, `ubuntu-24.04-arm` for ARM64, Docker image build job)
+   682→- https://github.com/azahar-emu/azahar/blob/master/.ci/android.sh (base64-keystore-from-secret signing pattern)
+   683→- https://github.com/azahar-emu/azahar/blob/master/.ci/pack.sh (artifact zip + GitHub Release packaging)
+   684→- https://github.com/ptitSeb/box64/blob/main/.github/workflows/release.yml (Box64 matrix build, WCP archive generation for Winlator)
+   685→- https://github.com/idans320/winlator-assets-builder (Devbox-based Winlator asset packager — closest reference)
+   686→- https://github.com/En-nagakiro/winlator-cmod-zh (Android 16 + 16 KB page + Proton 9.0 ARM64EC + Turnip 26.2.0 + DXVK 2.3.1 ARM64EC pre-baked — 540 MB single APK)
+   687→- https://github.com/brunodev85/winlator/tree/main/installable_components/box64 (Winlator `.tzst` component format — `box64-0.3.7.tzst` etc.)
+   688→- https://github.com/actions/runner-images/blob/main/README.md (Ubuntu 22.04/24.04/26.04 + arm64 image labels)
+   689→- https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md (Ubuntu 24.04 image contents — Clang 16/17/18, GNU C++ 12/13/14, CMake 3.31.6, etc.)
+   690→
+   691→Stage Summary:
+   692→
+   693→### Android APK/AAB Size Limits & Shipping Strategy
+   694→
+   695→**For a Google Play–distributed app**, the hard caps (per the canonical Play Console Help answer page 9859372) are:
+   696→
+   697→| App component | Download size limit |
+   698→|---|---|
+   699→| Base module (AAB) | 500 MB |
+   700→| Individual feature module | 500 MB |
+   701→| Individual asset pack (Play Asset Delivery) | 1.5 GB |
+   702→| Cumulative total — install-time asset packs + modules | 4 GB |
+   703→| Cumulative total — on-demand / fast-follow asset packs | 30 GB |
+   704→| **Maximum total compressed download size on Play** | **34 GB** |
+   705→| Legacy APK (no AAB) | 100 MB |
+   706→| Apps > 1 GB | minSdk must be ≥ 21 (Lollipop) |
+   707→| Apps > 200 MB on mobile data | non-blocking "large app" warning dialog |
+   708→| Max feature modules | 100 (minSdk ≥ 26) or 50 (lower) |
+   709→| Max asset packs per bundle | 100 |
+   710→
+   711→From August 2021, new apps **must** be AAB; from June 2023, TV apps **must** be AAB. The legacy APK Expansion Files (OBB) path is **deprecated for new apps** — Google explicitly directs new >200 MB apps to Play Asset Delivery (PAD) instead. PAD has three delivery modes: install-time (packaged with the APK at install), fast-follow (auto-downloaded immediately after install), and on-demand (downloaded when the user opens a feature). All three are served from Google Play's CDN free of charge.
+   712→
+   713→**For our WepWawet use case, none of this matters**: the user is **sideloading** the APK on their own device — no Play Console, no Play Store delivery, no PAD. The Play Store rules govern only Play distribution. For sideloaded APKs, the only practical caps are (a) Android's APK installer compatibility (~2 GB unsigned ZIP central-directory limit on older devices, ~4 GB on devices with the new APK installer; in practice anything under ~2 GB installs cleanly on Android 8+) and (b) filesystem free space. The Android `apksigner` v3+ and Android 11+ package installer handle APKs up to 4 GB cleanly. We should target **a single sideloaded APK of 1–2 GB total** to stay safely under the 2 GB ZIP central-directory cap that affects older Android package installers, or **a single APK + a sidecar `.obb`/`.zip` payload that the user manually copies** to `/sdcard/Android/obb/<package>/main.<versionCode>.<package>.obb` (the legacy OBB path) — the legacy OBB pattern still works on sideloaded APKs because the OBB API doesn't require Play Store hosting, it just looks for files on the filesystem.
+   714→
+   715→**Recommended sideloaded shipping approach** for WepWawet, in order of preference:
+   716→1. **Single APK with everything bundled** (target ≤ 2 GB). Place the heavy binaries (Box64, Wine prefix, rootfs, Turnip driver, DXVK, VKD3D) under `src/main/cpp/` or `assets/` as `.tzst` archives (matching Winlator's existing `.tzst` component format). Use `packagingOptions.jniLibs.useLegacyPackaging = true` to force the Android installer to extract native libraries to the filesystem at install time so they can be `dlopen()`'d by the runtime. On first launch, the foreground service extracts the `.tzst` archives to `/data/data/com.wepwawet/files/imagefs/` and chains into Winlator's existing `XEnvironment` bootstrap.
+   717→2. **Single thin APK (~30 MB, just the foreground service + UI) + sidecar OBB payload** (~1.5–3 GB) the user downloads separately and copies to `/sdcard/Android/obb/com.wepwawet/`. The OBB is just a renamed `.zip` — the app reads it via `StorageManager.getMountedObbPath()`. Pros: thin APK installs instantly on any device; no APK installer limits. Cons: requires user to manually copy the OBB; we need to handle "first launch before OBB present" gracefully.
+   718→3. **Play Asset Delivery install-time asset pack** — only viable if we ever ship on Play; requires Play Console setup, an AAB (not APK), and asset packs signed with the same key. Not applicable to our sideload scenario but worth documenting in case we ever pivot.
+   719→
+   720→The canonical reference is **Termux**: they ship a single APK per ABI (~30 MB each, plus universal) with the bootstrap zips (~50 MB each) embedded in `src/main/cpp/`. Their per-ABI APKs are small; the universal APK contains all four bootstrap zips and is much larger. We follow this pattern but for our 1–2 GB payload we should generate per-ABI APKs only (single `arm64-v8a` ABI is fine since Winlator already targets arm64-v8a only) — no need for ABI splits, but a single fat APK is acceptable for sideloading.
+   721→
+   722→### GitHub Actions Limits That Matter
+   723→
+   724→| Limit | Value | Source |
+   725→|---|---|---|
+   726→| Job execution time (GitHub-hosted) | 6 hours | docs.github.com/en/actions/reference/limits |
+   727→| Job execution time (self-hosted) | 5 days | docs.github.com/en/actions/reference/limits |
+   728→| Job queue time | 24 hours | docs.github.com/en/actions/reference/limits |
+   729→| Workflow run time (total, including queue + approval) | 35 days | docs.github.com/en/actions/reference/limits |
+   730→| Job matrix size | 256 jobs / workflow run | docs.github.com/en/actions/reference/limits |
+   731→| Workflow file size | 500 KB per `.yml` file | docs.github.com/en/actions/reference/limits |
+   732→| Concurrent jobs (Free plan) | 20 (5 macOS, no GPU) | docs.github.com/en/actions/reference/limits |
+   733→| Concurrent jobs (Pro) | 40 (5 macOS) | docs.github.com/en/actions/reference/limits |
+   734→| Concurrent jobs (Team) | 60 (5 macOS) | docs.github.com/en/actions/reference/limits |
+   735→| Concurrent jobs (Enterprise) | 500 (50 macOS) | docs.github.com/en/actions/reference/limits |
+   736→| Larger runner concurrency (Team / Enterprise) | 1000 (50–100 macOS / 100 GPU) | docs.github.com/en/actions/reference/limits |
+   737→| Cache storage per repository | 10 GB default (14-day TTL; 7-day TTL per `actions/cache` README — evicted by LRU once over cap) | docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows |
+   738→| Artifact storage per repo (Free) | 500 MB total | docs.github.com/en/billing/.../about-billing-for-github-actions |
+   739→| Artifact storage (Pro) | 1 GB total | same |
+   740→| Artifact storage (Team) | 2 GB total | same |
+   741→| Artifact storage (Enterprise Cloud) | 50 GB total | same |
+   742→| **Per-artifact size cap (`actions/upload-artifact@v4`)** | **2 GB per individual artifact upload** | v4 release notes + actions/upload-artifact README; v3 had a 5 GB cap, v4 reduced to 2 GB; artifacts are immutable and per-job |
+   743→| Artifacts per job | 500 | actions/upload-artifact README "Limitations" section |
+   744→| **Release asset file size** | **2 GiB per file, 1000 assets per release, no total size cap** | docs.github.com/en/repositories/releasing-projects-on-github/about-releases |
+   745→| Standard Ubuntu x64 runner (public repo) | 4 vCPU, 16 GB RAM, 14 GB SSD | docs.github.com/en/actions/reference/runners/github-hosted-runners |
+   746→| Standard Ubuntu x64 runner (private repo on Free/Pro) | **2 vCPU, 8 GB RAM, 14 GB SSD** | same |
+   747→| Standard Ubuntu arm64 runner | 2 vCPU, 8 GB RAM, 14 GB SSD (`ubuntu-24.04-arm`, `ubuntu-22.04-arm`) | same |
+   748→| Standard macOS Intel | 4 vCPU, 14 GB RAM, 14 GB SSD | same |
+   749→| Standard macOS M1 (arm64) | 3 vCPU, 7 GB RAM, 14 GB SSD | same |
+   750→| Larger Linux runners (e.g. `ubuntu-24.04-16core`) | up to 64-core, 256 GB RAM, 80 GB SSD — Team / Enterprise Cloud only, always billed per minute even on public repos | docs.github.com/en/actions/using-github-hosted-runners/using-larger-runners |
+   751→| GHCR (Container Registry) | **10 GB per layer**, 10-minute upload timeout, **no image total-size cap** (stack layers) | docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry |
+   752→| GitHub Packages storage (Free) | 500 MB (shared with Actions artifacts) | docs.github.com/en/billing/.../about-billing-for-github-packages |
+   753→| GitHub Packages storage (Enterprise) | 50 GB | same |
+   754→| Actions minute rate (Linux x64) | $0.006/min | docs.github.com/en/billing/.../about-billing-for-github-actions |
+   755→| Actions minute rate (Linux slim 1-core) | $0.002/min | same |
+   756→| Actions minute rate (Linux arm64 2-core) | $0.005/min | same |
+   757→| Actions minute rate (Windows 2-core) | $0.010/min | same |
+   758→| Actions minute rate (macOS 3/4-core) | $0.062/min | same |
+   759→| Storage overage | $0.25/GB/month (shared: artifacts + GHCR) | same |
+   760→| Cache storage overage | $0.07/GB/month | same |
+   761→
+   762→**Key implications for our 1–4 GB APK:**
+   763→1. **The 2 GB single-artifact cap is the binding constraint** on `actions/upload-artifact@v4`. If the APK is >2 GB, we cannot upload it as a single artifact. We must either (a) split the APK into a thin installer APK + asset pack APK and upload separately, (b) split the binary payload into chunks and reassemble at the user's side, or (c) **ship via GitHub Releases** (2 GiB per file — same cap, but unlimited total per release).
+   764→2. **GitHub Releases is the right distribution channel**: 2 GiB per asset, 1000 assets per release, no total cap, free unlimited downloads for public repos. We can ship a 4 GB APK as 2 release assets (`wepwawet-base.apk` + `wepwawet-payload.zip` or `wepwawet-base.apk.7z.001` + `.7z.002` etc.).
+   765→3. **Public repo = free Actions**. The repo should be public (the source code is LGPL/GPL-bound anyway from Winlator). Standard runners on public repos give 4-core / 16 GB / 14 GB SSD, which is enough to build the APK once cached. Storage is also free for public repos.
+   766→4. **The 10 GB GHCR per-layer cap matters**: if our Docker image with all build deps preinstalled exceeds 10 GB in a single layer, the push fails. We need to split into multiple layers and keep the heaviest payloads (e.g. the Wine prefix bootstrap) in their own layer under 10 GB each.
+   767→5. **6-hour job execution cap on GitHub-hosted**: this is the wall — a clean build of all five upstream projects (Box64 + Wine + Mesa Turnip + DXVK + VKD3D) from source, plus the APK packaging, will time out on a single 4-core / 16 GB runner without aggressive caching. Mitigations: (a) pre-build all the heavy binary payloads in a Docker image hosted on GHCR; (b) split the build into multiple jobs (one per component) and assemble at the end; (c) use a self-hosted runner for the actual APK assembly step.
+   768→
+   769→### Recommended Build Pipeline Architecture
+   770→
+   771→The recommended pipeline has **three layers**:
+   772→
+   773→**(1) GHCR-hosted Docker image (`wepwawet/builder`) with all dependencies preinstalled.** Maintained in its own repo or as a `Dockerfile` in the main repo at `.github/Dockerfile.builder`. The image is built on a schedule (weekly) and on push to the image's directory. It bundles: NDK r26b (or whatever Winlator pins), Wine build toolchain (MinGW-w64 + flex + bison + gnutls + libx11 + libfreetype), Box64 cross-build deps (`gcc-aarch64-linux-gnu` for the GLIBC variant), Mesa build deps (meson + mako + python3 + glslang + libdrm-dev), DXVK/VKD3D build deps (MinGW + glslang + spirv-tools), the `llvm-mingw` ARM64 toolchain (already pinned by Box64's CI), and pre-fetched Wine source tarball / FEX-Emu / Wine-Proton git submodule. The image's `LABEL` should record versioned dependency SHA so we can `docker pull ghcr.io/wepwawet/builder:<sha>` and get reproducible builds. Image size target: 5–8 GB (under the 10 GB per-layer cap; if we exceed it, split into 2 layers via multi-stage `COPY --from=builder`).
+   774→
+   775→**(2) Thin Actions workflow that pulls the image and runs a build matrix.** Workflow at `.github/workflows/build.yml`:
+   776→- Job `build-binaries` (matrix: `box64`, `wine`, `mesa-turnip`, `dxvk`, `vkd3d` — 5 parallel jobs) — each job runs in `container: ghcr.io/wepwawet/builder:<sha>`, checks out the source, runs the component's `build.sh`, uploads the output (typically a `.tzst` archive in the Winlator installable-component format) as a separate v4 artifact. Each job uses `hendrikmuhs/ccache-action@v1.2` with `max-size: 5Gi` to cache C++ compilation across runs (Strato's pattern).
+   777→- Job `build-apk` (depends on `build-binaries`) — runs on `ubuntu-latest`, downloads all five `.tzst` artifacts via `actions/download-artifact@v4` with `merge-multiple: true`, places them at `wepwawet-app/src/main/cpp/installable_components/{box64,wine,turnip,dxvk,vkd3d}/<file>.tzst`, then runs `./gradlew assembleRelease bundleRelease`. Signs with the base64-keystore-from-secret pattern. Uploads the signed APK/AAB as a v4 artifact (split into chunks if >2 GB) and pushes to GitHub Releases if the trigger was a tag.
+   778→
+   779→**(3) Release workflow at `.github/workflows/release.yml`.** Triggered on `release: types: [published]`. Pulls the APK artifact, splits into 1.9 GB chunks via `split -b 1900m` if necessary, and attaches all chunks + a sha256sums file to the release via the GitHub CLI (`gh release upload <tag> <files>` — modern replacement for the deprecated `hub release edit -a` that Termux still uses).
+   780→
+   781→This matches the Azahar pattern exactly: container image with prebuilt deps + ccache + per-component matrix build job + final assemble job + GitHub Release attachment. It also matches Box64's pattern: matrix on `platform` and `type`, per-platform build steps, per-component artifact upload. And it inherits Termux's bootstrap-zip download pattern as a fallback for fetching large payloads from upstream release URLs with SHA-256 verification.
+   782→
+   783→### Caching Strategy
+   784→
+   785→| Asset | Size estimate | Cache decision |
+   786→|---|---|---|
+   787→| NDK r26b + SDK + cmdline-tools | ~3 GB | Bake into GHCR image (rebuild weekly) |
+   788→| Wine source tree (from Proton fork) | ~500 MB | Bake into GHCR image as a `git submodule` init step |
+   789→| MinGW-w64 + llvm-mingw ARM64 toolchain | ~1.5 GB | Bake into GHCR image |
+   790→| Mesa source + meson deps | ~2 GB | Bake into GHCR image |
+   791→| `~/.gradle/caches` + wrapper | ~1 GB | `actions/cache@v4` keyed on `hashFiles('**/build.gradle*', '**/gradle-wrapper.properties')` (Azahar pattern) |
+   792→| C++ compilation cache (ccache dir) | up to 5 GB | `hendrikmuhs/ccache-action@v1.2` with `max-size: 5Gi`, keyed on component + NDK version (`string:${NDK_VERSION}` to avoid cache invalidation on toolchain timestamp drift — Strato pattern) |
+   793→| Box64 build outputs (.wcp archive) | ~4 MB | v4 artifact per build — too small to bother caching |
+   794→| Wine prefix bootstrap (~700 MB compressed) | 700 MB | v4 artifact — exceeds 10 GB cache cap when combined with other caches, so ship as a v4 artifact (with `archive: false` to preserve executable bits, per upload-artifact README) |
+   795→| Mesa Turnip `vulkan.turnip.so` | ~50 MB | v4 artifact |
+   796→| DXVK .dll set | ~30 MB | v4 artifact |
+   797→| Final APK | 1–4 GB | GitHub Release asset (2 GiB per asset cap — chunk if needed) |
+   798→
+   799→The **10 GB cache repo cap** is the binding constraint for actions/cache. We must NOT try to cache the Wine prefix bootstrap in actions/cache (700 MB by itself is fine, but combined with ccache + gradle + NDK it'll blow past 10 GB and evict on every run). Instead, ship Wine prefix outputs as v4 artifacts and use `actions/download-artifact@v4` to chain them into the APK assemble job. The `actions/cache` bucket is reserved for Gradle + ccache — both of which have short restore time and high hit rate.
+   800→
+   801→**What to bake into the GHCR image:** every build toolchain and large source tree that doesn't change between commits. **What to cache via `actions/cache`:** Gradle/AGP dependency caches and C++ compilation cache. **What to ship via v4 artifact:** per-component binary payloads (the `.tzst` archives). **What to ship via GitHub Release:** the final APK/AAB. This three-tier hierarchy keeps the workflow under 6 hours and the cache under 10 GB.
+   802→
+   803→### Code Signing in CI
+   804→
+   805→**Sign the APK in CI using a base64-encoded keystore stored as a repository secret.** This is the canonical pattern (Azahar's `.ci/android.sh`):
+   806→
+   807→```bash
+   808→# In the workflow, after checkout:
+   809→- name: Decode keystore
+   810→  env:
+   811→    ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+   812→  run: |
+   813→    echo "$ANDROID_KEYSTORE_B64" | base64 --decode > "$GITHUB_WORKSPACE/wepwawet.jks"
+   814→- name: Build signed APK
+   815→  env:
+   816→    ANDROID_KEYSTORE_FILE: ${{ github.workspace }}/wepwawet.jks
+   817→    ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+   818→    ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+   819→    ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
+   820→  run: ./gradlew assembleRelease bundleRelease
+   821→- name: Cleanup keystore
+   822→  if: always()
+   823→  run: rm -f "$GITHUB_WORKSPACE/wepwawet.jks"
+   824→```
+   825→
+   826→The `build.gradle` reads `ANDROID_KEYSTORE_FILE` / `ANDROID_KEY_ALIAS` / `ANDROID_KEYSTORE_PASS` / `ANDROID_KEY_PASS` env vars and wires them into `signingConfigs.release`. The `if: always()` cleanup step guarantees the keystore is deleted even if the build fails — important because GitHub-hosted runner VMs are decommissioned after the job, but defense in depth is good practice.
+   827→
+   828→For the WepWawet project (single user, single developer), an alternative is to **ship unsigned APKs and have the user sign locally** with their own keystore (`apksigner sign --ks debug.keystore wepwawet.apk`). This eliminates the risk of the keystore leaking via a leaked repo secret. However, it complicates the user install (they need Android SDK `apksigner` tool). Recommended: **provide both** — push signed APKs to GitHub Releases (using repo secrets), AND push an unsigned variant for users who want to use their own key. The signed APK is the default download.
+   829→
+   830→For attestation (provenance), Azahar uses `actions/attest@v4` with SBOM via `anchore/sbom-action@v0`. For WepWawet this is optional but nice — we should at least generate an SBOM (`spdx-json`) for the final APK and publish an attestation linking the release asset to its build. This gives the user a verifiable "this APK was built from commit X" claim.
+   831→
+   832→### Self-Hosted Runner Consideration
+   833→
+   834→**Do not recommend a self-hosted runner for WepWawet's initial pipeline.** Reasoning:
+   835→1. The user is a single developer; setting up a self-hosted runner is a one-time config cost for ongoing maintenance burden.
+   836→2. The 6-hour hosted job cap is **sufficient** if we (a) bake all toolchains into the GHCR image (saves ~1.5h of apt-get + NDK fetch per run), (b) cache Gradle + ccache (saves 30–60 min per component build), (c) parallelize via matrix (5 components × ~30 min each = 30 min wall time, not 2.5h).
+   837→3. Self-hosted runners add security surface — a malicious PR can execute arbitrary code on the self-hosted machine, which is bad for a developer workstation. Hosted runners are isolated VMs.
+   838→
+   839→**Switch to self-hosted only if**:
+   840→- The full APK build exceeds 6 hours consistently (after caching is mature). Most likely cause would be Wine build (the single slowest component — 60–90 min cold build of Wine from source).
+   841→- We add a Windows-on-ARM cross-compile step that the hosted arm64 runners can't do (the new `windows-11-arm` and `windows-11-vs2026-arm` labels exist on hosted runners as of 2024, so this is unlikely).
+   842→- We need nested virtualization (KVM) for some build step — explicitly **not supported** on GitHub-hosted per the official docs.
+   843→- We need access to a physical Adreno device for on-runner testing.
+   844→
+   845→The **Docker image approach** (baking all deps into a GHCR image) gives us most of the speed benefits of a self-hosted runner without any of the maintenance burden. The runner still uses GitHub-hosted compute; it just `docker pull`s a prebuilt image with everything in it. This is exactly what Azahar does (`opensauce04/azahar-build-environment:latest`).
+   846→
+   847→### Estimated Build Time
+   848→
+   849→| Stage | Cold (no cache) | Warm (with cache + GHCR image) |
+   850→|---|---|---|
+   851→| Pull GHCR builder image (5 GB) | 2–3 min | 1 min (layer cache on runner) |
+   852→| Checkout + submodule init | 1 min | 1 min |
+   853→| Build Box64 (android-glibc variant, .wcp archive) | 5–10 min | 3–5 min (ccache hit) |
+   854→| Build Wine 10.x prefix (Proton fork, ARM64EC + aarch64 + i386 + x86_64) | **60–90 min** | 30–45 min (ccache hit) — Wine is the slowest component |
+   855→| Build Mesa Turnip (`vulkan.turnip.so`) | 20–30 min | 10–15 min |
+   856→| Build DXVK (ARM64 PE DLLs via llvm-mingw) | 15–25 min | 8–12 min |
+   857→| Build VKD3D (ARM64 PE DLLs) | 10–15 min | 5–8 min |
+   858→| Assemble APK via Gradle (download .tzst artifacts → sign → bundle) | 5–10 min | 5–10 min |
+   859→| Upload artifacts + push to Releases | 2–5 min | 2–5 min |
+   860→| **Total (parallel matrix, 5 jobs)** | **~90 min wall time** | **~50 min wall time** |
+   861→| **Total (sequential single job)** | **~3.5 hours** | **~2 hours** |
+   862→
+   863→Cold build stays well under the 6-hour job cap on a 4-core / 16 GB runner thanks to the 5-way matrix parallelism. Wine is the bottleneck — if Wine ever pushes us over 6h on a single cold run, split Wine into a separate workflow that builds Wine into a v4 artifact on a schedule (e.g. daily) and have the main workflow download it.
+   864→
+   865→### Existing Reference Projects
+   866→
+   867→| Project | What we lift | URL |
+   868→|---|---|---|
+   869→| **Azahar (Citra successor)** | Container-image-with-prebuilt-deps pattern, ccache + SBOM + attestation, `actions/attest@v4`, `anchore/sbom-action@v0`, the `actions/cache@v5` Gradle + ccache keying pattern, base64-keystore signing, per-target matrix (`vanilla` vs `googleplay`), `ubuntu-24.04-arm` for ARM64 Linux, separate `docker` job for image build | https://github.com/azahar-emu/azahar/blob/master/.github/workflows/build.yml, https://github.com/azahar-emu/azahar/blob/master/.ci/android.sh, https://github.com/azahar-emu/azahar/blob/master/.ci/pack.sh |
+   870→| **Box64 (upstream)** | The WCP archive generation pipeline for Winlator integration (the `tar --zstd -cf box64-latest.wcp box64 profile.json` + `patchelf --set-interpreter /data/data/com.winlator/files/imagefs/usr/lib/ld-linux-aarch64.so.1 ./box64` pattern), matrix on `ANDROID_GLIBC` (on `ubuntu-22.04-arm`) producing the WCP file, `actions/upload-artifact@v4` to publish | https://github.com/ptitSeb/box64/blob/main/.github/workflows/release.yml |
+   871→| **Strato (Switch emulator)** | `abiFilters "arm64-v8a"` + `packagingOptions { jniLibs.useLegacyPackaging = true }` + custom `jniLibs { srcDir "..." }` gradle pattern, `hendrikmuhs/ccache-action@v1.2` with `max-size: 3Gi`, `CCACHE_COMPILERCHECK: "string:${NDK_VERSION}"` to avoid timestamp drift, `CMAKE_CXX_COMPILER_LAUNCHER: "ccache"` | https://github.com/strato-emu/strato/blob/master/app/build.gradle, https://github.com/strato-emu/strato/blob/master/.github/workflows/build.yml, https://github.com/strato-emu/strato/blob/master/.github/workflows/pr_build.yml |
+   872→| **Termux** | Bootstrap-zip download with SHA-256 verification (`downloadBootstrap(arch, sha256, version)`), `splits.abi` + `universalApk true`, `actions/upload-artifact@v6` per-ABI (not merged — stays under 2 GB cap), `hub release edit -a` to attach APKs to GitHub Releases (we'll switch to modern `gh release upload`) | https://github.com/termux/termux-app/blob/master/.github/workflows/debug_build.yml, https://github.com/termux/termux-app/blob/master/.github/workflows/attach_debug_apks_to_release.yml, https://github.com/termux/termux-app/blob/master/app/build.gradle |
+   873→| **idans320/winlator-assets-builder** | Devbox-based cross-compilation pattern for the 5 Winlator asset packages — **the closest existing reference for our build pipeline**, can lift nearly verbatim | https://github.com/idans320/winlator-assets-builder |
+   874→| **En-nagakiro/winlator-cmod-zh** | End-state APK size reference — pre-baked Winlator CMOD ships as a single 540.73 MB APK with Wine + Turnip + Box64 + DXVK + container templates. Android 16 + 16 KB page compatible. Proton 9.0 ARM64EC + Turnip 26.2.0 + DXVK 2.3.1 ARM64EC pre-baked. WepWawet's APK will be larger because we add Steam (~1 GB) and Wallpaper Engine. | https://github.com/En-nagakiro/winlator-cmod-zh (Releases page) |
+   875→
+   876→### Critical Unknowns
+   877→
+   878→1. **The exact Wine build time on a 4-core / 16 GB hosted runner.** Wine is the single slowest component (60–90 min cold, 30–45 min with ccache). If we ever have a clean cache and Wine takes >4h, we hit the 6-hour cap. **Mitigation**: bake a Wine build intermediate into a GHCR image layer (under 10 GB per layer — Wine prefix compressed is ~700 MB so this is fine), or split Wine into its own scheduled workflow.
+   879→2. **Whether `gh release upload` chunks a 4 GB file.** Per the docs, the per-asset cap is 2 GiB — `gh release upload` will reject a >2 GiB file. We must pre-chunk via `split -b 1900m wepwawet.apk wepwawet.apk.part.` and upload each `.part.NN` as a separate asset. Need to verify the exact `gh` behavior on a 2 GiB boundary (1.9 GB chunks are safe).
+   880→3. **Whether the Wine prefix bootstrap, packaged as a `.tzst` in the APK assets/, extracts fast enough at first launch on the user's phone.** A 700 MB Zstd-compressed tarball extracts in ~30–60 s on a Snapdragon 8 Gen 2 — acceptable but worth testing. Winlator already does this for the Ubuntu Focal rootfs, so the pattern is proven.
+   881→4. **License compliance for bundling Wine + DXVK + VKD3D in a proprietary APK shell.** Wine is LGPL 2.1 (must publish our modifications to Wine's source — Winlator already does this and we inherit). DXVK is Zlib (permissive). VKD3D is LGPL 2.1. Mesa Turnip is MIT. Box64 is MIT. Steam runtime is proprietary (Valve's license allows redistribution as part of a Steam install but not standalone). Wallpaper Engine is proprietary (we bundle the user's own install, not the runtime — should be fine). We need a small `THIRD_PARTY_LICENSES.md` shipped inside the APK at `assets/licenses.txt` and a clickable "Open Source Licenses" link in our app's settings to satisfy each component's license terms.
+   882→5. **Whether the APK is going to be GPL3 (cmod-zh variant) or LGPL 2.1 (vanilla Winlator).** The cmod-zh variant's improvements (Android 16 + 16 KB page compatibility, immunity patches, shortcut fixes) are critical for our flagship target and are GPL3-licensed. If we base WepWawet on cmod-zh, the entire app must be GPL3. If we base on vanilla Winlator v11.2 and re-port the cmod fixes ourselves (clean-room), we stay LGPL 2.1. **Recommendation**: fork vanilla Winlator v11.2, study the cmod-zh patches, re-implement the critical fixes (Android 16 Bionic FORTIFY workarounds, 16 KB page compatibility) in our own LGPL code, publish the fork under LGPL 2.1. This keeps the WepWawet-specific UI code (which doesn't link against LGPL'd internals) in a separate proprietary module. **Need legal review.**
+   883→6. **The Android APK installer's behavior on a 1.5 GB single APK on the user's specific device.** Android 11+ should handle it cleanly, but some OEM package installers (Samsung One UI, MIUI) have been reported to fail on APKs >1 GB. Mitigation: provide a thin-APK + sidecar-OBB fallback if the user's installer rejects the fat APK. **Need user-side testing on the actual target device.**
+   884→7. **Whether Steam can be pre-baked into the Wine prefix at build time or must be installed at first launch.** Pre-baking Steam (~1 GB) into the Wine prefix shipped in the APK would mean the user can log in immediately on first launch (no Steam download); but Steam's EULA may forbid redistributing a pre-installed Steam client. Need legal review; safer path is to ship an empty Wine prefix and run `SteamSetup.exe` at first launch (the ivonblog tutorial's approach) — but this requires the user to be online at first launch and Steam's download (~1 GB) takes 5–10 min on a flagship.
+   885→8. **The ccache-action 5 GiB max-size and the 10 GB repo cache cap interact badly with our ccache needs.** If we cache all 5 components' C++ compilation (Box64 + Wine + Mesa + DXVK + VKD3D), ccache could easily exceed 10 GB combined. Mitigation: each component's `ccache-action` is in a separate job (separate cache key), so each gets 10 GB of repo cache to itself (well, the repo cache is shared, so the total across all jobs in the repo is still 10 GB). Need to either (a) reduce per-component ccache max-size to 2 GiB (5 × 2 = 10 GiB exactly at the cap), or (b) use the GHCR image to bake the ccache too (less ideal — defeats the purpose of incremental ccache).
+   886→
+   887→### Key URLs
+   888→- Google Play max size limits: https://support.google.com/googleplay/android-developer/answer/9859372
+   889→- APK Expansion Files (OBB — deprecated): https://developer.android.com/google/play/expansion-files
+   890→- Play Asset Delivery: https://developer.android.com/guide/app-bundle/asset-delivery
+   891→- AGP useLegacyPackaging default change: https://developer.android.com/build/releases/past-releases/agp-4-2-0-release-notes
+   892→- GitHub-hosted runners reference (hardware specs): https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+   893→- GitHub Actions limits (hard caps): https://docs.github.com/en/actions/reference/limits
+   894→- GitHub Actions billing: https://docs.github.com/en/billing/managing-billing-for-github-actions/about-billing-for-github-actions
+   895→- About GitHub Releases (2 GiB per asset): https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases
+   896→- Caching dependencies: https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows
+   897→- GHCR Container Registry (10 GB per layer): https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry
+   898→- actions/upload-artifact README (v4 immutable, 500/job, permission loss): https://github.com/actions/upload-artifact/blob/main/README.md
+   899→- actions/upload-artifact MIGRATION.md (v3→v4): https://github.com/actions/upload-artifact/blob/main/docs/MIGRATION.md
+   900→- v3 artifact actions sunset (Jan 30, 2025): https://github.blog/changelog/2024-04-16-deprecation-notice-v3-of-the-artifact-actions/
+   901→- Termux debug_build.yml: https://github.com/termux/termux-app/blob/master/.github/workflows/debug_build.yml
+   902→- Termux attach_debug_apks_to_release.yml: https://github.com/termux/termux-app/blob/master/.github/workflows/attach_debug_apks_to_release.yml
+   903→- Termux app/build.gradle (bootstrap-zip download): https://github.com/termux/termux-app/blob/master/app/build.gradle
+   904→- Strato app/build.gradle: https://github.com/strato-emu/strato/blob/master/app/build.gradle
+   905→- Strato build.yml (ccache-action): https://github.com/strato-emu/strato/blob/master/.github/workflows/build.yml
+   906→- Strato pr_build.yml: https://github.com/strato-emu/strato/blob/master/.github/workflows/pr_build.yml
+   907→- Azahar build.yml (container + SBOM + attestation): https://github.com/azahar-emu/azahar/blob/master/.github/workflows/build.yml
+   908→- Azahar .ci/android.sh (base64-keystore signing): https://github.com/azahar-emu/azahar/blob/master/.ci/android.sh
+   909→- Azahar .ci/pack.sh (artifact packaging): https://github.com/azahar-emu/azahar/blob/master/.ci/pack.sh
+   910→- Box64 release.yml (WCP archive generation): https://github.com/ptitSeb/box64/blob/main/.github/workflows/release.yml
+   911→- idans320/winlator-assets-builder (Devbox-based Winlator asset packager): https://github.com/idans320/winlator-assets-builder
+   912→- En-nagakiro/winlator-cmod-zh (540 MB pre-baked APK reference): https://github.com/En-nagakiro/winlator-cmod-zh
+   913→- actions/runner-images repo (Ubuntu image labels): https://github.com/actions/runner-images/blob/main/README.md
+   914→- actions/runner-images Ubuntu 24.04 README (preinstalled tools): https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md
+
+[showing lines 500-914 of 916; use offset=915 with limit to continue reading]

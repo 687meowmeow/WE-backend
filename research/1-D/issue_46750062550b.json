@@ -1,0 +1,82 @@
+{
+  "url": "https://api.github.com/repos/waydroid/waydroid/issues/2272",
+  "repository_url": "https://api.github.com/repos/waydroid/waydroid",
+  "labels_url": "https://api.github.com/repos/waydroid/waydroid/issues/2272/labels{/name}",
+  "comments_url": "https://api.github.com/repos/waydroid/waydroid/issues/2272/comments",
+  "events_url": "https://api.github.com/repos/waydroid/waydroid/issues/2272/events",
+  "html_url": "https://github.com/waydroid/waydroid/issues/2272",
+  "id": 4221951057,
+  "node_id": "I_kwDOFV13is77pdxR",
+  "number": 2272,
+  "title": "Waydroid starts but eth0 never gets IPv4 address, no DHCP lease, no network connectivity",
+  "user": {
+    "login": "Myougazuki",
+    "id": 152372697,
+    "node_id": "U_kgDOCRUF2Q",
+    "avatar_url": "https://avatars.githubusercontent.com/u/152372697?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/Myougazuki",
+    "html_url": "https://github.com/Myougazuki",
+    "followers_url": "https://api.github.com/users/Myougazuki/followers",
+    "following_url": "https://api.github.com/users/Myougazuki/following{/other_user}",
+    "gists_url": "https://api.github.com/users/Myougazuki/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/Myougazuki/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/Myougazuki/subscriptions",
+    "organizations_url": "https://api.github.com/users/Myougazuki/orgs",
+    "repos_url": "https://api.github.com/users/Myougazuki/repos",
+    "events_url": "https://api.github.com/users/Myougazuki/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/Myougazuki/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "labels": [
+
+  ],
+  "state": "open",
+  "locked": false,
+  "assignees": [
+
+  ],
+  "milestone": null,
+  "comments": 7,
+  "created_at": "2026-04-08T03:49:38Z",
+  "updated_at": "2026-09-18T18:16:45Z",
+  "closed_at": null,
+  "assignee": null,
+  "author_association": "NONE",
+  "issue_field_values": [
+
+  ],
+  "type": null,
+  "active_lock_reason": null,
+  "sub_issues_summary": {
+    "total": 0,
+    "completed": 0,
+    "percent_completed": 0
+  },
+  "issue_dependencies_summary": {
+    "blocked_by": 0,
+    "total_blocked_by": 0,
+    "blocking": 0,
+    "total_blocking": 0
+  },
+  "body": "## Summary\n\nWaydroid starts normally, but Android never gets an IPv4 address on `eth0`, so there is no network connectivity.\n\nThis reproduces after:\n\n- full reinitialization\n- switching from current images to older images\n- downgrading Waydroid from `1.6.2` to `1.6.1` and `1.6.0`\n\n## Environment\n\n- Host OS: Ubuntu 24.04.1\n- Kernel: `Linux 6.17.0-20-generic #20~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC Thu Mar 19 01:28:37 UTC 2026 x86_64`\n- Architecture: `x86_64`\n- Waydroid versions tested: `1.6.2`, `1.6.1`, `1.6.0`\n- Current display session: Wayland\n- Host uplink: `eno1` ethernet\n\n## What happens\n\n- `waydroid0` is created correctly on the host\n- `waydroid0` has `192.168.240.1/24`\n- `dnsmasq` starts and binds to `waydroid0`\n- `iptables-legacy` has INPUT/FORWARD/MASQUERADE rules for `waydroid0`\n- Android `eth0` is `UP`, but never gets an IPv4 address\n- `/var/lib/misc/dnsmasq.waydroid0.leases` stays empty\n- `ip route` inside Waydroid is empty\n\n## Reproduction\n\n1. Install Waydroid on Ubuntu 24.04.1 x86_64.\n2. Start the container and launch the full UI.\n3. Check network state inside Waydroid.\n\n## Diagnostics\n\nHost:\n\n```bash\n$ ip addr show waydroid0\n26: waydroid0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000\n    link/ether <redacted> brd ff:ff:ff:ff:ff:ff\n    inet 192.168.240.1/24 brd 192.168.240.255 scope global waydroid0\n```\n\n```bash\n$ nmcli device status\nDEVICE      TYPE      STATE            CONNECTION\neno1        ethernet  connected        netplan-eno1\nlo          loopback  connected (externally)  lo\nlxcbr0      bridge    connected (externally)  lxcbr0\nwaydroid0   bridge    unmanaged        --\n```\n\n```bash\n$ sudo iptables-legacy -S INPUT\n-P INPUT ACCEPT\n-A INPUT -i waydroid0 -p tcp -m tcp --dport 53 -j ACCEPT\n-A INPUT -i waydroid0 -p udp -m udp --dport 53 -j ACCEPT\n-A INPUT -i waydroid0 -p tcp -m tcp --dport 67 -j ACCEPT\n-A INPUT -i waydroid0 -p udp -m udp --dport 67 -j ACCEPT\n```\n\n```bash\n$ sudo iptables-legacy -S FORWARD\n-P FORWARD ACCEPT\n-A FORWARD -o waydroid0 -j ACCEPT\n-A FORWARD -i waydroid0 -j ACCEPT\n```\n\n```bash\n$ sudo iptables-legacy -t nat -S\n-P PREROUTING ACCEPT\n-P INPUT ACCEPT\n-P OUTPUT ACCEPT\n-P POSTROUTING ACCEPT\n-A POSTROUTING -s 192.168.240.0/24 ! -d 192.168.240.0/24 -j MASQUERADE\n```\n\n```bash\n$ sudo ss -ulpn | grep dnsmasq\nUNCONN 0      0      0.0.0.0%waydroid0:67         0.0.0.0:*    users:((\"dnsmasq\",pid=...,fd=4))\nUNCONN 0      0          192.168.240.1:53         0.0.0.0:*    users:((\"dnsmasq\",pid=...,fd=6))\n```\n\nInside Waydroid:\n\n```bash\n$ sudo waydroid shell ip addr\n1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000\n2: eth0@if37: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000\n    link/ether <redacted> brd ff:ff:ff:ff:ff:ff link-netnsid 0\n    inet6 <redacted>/64 scope link stable-privacy\n```\n\n```bash\n$ sudo waydroid shell ip route\n# empty\n```\n\n```bash\n$ sudo cat /var/lib/misc/dnsmasq.waydroid0.leases\n# empty\n```\n\n`tcpdump` on `waydroid0` captured a DHCP discover at least once:\n\n```text\n0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request ..., DHCP-Message (53): Discover\n```\n\nbut no corresponding lease was created and Android still got no IPv4 address.\n\n## Things already tried\n\n- switched from X11 to Wayland\n- full Waydroid reinit multiple times\n- removed `/var/lib/waydroid`\n- tested official current images and older images\n- downgraded Waydroid package from `1.6.2` to `1.6.1` and `1.6.0`\n- marked `waydroid0` as unmanaged in NetworkManager\n- confirmed host forwarding and NAT are enabled\n- restarted `waydroid-container` and `waydroid-net.sh`\n\n## Expected result\n\nWaydroid should obtain an IPv4 address on `eth0`, receive a default route via `192.168.240.1`, and have working network connectivity.\n",
+  "closed_by": null,
+  "reactions": {
+    "url": "https://api.github.com/repos/waydroid/waydroid/issues/2272/reactions",
+    "total_count": 7,
+    "+1": 7,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "timeline_url": "https://api.github.com/repos/waydroid/waydroid/issues/2272/timeline",
+  "performed_via_github_app": null,
+  "state_reason": null,
+  "pinned_comment": null
+}
