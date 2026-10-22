@@ -294,81 +294,10 @@ fun WallpaperDetailScreen(
             item {
                 Button(
                     onClick = {
-                        WepWawetLogger.workshop("send-to-phone tapped",
-                            "id" to current.id,
-                            "is_paired" to PairingService.isPaired(),
-                            "title" to current.title.take(80))
-                        scope.launch {
-                            isSending = true
-                            statusMessage = null
-                            try {
-                                if (!PairingService.isPaired()) {
-                                    statusMessage = "Not paired — open the Pairing tab first."
-                                    WepWawetLogger.workshopWarn(
-                                        "send-to-phone: not paired, aborting",
-                                        "id" to current.id)
-                                    return@launch
-                                }
-
-                                // Download the preview image and pack it as a .mpkg
-                                // The WE Android app expects .mpkg files — we create a
-                                // minimal .mpkg container with the preview as the file.
-                                // This won't be a full wallpaper (we can't download the
-                                // actual .pkg content without SteamCMD), but it tests
-                                // the transfer pipeline.
-                                statusMessage = "Preparing wallpaper for transfer…"
-                                val previewFile = downloadWallpaper(context, current) { }
-                                if (previewFile == null || !previewFile.exists()) {
-                                    statusMessage = "Failed to download preview image."
-                                    return@launch
-                                }
-
-                                // Create a minimal .mpkg file containing the preview
-                                var mpkgFile = java.io.File(context.cacheDir, "${current.id}.mpkg")
-                                try {
-                                    val previewBytes = previewFile.readBytes()
-                                    val projectName = "project.json"
-                                    val projectJson = """{"file":"preview.jpg","title":"${current.title}","type":"Image","preview":"preview.jpg"}""".toByteArray()
-                                    // Build .mpkg: header_marker(4) + magic(8) + count(4) + entries + data
-                                    val out = java.io.ByteArrayOutputStream()
-                                    out.write(byteArrayOf(8, 0, 0, 0)) // header_marker = 8
-                                    out.write("PKGM0020".toByteArray()) // magic
-                                    out.write(byteArrayOf(2, 0, 0, 0)) // entry_count = 2
-                                    // Entry 0: project.json
-                                    out.write(byteArrayOf(projectName.toByteArray().size.toByte(), 0, 0, 0))
-                                    out.write(projectName.toByteArray())
-                                    out.write(byteArrayOf(0, 0, 0, 0)) // offset = 0
-                                    out.write(byteArrayOf((projectJson.size and 0xFF).toByte(), ((projectJson.size shr 8) and 0xFF).toByte(), ((projectJson.size shr 16) and 0xFF).toByte(), ((projectJson.size shr 24) and 0xFF).toByte()))
-                                    // Entry 1: preview.jpg
-                                    val prevName = "preview.jpg"
-                                    out.write(byteArrayOf(prevName.toByteArray().size.toByte(), 0, 0, 0))
-                                    out.write(prevName.toByteArray())
-                                    out.write(byteArrayOf((projectJson.size and 0xFF).toByte(), ((projectJson.size shr 8) and 0xFF).toByte(), ((projectJson.size shr 16) and 0xFF).toByte(), ((projectJson.size shr 24) and 0xFF).toByte()))
-                                    out.write(byteArrayOf((previewBytes.size and 0xFF).toByte(), ((previewBytes.size shr 8) and 0xFF).toByte(), ((previewBytes.size shr 16) and 0xFF).toByte(), ((previewBytes.size shr 24) and 0xFF).toByte()))
-                                    // Data section
-                                    out.write(projectJson)
-                                    out.write(previewBytes)
-                                    mpkgFile.writeBytes(out.toByteArray())
-                                    WepWawetLogger.workshop("mpkg created",
-                                        "file" to mpkgFile.name,
-                                        "size" to mpkgFile.length())
-                                } catch (e: Exception) {
-                                    WepWawetLogger.workshopWarn("mpkg creation failed: ${e.message}")
-                                    // Fallback: just send the preview file directly
-                                    val renamed = java.io.File(context.cacheDir, "${current.id}.mpkg")
-                                    previewFile.copyTo(renamed, overwrite = true)
-                                    mpkgFile = renamed
-                                }
-
-                                PairingService.queueWallpaper(mpkgFile, current.title)
-                                statusMessage = "Queued for transfer to " +
-                                    (PairingService.pairedDeviceName ?: "phone")
-                                WepWawetLogger.workshop("send-to-phone queued",
-                                    "file" to mpkgFile.name,
-                                    "size" to mpkgFile.length())
-                            } finally {
-                                isSending = false
-                            }
+                        if (!isSending) {
+                            onSendToPhoneClicked(context, current, scope,
+                                { isSending = true; statusMessage = it },
+                                { isSending = false; statusMessage = it })
                         }
                     },
                     enabled = !isSending,
@@ -391,6 +320,121 @@ fun WallpaperDetailScreen(
 }
 
 // ====== Composable sub-parts ======
+
+/**
+ * Send-to-phone click handler. Extracted from the Button onClick lambda so it
+ * can use early returns cleanly without label gymnastics.
+ *
+ * Flow:
+ *   1. Check paired state — abort with status if not paired
+ *   2. Download the workshop preview image (cache hit if already downloaded)
+ *   3. Pack the preview into a .mpkg file using the REAL format
+ *      (MpkgPacker.packImageWallpaper — verified against libscenejni.so)
+ *   4. Queue the .mpkg for transfer via PairingService.queueWallpaper
+ *   5. The actual transfer happens on the next heartbeat in
+ *      WePairingServer.commandLoop → transferWallpaper
+ *
+ * Every step is logged with structured key-value context so the user can
+ * trace exactly where things go wrong in the Logs screen.
+ *
+ * @param onStart called when the operation begins (with a status message)
+ * @param onEnd called when the operation ends (with a final status message)
+ */
+private fun onSendToPhoneClicked(
+    context: Context,
+    item: WorkshopItemTyped,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onStart: (String) -> Unit,
+    onEnd: (String) -> Unit,
+) {
+    WepWawetLogger.workshop("send-to-phone tapped",
+        "id" to item.id,
+        "is_paired" to PairingService.isPaired(),
+        "title" to item.title.take(80))
+    if (!PairingService.isPaired()) {
+        val msg = "Not paired — open the Pairing tab first."
+        WepWawetLogger.workshopWarn("send-to-phone: not paired, aborting",
+            "id" to item.id)
+        onEnd(msg)
+        return
+    }
+
+    onStart("Preparing wallpaper for transfer…")
+    scope.launch {
+        try {
+            // === Step 1: Download the preview image ===
+            WepWawetLogger.workshop("send-to-phone: downloading preview",
+                "id" to item.id,
+                "preview_url" to (item.previewUrl ?: "null"))
+            val previewFile = downloadWallpaper(context, item) { /* progress; ignored here */ }
+            if (previewFile == null || !previewFile.exists()) {
+                val msg = "Failed to download preview image."
+                WepWawetLogger.workshopWarn("send-to-phone: preview download failed",
+                    "id" to item.id)
+                onEnd(msg)
+                return@launch
+            }
+            WepWawetLogger.workshop("send-to-phone: preview downloaded",
+                "file" to previewFile.absolutePath,
+                "size" to previewFile.length())
+
+            // === Step 2: Pack the preview into a .mpkg file ===
+            // Use a unique filename per send so multiple rapid taps don't
+            // overwrite each other in the cache dir (each queue entry holds
+            // a File reference, not the bytes — overwriting the file mid-
+            // transfer would corrupt the .mpkg).
+            val sendId = System.currentTimeMillis()
+            val mpkgFile = java.io.File(context.cacheDir, "${item.id}_$sendId.mpkg")
+            WepWawetLogger.workshop("send-to-phone: packing .mpkg",
+                "out" to mpkgFile.name,
+                "image_file" to previewFile.name,
+                "image_size" to previewFile.length())
+            try {
+                com.wepwawet.pairing.MpkgPacker.packImageWallpaper(
+                    item = item,
+                    imageFile = previewFile,
+                    imageVPath = "preview.jpg",
+                    outputFile = mpkgFile,
+                )
+            } catch (e: Exception) {
+                WepWawetLogger.workshopWarn("send-to-phone: mpkg packing failed",
+                    "exception" to e.javaClass.name,
+                    "message" to (e.message ?: ""))
+                onEnd("Failed to pack wallpaper: ${e.message}")
+                return@launch
+            }
+            if (!mpkgFile.exists() || mpkgFile.length() == 0L) {
+                WepWawetLogger.workshopWarn("send-to-phone: mpkg file is empty or missing",
+                    "path" to mpkgFile.absolutePath,
+                    "exists" to mpkgFile.exists(),
+                    "size" to mpkgFile.length())
+                onEnd("Failed to create .mpkg file (empty)")
+                return@launch
+            }
+            WepWawetLogger.workshop("send-to-phone: mpkg ready",
+                "file" to mpkgFile.name,
+                "size" to mpkgFile.length())
+
+            // === Step 3: Queue for transfer ===
+            // The transfer happens on the next heartbeat from the phone
+            // (typically every 3 seconds). The WePairingServer.commandLoop
+            // polls pendingWallpapers and calls transferWallpaper.
+            val deviceName = PairingService.pairedDeviceName ?: "phone"
+            PairingService.queueWallpaper(mpkgFile, item.title)
+            WepWawetLogger.workshop("send-to-phone: queued",
+                "file" to mpkgFile.name,
+                "size" to mpkgFile.length(),
+                "title" to item.title.take(80),
+                "device" to deviceName)
+            onEnd("Queued for transfer to $deviceName. Transfer starts on next heartbeat (~3s).")
+        } catch (e: Exception) {
+            WepWawetLogger.workshopWarn("send-to-phone: unhandled exception",
+                "exception" to e.javaClass.name,
+                "message" to (e.message ?: ""))
+            onEnd("Error: ${e.message}")
+        }
+    }
+}
 
 @Composable
 private fun MetadataRow(label: String, value: String) {

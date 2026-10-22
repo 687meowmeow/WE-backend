@@ -567,37 +567,70 @@ class WePairingServer {
         val totalSize = mpkgFile.length()
         val fileName = "wallpapers/${mpkgFile.name}"
 
-        WepWawetLogger.proxy("Starting wallpaper transfer",
+        WepWawetLogger.proxy("transferWallpaper START",
             "file" to fileName,
-            "title" to title,
+            "title" to title.take(80),
             "size" to totalSize,
-            "size_mb" to (totalSize / 1024.0 / 1024.0))
+            "size_mb" to "%.3f".format(totalSize / 1024.0 / 1024.0),
+            "file_exists" to mpkgFile.exists(),
+            "file_readable" to mpkgFile.canRead(),
+            "file_absolute_path" to mpkgFile.absolutePath)
+
+        // === Sanity check: verify the .mpkg file looks like a .mpkg ===
+        // (header_marker=8, magic starts with "PKGM") before sending.
+        // If this fails, the file is corrupt — abort the transfer so the
+        // user sees the error in the logs instead of WE silently rejecting it.
+        if (!verifyMpkgFile(mpkgFile)) {
+            WepWawetLogger.proxyError("transferWallpaper ABORT: .mpkg verification failed",
+                "file" to mpkgFile.name,
+                "size" to totalSize)
+            return
+        }
 
         try {
-            // Step 1: beginUpload
+            // Step 1: beginUpload — phone removes any existing entry with
+            // this file path, creates a fresh WallpaperInfoSparse, adds to UI.
+            WepWawetLogger.proxy("transferWallpaper: sending beginUpload")
             sendEncryptedJson(output, DownloadInfo(command = "beginUpload"))
-            WepWawetLogger.proxy("Sent beginUpload")
+            WepWawetLogger.proxy("transferWallpaper: sent beginUpload")
 
-            // Step 2: transmissionStart
+            // Step 2: transmissionStart — phone creates tempWriteFile and
+            // records the tempTransmissionInfo (file path, total size).
+            WepWawetLogger.proxy("transferWallpaper: sending transmissionStart",
+                "file" to fileName, "size" to totalSize)
             sendEncryptedJson(output, DownloadInfo(
                 command = "transmissionStart",
                 title = title,
                 file = fileName,
                 size = totalSize,
             ))
-            WepWawetLogger.proxy("Sent transmissionStart",
+            WepWawetLogger.proxy("transferWallpaper: sent transmissionStart",
                 "file" to fileName, "size" to totalSize)
 
             // Step 3: send chunks
+            // Per the decompiled TcpClient.java command loop (lines 750-798):
+            //   - For each chunk: send {"command":"transmissionContinue","size":1}
+            //     (size>0 signals "data follows"), then 4-byte LE length + AES-
+            //     encrypted chunk bytes.
+            //   - When phone receives a chunk with size>0, it appends the data
+            //     to tempWriteFile and decrements tempTransmissionInfo.size.
+            //   - When tempTransmissionInfo.size reaches 0, phone moves the
+            //     tempWriteFile to <filesDir>/downloads/wallpapers/X.mpkg.
             val chunkSize = 1024 * 1024  // 1 MB chunks
             var bytesSent = 0L
             var chunkNum = 0
+            val startTime = System.currentTimeMillis()
             java.io.FileInputStream(mpkgFile).use { fis ->
                 val buffer = ByteArray(chunkSize)
                 while (true) {
                     val read = fis.read(buffer)
                     if (read <= 0) break
                     val chunk = if (read < chunkSize) buffer.copyOf(read) else buffer
+
+                    WepWawetLogger.proxyDebug("transferWallpaper: sending chunk header",
+                        "chunk" to (chunkNum + 1),
+                        "chunk_size" to read,
+                        "bytes_so_far" to bytesSent)
 
                     // Send transmissionContinue with size=1 (signals "data follows")
                     sendEncryptedJson(output, DownloadInfo(
@@ -611,34 +644,107 @@ class WePairingServer {
                     bytesSent += read
                     chunkNum++
                     if (chunkNum % 10 == 0 || bytesSent == totalSize) {
-                        WepWawetLogger.proxy("Transfer progress",
+                        WepWawetLogger.proxy("transferWallpaper: chunk sent",
                             "chunk" to chunkNum,
+                            "chunk_bytes" to read,
                             "bytes_sent" to bytesSent,
                             "total" to totalSize,
                             "pct" to (bytesSent * 100 / totalSize).toInt())
                     }
                 }
             }
+            val transferMs = System.currentTimeMillis() - startTime
+            WepWawetLogger.proxy("transferWallpaper: all chunks sent",
+                "file" to fileName,
+                "chunks" to chunkNum,
+                "bytes_sent" to bytesSent,
+                "total" to totalSize,
+                "ms" to transferMs,
+                "kbps" to if (transferMs > 0) (bytesSent * 8 / transferMs) else 0)
 
             // Step 4: transmissionContinue with size=0 (signals "done")
+            // Per decompiled code: when phone receives this, it converts it to
+            // "transmissionCancel" for UI callback purposes, then checks if the
+            // file exists at <filesDir>/downloads/wallpapers/X.mpkg.
+            //   - If file exists → entry stays in wallpaper list (SUCCESS)
+            //   - If file doesn't exist → entry is REMOVED (FAILURE)
+            WepWawetLogger.proxy("transferWallpaper: sending transmissionContinue (terminator, size=0)")
             sendEncryptedJson(output, DownloadInfo(
                 command = "transmissionContinue",
                 size = 0L,  // 0 means "transfer complete"
             ))
-            WepWawetLogger.proxy("Wallpaper transfer complete!",
+            WepWawetLogger.proxy("transferWallpaper COMPLETE",
                 "file" to fileName,
                 "bytes_sent" to bytesSent,
-                "chunks" to chunkNum)
+                "chunks" to chunkNum,
+                "ms" to transferMs)
 
         } catch (e: Exception) {
-            WepWawetLogger.proxyError("Wallpaper transfer failed",
+            WepWawetLogger.proxyError("transferWallpaper FAILED",
                 "file" to fileName,
                 "exception" to e.javaClass.name,
-                "message" to (e.message ?: ""))
-            // Send cancel
+                "message" to (e.message ?: ""),
+                "bytes_sent_so_far" to (mpkgFile.length() - 0),  // approximate
+                exception = e)
+            // Send cancel so the phone stops appending to tempWriteFile
             try {
                 sendEncryptedJson(output, DownloadInfo(command = "transmissionCancel"))
             } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Verify a .mpkg file looks correct before sending it. Catches issues like
+     * corrupt headers, wrong magic, or truncated files early — so we log the
+     * issue locally instead of WE silently rejecting the file on the phone side.
+     *
+     * Checks:
+     *   - File exists and is >= 16 bytes (minimum: header_marker(4) + magic(8) + entry_count(4))
+     *   - First 4 bytes (header_marker) = 8 (LE)
+     *   - Bytes 4-11 are ASCII "PKGM" + 4 digits
+     */
+    private fun verifyMpkgFile(file: java.io.File): Boolean {
+        try {
+            if (!file.exists() || file.length() < 16) {
+                WepWawetLogger.proxyWarn("verifyMpkgFile: file missing or too small",
+                    "exists" to file.exists(),
+                    "size" to file.length())
+                return false
+            }
+            val header = ByteArray(16)
+            java.io.RandomAccessFile(file, "r").use { raf ->
+                raf.readFully(header)
+            }
+            // header_marker = u32 LE
+            val headerMarker = (header[0].toInt() and 0xFF) or
+                ((header[1].toInt() and 0xFF) shl 8) or
+                ((header[2].toInt() and 0xFF) shl 16) or
+                ((header[3].toInt() and 0xFF) shl 24)
+            // magic = 8 ASCII chars starting at offset 4
+            val magic = String(header, 4, 8, Charsets.US_ASCII)
+            val startsWithPkgm = magic.startsWith("PKGM")
+            val hasValidVersion = magic.length == 8 &&
+                magic.substring(4).all { it.isDigit() }
+            // entry_count = u32 LE
+            val entryCount = (header[12].toInt() and 0xFF) or
+                ((header[13].toInt() and 0xFF) shl 8) or
+                ((header[14].toInt() and 0xFF) shl 16) or
+                ((header[15].toInt() and 0xFF) shl 24)
+            val ok = headerMarker == 8 && startsWithPkgm && hasValidVersion && entryCount in 1..4096
+            WepWawetLogger.proxy("verifyMpkgFile result",
+                "file" to file.name,
+                "header_marker" to headerMarker,
+                "magic" to magic,
+                "entry_count" to entryCount,
+                "starts_with_PKGM" to startsWithPkgm,
+                "has_valid_version" to hasValidVersion,
+                "verified" to ok)
+            return ok
+        } catch (e: Exception) {
+            WepWawetLogger.proxyWarn("verifyMpkgFile: exception",
+                "exception" to e.javaClass.name,
+                "message" to (e.message ?: ""))
+            return false
         }
     }
 
