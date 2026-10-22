@@ -83,7 +83,7 @@ KNOWN_MAGICS: list[tuple[bytes, str]] = [
     (b"RIFF",       "RIFF (AVI/WAV/WebP)"),
     (b"GIF89a",     "GIF image (89a)"),
     (b"GIF87a",     "GIF image (87a)"),
-    (b"TEXB",       "WE .tex texture format"),
+    (b"TEXV",       "WE .tex texture format (TEXV0005 header)"),
     (b"\xfd7zXZ",   "XZ-compressed data"),
     (b"\x28\xb5\x2f\xfd", "Zstandard-compressed data"),
     (b"\x1f\x8b",   "GZIP-compressed data"),
@@ -201,12 +201,16 @@ def detect_format(first_bytes: bytes) -> str:
         return "MP4/M4V video"
     if first_bytes.startswith(b"RIFF"):
         return "RIFF (AVI/WAV/WebP)"
+    if first_bytes.startswith(b"TEXV"):
+        return "WE .tex texture (TEXV0005)"
     if first_bytes.startswith(b"\xfd7zXZ"):
         return "XZ-compressed"
     if first_bytes.startswith(b"\x28\xb5\x2f\xfd"):
         return "Zstandard-compressed"
     if first_bytes.startswith(b"\x1f\x8b"):
         return "GZIP-compressed"
+    if first_bytes.startswith(b"{") or first_bytes.startswith(b"\x7b"):
+        return "JSON"
     return "unknown"
 
 
