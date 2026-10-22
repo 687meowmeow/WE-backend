@@ -1,44 +1,27 @@
 #!/usr/bin/env python3
 """
-mpkg_packer.py — Pack a wallpaper project into a .mpkg file for the
-Wallpaper Engine Android app.
+mpkg_packer.py — Pack a wallpaper project into a .mpkg file using the
+REAL format verified from a sample.
 
-FORMAT NOTES (best-effort, reverse-engineered from the WE Android app)
-========================================================================
-The .mpkg format is a custom container with magic "PKGM" + version "0020"
-(8 bytes total: b"PKGM0020"). After the magic, the native libscenejni.so
-parses a VFS (Virtual File System) table describing where each virtual
-file lives inside the .mpkg.
+REAL FORMAT (verified from a 1.16 GB real .mpkg sample, magic "PKGM0014"):
+=========================================================================
+Layout:
+  [u32 LE header_marker = 8]               (4 bytes — length of the magic)
+  [8-byte ASCII magic]                       ("PKGM" + 4-digit version, e.g. "PKGM0020")
+  [u32 LE entry_count]                       (4 bytes)
+  For each entry:
+    [u32 LE name_len]
+    [name_len bytes UTF-8 name]              (no null terminator)
+    [u32 LE file_offset]                     (RELATIVE to data_section_start)
+    [u32 LE file_size]
+  [data section: file blobs packed back-to-back]
 
-We don't have a sample .mpkg nor the decompiled libscenejni.so binary, so
-the layout below is a HEURISTIC built from:
-- The Java side calls `SceneLib.getWallpaperFileVirtualOffset(filePath)`
-  which returns `VirtualFileRange(vOffset, vSize)` (two u64s in Java longs).
-- `Util.getMPKGVideoReader(reader, offsets)` does:
-    reader.seek(position + offsets.getVOffset())
-    reader.read(buffer, offset, size)  # bounded by offsets.getVSize()
-- `TransferService.MPKG_SUPPORT_VERSION = "PKGM0020"` is the current
-  format version the official app expects.
-- `SupportFileLoader.loadBitmapFromVFS(vfsSource, offset, size)` uses
-  `RangedInputStream(FileInputStream(vfsSource), offset, size)` to read
-  a single virtual file out of the container.
-
-So the minimum layout the native lib must be able to parse is:
-    [8-byte magic "PKGM0020"]
-    [4-byte LE entry count N]
-    [N * (8-byte LE vOffset, 8-byte LE vSize)]  ->  VFS table
-    [string table: N null-terminated UTF-8 names]   (HEURISTIC — position
-                                                     them in the same order)
-    [file data blobs, packed back-to-back]
-
-WARNING: This packer is a HYPOTHESIS. Without a real .mpkg sample or RE'd
-libscenejni.so, we cannot guarantee interoperability. Use this packer
-together with mpkg_analyzer.py and Frida hooks to iterate against the
-real WE Android app.
+The data_section_start is the byte offset immediately after the last VFS
+entry's file_size field. File offsets are RELATIVE to data_section_start.
 
 USAGE
 =====
-    python mpkg_packer.py <input_dir> <output.mpkg> [--manifest project.json]
+    python mpkg_packer.py <input_dir> <output.mpkg> [--manifest project.json] [--version 0020]
     python mpkg_packer.py --inspect <file.mpkg>
     python mpkg_packer.py --help
 
@@ -64,10 +47,15 @@ import struct
 import sys
 from pathlib import Path
 
-MAGIC = b"PKGM0020"  # TransferService.MPKG_SUPPORT_VERSION
+# Magic = "PKGM" + 4-digit version. Use "0020" for the current WE Android app
+# (matches TransferService.MPKG_SUPPORT_VERSION = "PKGM0020").
+# The user's real sample was "PKGM0014" (older version).
+DEFAULT_MAGIC_VERSION = "0020"
+HEADER_MARKER = 8  # u32 LE = 8 (length of the magic)
 
 
-def pack(input_dir: Path, output: Path, manifest_name: str = "project.json") -> int:
+def pack(input_dir: Path, output: Path, manifest_name: str = "project.json",
+         version: str = DEFAULT_MAGIC_VERSION) -> int:
     """Pack the contents of `input_dir` into a .mpkg at `output`."""
     manifest_path = input_dir / manifest_name
     if not manifest_path.exists():
@@ -80,10 +68,7 @@ def pack(input_dir: Path, output: Path, manifest_name: str = "project.json") -> 
         print(f"error: manifest is not valid JSON: {e}", file=sys.stderr)
         return 1
 
-    # Collect the list of files to embed. We always embed:
-    #   - project.json (the manifest itself, virtual path "project.json")
-    #   - any file referenced by the manifest's "file" / "preview" fields
-    #   - any files in the manifest's "files" array (if present)
+    # Collect the list of files to embed.
     files_to_embed: list[tuple[str, Path]] = []
     files_to_embed.append(("project.json", manifest_path))
 
@@ -119,47 +104,55 @@ def pack(input_dir: Path, output: Path, manifest_name: str = "project.json") -> 
         print(f"  {vpath:40s}  {len(b):>10} bytes")
 
     # Build the .mpkg:
-    #   [8-byte magic]
-    #   [4-byte LE entry count N]
-    #   [N * (8-byte LE vOffset, 8-byte LE vSize)]   VFS table
-    #   [N * (4-byte LE nameLen, nameLen bytes UTF-8 name)]  name table
-    #   [N blobs, packed back-to-back]
+    #   [u32 LE header_marker = 8]
+    #   [8-byte ASCII magic "PKGM" + version]
+    #   [u32 LE entry count N]
+    #   [N entries of: u32 LE name_len, name, u32 LE file_offset, u32 LE file_size]
+    #   [data section: file blobs packed back-to-back]
+    magic = f"PKGM{version}".encode("ascii")
+    if len(magic) != 8:
+        print(f"error: magic must be exactly 8 bytes; got {magic!r} ({len(magic)} bytes)",
+              file=sys.stderr)
+        return 1
+
     n = len(blobs)
-    header_len = 8 + 4                       # magic + count
-    vfs_table_len = n * 16                    # 16 bytes per entry
-    name_table_len = sum(4 + len(n.encode("utf-8")) for n, _ in blobs)
-    data_start = header_len + vfs_table_len + name_table_len
+    # Compute layout
+    header_size = 4 + 8 + 4                                # header_marker + magic + entry_count
+    vfs_table_size = sum(4 + len(n.encode("utf-8")) + 4 + 4 for n, _ in blobs)
+    data_section_start = header_size + vfs_table_size
 
     # Compute offsets and sizes for each blob
     vfs_entries: list[tuple[int, int]] = []  # (offset, size)
-    cursor = data_start
+    cursor = 0  # relative offset within data section
     for _, blob in blobs:
         vfs_entries.append((cursor, len(blob)))
         cursor += len(blob)
 
     # Assemble
     out = bytearray()
-    out += MAGIC
+    out += struct.pack("<I", HEADER_MARKER)
+    out += magic
     out += struct.pack("<I", n)
-    for offset, size in vfs_entries:
-        out += struct.pack("<QQ", offset, size)
-    for name, _ in blobs:
+    for (name, _), (offset, size) in zip(blobs, vfs_entries):
         nb = name.encode("utf-8")
         out += struct.pack("<I", len(nb))
         out += nb
+        out += struct.pack("<I", offset)
+        out += struct.pack("<I", size)
     for _, blob in blobs:
         out += blob
 
     output.write_bytes(bytes(out))
     print(f"\nWrote {output} ({len(out):,} bytes)")
-    print(f"  magic:           {MAGIC.decode('ascii')}")
-    print(f"  entry count:     {n}")
-    print(f"  VFS table at:    0x{8:08x}  ({vfs_table_len} bytes)")
-    print(f"  name table at:   0x{8 + vfs_table_len:08x}  ({name_table_len} bytes)")
-    print(f"  data start:      0x{data_start:08x}")
+    print(f"  header_marker:    {HEADER_MARKER} (u32 LE = magic length)")
+    print(f"  magic:            {magic.decode('ascii')!r}")
+    print(f"  entry_count:     {n}")
+    print(f"  VFS table at:     0x{header_size:08x}  ({vfs_table_size} bytes)")
+    print(f"  data section at:  0x{data_section_start:08x}")
     for i, (name, blob) in enumerate(blobs):
         offset, size = vfs_entries[i]
-        print(f"    [{i}] {name:40s}  @0x{offset:08x}  {size:>10} bytes")
+        abs_off = data_section_start + offset
+        print(f"    [{i}] {name:40s}  @rel=0x{offset:08x}  @abs=0x{abs_off:08x}  {size:>10} bytes")
     print(f"\nNext step: install this .mpkg on a phone, or analyze with:")
     print(f"  python mpkg_analyzer.py {output}")
     return 0
@@ -172,29 +165,49 @@ def inspect(path: Path) -> int:
         return 1
     data = path.read_bytes()
     print(f"File:   {path}  ({len(data):,} bytes)")
-    if not data.startswith(MAGIC):
-        print(f"error: magic mismatch. Expected {MAGIC!r}, got {data[:8]!r}",
+    if len(data) < 16 or data[4:8] != b"PKGM":
+        print(f"error: not a .mpkg file. Expected 'PKGM' at offset 4, got {data[4:8]!r}",
               file=sys.stderr)
         return 1
-    n = struct.unpack_from("<I", data, 8)[0]
-    print(f"Magic:  {data[:8].decode('ascii')}")
-    print(f"VFS entries: {n}")
-    if n < 1 or n > 4096:
+    header_marker = struct.unpack_from("<I", data, 0)[0]
+    magic = data[4:12].decode("ascii", errors="replace")
+    n = struct.unpack_from("<I", data, 12)[0]
+    print(f"header_marker: {header_marker} (u32 LE = magic length, expected 8)")
+    print(f"magic:         {magic!r}")
+    print(f"VFS entries:   {n}")
+    if not (1 <= n <= 4096):
         print(f"error: implausible VFS entry count {n}", file=sys.stderr)
         return 1
-    print(f"{'idx':>4}  {'v_offset':>12}  {'v_size':>12}  {'first_bytes':>24}")
-    p = 12
+    pos = 16
+    entries = []
     for i in range(n):
-        offset, size = struct.unpack_from("<QQ", data, p + i * 16)
-        first = data[offset:offset + 8].hex() if offset + 8 <= len(data) else ""
-        print(f"{i:>4}  0x{offset:08x}  {size:>12}  {first}")
+        if pos + 4 > len(data):
+            print(f"  [{i}] truncated (no name_len)")
+            break
+        name_len = struct.unpack_from("<I", data, pos)[0]
+        pos += 4
+        name = data[pos:pos + name_len].decode("utf-8", errors="replace")
+        pos += name_len
+        file_offset = struct.unpack_from("<I", data, pos)[0]
+        file_size = struct.unpack_from("<I", data, pos + 4)[0]
+        pos += 8
+        entries.append((i, name, file_offset, file_size))
+
+    data_section_start = pos
+    print(f"data_section_start: 0x{data_section_start:x}")
+    print()
+    print(f"{'idx':>4}  {'name':40s}  {'rel_off':>12}  {'size':>12}  {'abs_off':>12}  {'first_bytes':>24}")
+    for i, name, off, size in entries:
+        abs_off = data_section_start + off
+        first = data[abs_off:abs_off + 8].hex() if abs_off + 8 <= len(data) else ""
+        print(f"{i:>4}  {name:40s}  0x{off:08x}    {size:>12}  0x{abs_off:08x}  {first}")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="mpkg_packer",
-        description="Pack or inspect a Wallpaper Engine Android .mpkg file.",
+        description="Pack or inspect a Wallpaper Engine Android .mpkg file (REAL format).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -206,6 +219,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Inspect the input .mpkg file instead of packing.")
     parser.add_argument("--manifest", default="project.json",
                         help="Manifest file name (default: project.json)")
+    parser.add_argument("--version", default=DEFAULT_MAGIC_VERSION,
+                        help=f"4-digit .mpkg version (default: {DEFAULT_MAGIC_VERSION} -> 'PKGM{DEFAULT_MAGIC_VERSION}')")
     args = parser.parse_args(argv)
 
     if args.input is None:
@@ -215,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
         return inspect(args.input)
     if args.output is None:
         parser.error("output path is required for pack mode (or use --inspect)")
-    return pack(args.input, args.output, args.manifest)
+    return pack(args.input, args.output, args.manifest, args.version)
 
 
 if __name__ == "__main__":

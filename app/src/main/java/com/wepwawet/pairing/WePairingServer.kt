@@ -8,15 +8,10 @@ import java.io.DataOutputStream
 import java.math.BigInteger
 import java.net.ServerSocket
 import java.net.Socket
-import java.security.KeyFactory
 import java.security.KeyPair
 import java.security.KeyPairGenerator
-import java.security.PrivateKey
-import java.security.PublicKey
-import java.security.spec.RSAPrivateKeySpec
-import java.security.spec.RSAPublicKeySpec
+import java.security.interfaces.RSAPublicKey
 import javax.crypto.Cipher
-import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -82,14 +77,18 @@ class WePairingServer {
         private const val TAG = "WEP-PAIRING"
         const val TCP_PORT = 7889
         const val MAX_SAFE_COMMAND_LENGTH = 4096
-        const val MAX_SAFE_DATA_LENGTH = 1048592  // 1 MB
-
-        // RSA key size — 2048 is standard, fast enough on phone
-        private const val RSA_KEY_SIZE = 2048
-
-        // AES — 256-bit key, 128-bit IV (16 bytes)
+        const val MAX_SAFE_DATA_LENGTH = 1048592  // ~1 MiB
+        // VERIFIED from real capture: PC sent 128-byte modulus = RSA-1024
+        // (was 2048 in earlier code — WRONG)
+        private const val RSA_KEY_SIZE = 1024
+        private const val RSA_BLOCK_SIZE = 128  // bytes per RSA-1024 ciphertext
+        // AES key size — actual size confirmed by Frida hooks pending;
+        // AES supports 128/192/256-bit. Default 256.
         private const val AES_KEY_SIZE = 256
         private const val AES_IV_SIZE = 16
+        // VERIFIED from decompiled TransferService.java
+        private const val CONNECTION_PROTOCOL_VERSION = 4
+        private const val MPKG_SUPPORT_VERSION = "PKGM0020"
     }
 
     private var serverSocket: ServerSocket? = null
@@ -220,6 +219,36 @@ class WePairingServer {
     }
 
     /**
+     * Strip leading zero bytes from a BigInteger.toByteArray() result.
+     * The real protocol sends the modulus as raw bytes WITHOUT the sign byte
+     * that Java's BigInteger.toByteArray() prepends for positive numbers with
+     * the high bit set.
+     */
+    private fun stripLeadingZero(bytes: ByteArray): ByteArray {
+        var start = 0
+        while (start < bytes.size - 1 && bytes[start] == 0.toByte()) {
+            start++
+        }
+        return bytes.copyOfRange(start, bytes.size)
+    }
+
+    /**
+     * Read a length-prefixed message: 4-byte LE length + N bytes.
+     * Returns null on invalid length (caller should close the connection).
+     */
+    private fun readLengthPrefixed(input: DataInputStream, label: String): ByteArray? {
+        val length = readLeInt(input)
+        WepWawetLogger.proxyDebug("Reading length-prefixed: $label", "length" to length)
+        if (length <= 0 || length > MAX_SAFE_DATA_LENGTH) {
+            WepWawetLogger.proxyError("Invalid $label length: $length")
+            return null
+        }
+        val data = ByteArray(length)
+        input.readFully(data)
+        return data
+    }
+
+    /**
      * Read a 4-byte LITTLE-ENDIAN integer from the input stream.
      *
      * Mirrors the WE Android app's TcpClient$Companion.readInt exactly:
@@ -301,60 +330,66 @@ class WePairingServer {
                 WepWawetLogger.proxy("Handling pairing connection",
                     "remote" to it.remoteSocketAddress.toString())
 
-                // Step 1: Send RSA public key
+                // === PC → phone: Send RSA exponent FIRST (as 3-byte BE BigInteger) ===
+                // VERIFIED from real capture: Frame 0 = length=3 + bytes `01 00 01` = 65537
+                // (was modulus-first in earlier code — WRONG)
                 val (modulus, exponent) = getRsaPublicKeyComponents()
-                WepWawetLogger.proxyDebug("Sending RSA public key",
-                    "modulus_bytes" to modulus.toByteArray().size,
-                    "exponent_bytes" to exponent.toByteArray().size)
-
-                // Send modulus: writeLeInt(length) + bytes  (LITTLE-ENDIAN length!)
-                val modBytes = modulus.toByteArray()
-                writeLeInt(output, modBytes.size)
-                output.write(modBytes)
-                output.flush()
-
-                // Send exponent: writeLeInt(length) + bytes  (LITTLE-ENDIAN length!)
-                val expBytes = exponent.toByteArray()
+                val expBytes = stripLeadingZero(exponent.toByteArray())
+                WepWawetLogger.proxyDebug("Sending RSA exponent",
+                    "exponent" to exponent.toString(16),
+                    "wire_bytes" to expBytes.size,
+                    "wire_hex" to expBytes.joinToString("") { "%02x".format(it) })
                 writeLeInt(output, expBytes.size)
                 output.write(expBytes)
                 output.flush()
 
-                WepWawetLogger.proxyDebug("RSA public key sent",
-                    "modulus_hex_prefix" to modBytes.take(8).joinToString("") { "%02x".format(it) },
-                    "exponent_hex" to expBytes.joinToString("") { "%02x".format(it) })
-
-                // Step 2: Receive encrypted AES key (encrypted with our RSA public key)
-                // Length prefix is LITTLE-ENDIAN (must use readLeInt, NOT input.readInt!)
-                val encAesKeyLen = readLeInt(input)
-                WepWawetLogger.proxyDebug("Received encrypted AES key",
-                    "length" to encAesKeyLen)
-                if (encAesKeyLen <= 0 || encAesKeyLen > 4096) {
-                    WepWawetLogger.proxyError("Invalid AES key length: $encAesKeyLen")
-                    return
+                // === PC → phone: Send RSA modulus (128 raw BE bytes for RSA-1024) ===
+                // VERIFIED: 128 bytes, no sign byte (BigInteger.toByteArray may include
+                // a leading 0x00 sign byte — strip it).
+                val modBytes = stripLeadingZero(modulus.toByteArray())
+                // Pad to exactly 128 bytes if needed (left-pad with zeros)
+                val modPadded = if (modBytes.size < RSA_BLOCK_SIZE) {
+                    ByteArray(RSA_BLOCK_SIZE - modBytes.size) + modBytes
+                } else {
+                    modBytes
                 }
-                val encAesKey = ByteArray(encAesKeyLen)
-                input.readFully(encAesKey)
+                WepWawetLogger.proxyDebug("Sending RSA modulus",
+                    "modulus_bits" to modulus.bitLength(),
+                    "wire_bytes" to modPadded.size,
+                    "wire_hex_first_16" to modPadded.take(16).joinToString("") { "%02x".format(it) })
+                writeLeInt(output, modPadded.size)
+                output.write(modPadded)
+                output.flush()
 
-                // Step 3: Decrypt AES key with RSA private key
+                // === Phone → PC: Receive 3 RSA-encrypted frames (128B each) ===
+                // VERIFIED from real capture: phone sends 3 × 128B RSA-encrypted blocks
+                //   Frame 0: RSA-encrypted AES key
+                //   Frame 1: RSA-encrypted AES IV (16-byte IV padded to 128B RSA block)
+                //   Frame 2: RSA-encrypted third block (purpose TBD — possibly MAC/session)
+                // (earlier code expected only 1 RSA-encrypted frame + 16-byte raw IV — WRONG)
+                val encAesKey = readLengthPrefixed(input, "RSA-encrypted AES key")
+                    ?: return
+                val encIv = readLengthPrefixed(input, "RSA-encrypted IV")
+                    ?: return
+                val encThird = readLengthPrefixed(input, "RSA-encrypted third block")
+                    ?: return
+
+                // Decrypt with RSA/ECB/PKCS1Padding
                 val rsaCipher = Cipher.getInstance("RSA/ECB/PKCS1Padding")
                 rsaCipher.init(Cipher.DECRYPT_MODE, rsaKeyPair!!.private)
                 val aesKeyBytes = rsaCipher.doFinal(encAesKey)
-
-                // Also receive IV (16 bytes), length-prefixed LITTLE-ENDIAN
-                val ivLen = readLeInt(input)
-                if (ivLen != AES_IV_SIZE) {
-                    WepWawetLogger.proxyError("Invalid IV length: $ivLen (expected $AES_IV_SIZE)")
-                    return
-                }
-                val ivBytes = ByteArray(ivLen)
-                input.readFully(ivBytes)
+                val ivBytes = rsaCipher.doFinal(encIv)
+                val thirdBlock = rsaCipher.doFinal(encThird)
 
                 currentAesKey = SecretKeySpec(aesKeyBytes, "AES")
                 currentIv = IvParameterSpec(ivBytes)
 
                 WepWawetLogger.proxy("AES key exchange complete",
                     "aes_key_bits" to (aesKeyBytes.size * 8),
-                    "iv_bytes" to ivBytes.size)
+                    "iv_bytes" to ivBytes.size,
+                    "third_block_bytes" to thirdBlock.size,
+                    "third_block_hex_first_32" to thirdBlock.take(32)
+                        .joinToString("") { "%02x".format(it) })
 
                 // Step 4: Receive encrypted EncAuthRequest (length LITTLE-ENDIAN!)
                 val aesCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
