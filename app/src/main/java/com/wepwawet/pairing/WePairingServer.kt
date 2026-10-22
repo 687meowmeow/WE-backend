@@ -363,16 +363,17 @@ class WePairingServer {
                 output.flush()
 
                 // === Phone → PC: Receive 3 RSA-encrypted frames (128B each) ===
-                // VERIFIED from real capture: phone sends 3 × 128B RSA-encrypted blocks
-                //   Frame 0: RSA-encrypted AES key
-                //   Frame 1: RSA-encrypted AES IV (16-byte IV padded to 128B RSA block)
-                //   Frame 2: RSA-encrypted third block (purpose TBD — possibly MAC/session)
-                // (earlier code expected only 1 RSA-encrypted frame + 16-byte raw IV — WRONG)
+                // VERIFIED from decompiled TcpClient connector$lambda$2:
+                //   Frame 0: RSA-OAEP-encrypted deviceUUID (line 548-558)
+                //   Frame 1: RSA-OAEP-encrypted AES IV (line 578-586)
+                //   Frame 2: RSA-OAEP-encrypted AES key (line 588-596)
+                // The phone sends UUID FIRST, then IV, then AES key.
+                // (Our previous code read them as AES key → IV → third — WRONG!)
+                val encDeviceUUID = readLengthPrefixed(input, "RSA-encrypted deviceUUID")
+                    ?: return
+                val encIv = readLengthPrefixed(input, "RSA-encrypted AES IV")
+                    ?: return
                 val encAesKey = readLengthPrefixed(input, "RSA-encrypted AES key")
-                    ?: return
-                val encIv = readLengthPrefixed(input, "RSA-encrypted IV")
-                    ?: return
-                val encThird = readLengthPrefixed(input, "RSA-encrypted third block")
                     ?: return
 
                 // Decrypt with RSA/ECB/OAEPPadding — VERIFIED from decompiled
@@ -381,9 +382,9 @@ class WePairingServer {
                 // NOT PKCS1Padding — using the wrong padding = pairing failure!
                 val rsaCipher = Cipher.getInstance("RSA/ECB/OAEPPadding")
                 rsaCipher.init(Cipher.DECRYPT_MODE, rsaKeyPair!!.private)
-                val aesKeyBytes = rsaCipher.doFinal(encAesKey)
+                val deviceUUIDBytes = rsaCipher.doFinal(encDeviceUUID)
                 val ivBytes = rsaCipher.doFinal(encIv)
-                val thirdBlock = rsaCipher.doFinal(encThird)
+                val aesKeyBytes = rsaCipher.doFinal(encAesKey)
 
                 currentAesKey = SecretKeySpec(aesKeyBytes, "AES")
                 currentIv = IvParameterSpec(ivBytes)
@@ -391,9 +392,8 @@ class WePairingServer {
                 WepWawetLogger.proxy("AES key exchange complete",
                     "aes_key_bits" to (aesKeyBytes.size * 8),
                     "iv_bytes" to ivBytes.size,
-                    "third_block_bytes" to thirdBlock.size,
-                    "third_block_hex_first_32" to thirdBlock.take(32)
-                        .joinToString("") { "%02x".format(it) })
+                    "device_uuid" to String(deviceUUIDBytes, Charsets.UTF_8),
+                    "device_uuid_bytes" to deviceUUIDBytes.size)
 
                 // Step 4: Receive encrypted EncAuthRequest (length LITTLE-ENDIAN!)
                 val aesCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")

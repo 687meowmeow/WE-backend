@@ -178,6 +178,8 @@ object WepWawetLogger {
 
     fun snapshot(): List<LogEntry> = synchronized(ringBuffer) { ringBuffer.toList() }
 
+    fun clear() = synchronized(ringBuffer) { ringBuffer.clear(); seq.set(0) }
+
     fun drainTo(target: MutableList<LogEntry>): Int = synchronized(ringBuffer) {
         val count = ringBuffer.size
         target.addAll(ringBuffer)

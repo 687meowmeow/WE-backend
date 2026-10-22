@@ -31,9 +31,8 @@ import com.wepwawet.BuildConfig
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
-    var rootMode by remember { mutableStateOf(true) }
-    var autoStart by remember { mutableStateOf(true) }
-    var verboseLog by remember { mutableStateOf(false) }
+    var autoStart by remember { mutableStateOf(false) }
+    var verboseLog by remember { mutableStateOf(true) }
 
     Scaffold(
         topBar = {
@@ -54,52 +53,13 @@ fun SettingsScreen(onBack: () -> Unit) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // Steam account
-            Card {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Steam account", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Not logged in",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Log in to Steam")
-                        Text("→", color = MaterialTheme.colorScheme.primary)
-                    }
-                }
-            }
-
-            // Root mode
-            Card {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Root mode", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Use chroot instead of PRoot for ~15% faster Wine launches. " +
-                            "Requires a rooted phone (you have one).",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(if (rootMode) "Enabled" else "Disabled")
-                        Switch(checked = rootMode, onCheckedChange = { rootMode = it })
-                    }
-                }
-            }
-
             // Auto-start
             Card {
                 Column(Modifier.padding(16.dp)) {
                     Text("Auto-start proxy", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Start the pairing proxy when WepWawet launches.",
+                        "Start the pairing proxy automatically when WepWawet launches.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -120,7 +80,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                     Text("Verbose logging", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Capture TRACE and DEBUG log levels. Disables when battery low.",
+                        "Capture all protocol details including RSA keys, AES keys, " +
+                            "and raw JSON. Check the Logs tab for real-time messages.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -135,32 +96,34 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
             }
 
-            // Reset Wine prefix
-            Card {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Reset Wine prefix", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Wipes the Wine prefix. Steam + WE will need to be reinstalled. " +
-                            "Use only if the prefix is corrupted.",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
-
             // About
             Card {
                 Column(Modifier.padding(16.dp)) {
                     Text("About", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))
+                    Text("WepWawet — Wallpaper Engine companion")
+                    Spacer(Modifier.height(4.dp))
                     Text("Version ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})")
-                    Text("Git: ${BuildConfig.GIT_SHA}",
+                    Text(
+                        "Git: ${BuildConfig.GIT_SHA}",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelSmall)
-                    Text("Built: ${BuildConfig.BUILD_TIME}",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    Text(
+                        "Built: ${BuildConfig.BUILD_TIME}",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelSmall)
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Protocol: RSA-1024 OAEP + AES-256-CBC\n" +
+                            "Discovery: UDP 7884 multicast\n" +
+                            "Pairing: TCP 7889\n" +
+                            "mpkg: PKGM0020 (VFS verified)\n" +
+                            "Status: ${if (verboseLog) "PKGM0020" else ""}",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
             }
         }
