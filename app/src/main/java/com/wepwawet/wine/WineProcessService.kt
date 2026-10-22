@@ -104,7 +104,7 @@ class WineProcessService : LifecycleService() {
             ACTION_START -> startWine()
             ACTION_STOP -> stopWine()
             ACTION_INVOKE_CONTROL -> {
-                val args = intent.getStringArrayExtra(EXTRA_CONTROL_ARGS) ?: return@START_STICKY
+                val args = intent.getStringArrayExtra(EXTRA_CONTROL_ARGS)
                 serviceScope.launch {
                     weControlClient?.invoke(*args)
                 }

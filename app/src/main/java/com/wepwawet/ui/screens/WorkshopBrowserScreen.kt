@@ -65,7 +65,7 @@ fun WorkshopBrowserScreen(
     onOpenPairing: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenLogs: () -> Unit,
-    repo: WorkshopRepository = viewModel { WorkshopRepository(SteamApiService()) },
+    repo: WorkshopRepository = remember { WorkshopRepository(SteamApiService()) },
 ) {
     val items by repo.browseItems.collectAsState()
     val state by repo.browseState.collectAsState()
