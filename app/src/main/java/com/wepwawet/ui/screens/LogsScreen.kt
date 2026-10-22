@@ -40,6 +40,8 @@ import androidx.compose.ui.unit.sp
 import com.wepwawet.log.LogEntry
 import com.wepwawet.log.WepWawetLogger
 import kotlinx.coroutines.delay
+import java.time.format.DateTimeFormatter
+import java.time.ZoneId
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -132,9 +134,6 @@ fun LogsScreen(onBack: () -> Unit) {
         }
     }
 }
-
-import java.time.format.DateTimeFormatter
-import java.time.ZoneId
 
 @Composable
 private fun LogEntryRow(entry: LogEntry) {

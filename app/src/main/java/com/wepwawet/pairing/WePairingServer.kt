@@ -73,6 +73,8 @@ import kotlin.concurrent.thread
  */
 class WePairingServer {
 
+    private val gson = com.google.gson.Gson()
+
     companion object {
         private const val TAG = "WEP-PAIRING"
         const val TCP_PORT = 7889
