@@ -55,8 +55,22 @@ import kotlin.concurrent.thread
  *    - Uses writeInt(length) + ciphertext format for all messages
  *
  * Wire format for encrypted messages:
- *   writeInt(ciphertext_length)   // 4 bytes, big-endian
+ *   writeInt(ciphertext_length)   // 4 bytes, LITTLE-ENDIAN (verified from decompiled
+ *                                 // TcpClient$Companion.writeInt — output.writeByte(value & 255)
+ *                                 // then >> 8, >> 16, >> 24 — that's little-endian!)
  *   write(ciphertext)             // AES/CBC/PKCS5Padding encrypted JSON
+ *
+ * CRITICAL: The WE Android app's TcpClient$Companion.readInt/writeInt use
+ * LITTLE-ENDIAN byte order (ByteBuffer.order(LITTLE_ENDIAN) and shift-down
+ * writeByte calls). Java's DataInputStream.readInt() and DataOutputStream.writeInt()
+ * use BIG-ENDIAN. So we MUST use our own readLeInt()/writeLeInt() helpers
+ * for ALL length prefixes, otherwise the server misreads every message length
+ * and pairing fails silently.
+ *
+ * Heartbeat: After pairing succeeds, the phone's connector thread sends
+ * "heartbeat\n" (10 ASCII bytes, no length prefix) every ~3 seconds.
+ * The server must detect and skip these frames, otherwise readLeInt() would
+ * interpret 'h','e','a','r' as a 4-byte length and bail out.
  *
  * Constants from decompiled TcpClient.java:
  *   MAX_SAFE_COMMAND_LENGTH = 4096
@@ -186,17 +200,92 @@ class WePairingServer {
     }
 
     /**
+     * Write a 4-byte LITTLE-ENDIAN integer to the output stream.
+     *
+     * Mirrors the WE Android app's TcpClient$Companion.writeInt exactly:
+     *   output.writeByte(value & 255)
+     *   output.writeByte((value >> 8) & 255)
+     *   output.writeByte((value >> 16) & 255)
+     *   output.writeByte((value >> 24) & 255)
+     *
+     * If you use DataOutputStream.writeInt() instead, that uses BIG-ENDIAN,
+     * and the phone will misread every length prefix — pairing will fail
+     * silently with a 0 or huge bogus length.
+     */
+    private fun writeLeInt(output: DataOutputStream, value: Int) {
+        output.writeByte(value and 0xFF)
+        output.writeByte((value shr 8) and 0xFF)
+        output.writeByte((value shr 16) and 0xFF)
+        output.writeByte((value shr 24) and 0xFF)
+    }
+
+    /**
+     * Read a 4-byte LITTLE-ENDIAN integer from the input stream.
+     *
+     * Mirrors the WE Android app's TcpClient$Companion.readInt exactly:
+     *   byte[] bArr = new byte[4];
+     *   input.read(bArr, 0, 4);
+     *   return ByteBuffer.wrap(bArr).order(LITTLE_ENDIAN).getInt();
+     *
+     * If you use DataInputStream.readInt() instead, that uses BIG-ENDIAN,
+     * and you'll misread every length prefix from the phone.
+     */
+    private fun readLeInt(input: DataInputStream): Int {
+        val b = ByteArray(4)
+        input.readFully(b)
+        return (b[0].toInt() and 0xFF) or
+               ((b[1].toInt() and 0xFF) shl 8) or
+               ((b[2].toInt() and 0xFF) shl 16) or
+               ((b[3].toInt() and 0xFF) shl 24)
+    }
+
+    /**
+     * Read a length-prefixed message, gracefully skipping 'heartbeat\n'
+     * keepalive frames that the phone's connector thread sends every ~3s
+     * after pairing. Without this, readLeInt() would read 'h','e','a','r'
+     * (0x68, 0x65, 0x61, 0x72) → little-endian 0x72616568 = 1,919,014,504,
+     * which exceeds MAX_SAFE_DATA_LENGTH and breaks the command loop.
+     *
+     * Strategy: peek the first 4 bytes. If they spell ASCII "hear",
+     * consume the remaining 6 bytes ("tbeat\n") and return a sentinel
+     * indicating a heartbeat was seen.
+     */
+    private fun readMessageOrHeartbeat(input: DataInputStream): Pair<String, ByteArray?> {
+        val header = ByteArray(4)
+        input.readFully(header)
+        // Check for 'h','e','a','r' = first 4 bytes of "heartbeat\n"
+        if (header[0] == 0x68.toByte() && header[1] == 0x65.toByte() &&
+            header[2] == 0x61.toByte() && header[3] == 0x72.toByte()) {
+            // Consume the remaining 6 bytes of "heartbeat\n": t,b,e,a,t,\n
+            val rest = ByteArray(6)
+            input.readFully(rest)
+            return "heartbeat" to null
+        }
+        // Otherwise treat as little-endian length prefix
+        val length = (header[0].toInt() and 0xFF) or
+                     ((header[1].toInt() and 0xFF) shl 8) or
+                     ((header[2].toInt() and 0xFF) shl 16) or
+                     ((header[3].toInt() and 0xFF) shl 24)
+        if (length <= 0 || length > MAX_SAFE_DATA_LENGTH) {
+            return "invalid" to null
+        }
+        val payload = ByteArray(length)
+        input.readFully(payload)
+        return "message" to payload
+    }
+
+    /**
      * Handle a single pairing connection from the WE Android app.
      *
      * This implements the full pairing handshake:
-     * 1. Send RSA public key
-     * 2. Receive encrypted AES key
-     * 3. Decrypt AES key with RSA private key
-     * 4. Receive encrypted EncAuthRequest
-     * 5. Decrypt with AES
-     * 6. Verify PIN
-     * 7. Send encrypted EncAuthResponse
-     * 8. Enter command loop
+     * 1. Send RSA public key (modulus + exponent, length-prefixed LE)
+     * 2. Receive encrypted AES key (RSA-encrypted, length-prefixed LE)
+     * 3. Receive AES IV (16 raw bytes, length-prefixed LE)
+     * 4. Decrypt AES key with RSA private key (RSA/ECB/PKCS1Padding)
+     * 5. Receive encrypted EncAuthRequest (AES/CBC/PKCS5Padding)
+     * 6. Decrypt with AES, parse JSON, verify PIN
+     * 7. Send encrypted EncAuthResponse (AES/CBC/PKCS5Padding)
+     * 8. Enter command loop (skips heartbeat frames)
      */
     private fun handleConnection(client: Socket) {
         var pairingSuccess = false
@@ -218,15 +307,15 @@ class WePairingServer {
                     "modulus_bytes" to modulus.toByteArray().size,
                     "exponent_bytes" to exponent.toByteArray().size)
 
-                // Send modulus: writeInt(length) + bytes
+                // Send modulus: writeLeInt(length) + bytes  (LITTLE-ENDIAN length!)
                 val modBytes = modulus.toByteArray()
-                output.writeInt(modBytes.size)
+                writeLeInt(output, modBytes.size)
                 output.write(modBytes)
                 output.flush()
 
-                // Send exponent: writeInt(length) + bytes
+                // Send exponent: writeLeInt(length) + bytes  (LITTLE-ENDIAN length!)
                 val expBytes = exponent.toByteArray()
-                output.writeInt(expBytes.size)
+                writeLeInt(output, expBytes.size)
                 output.write(expBytes)
                 output.flush()
 
@@ -235,7 +324,8 @@ class WePairingServer {
                     "exponent_hex" to expBytes.joinToString("") { "%02x".format(it) })
 
                 // Step 2: Receive encrypted AES key (encrypted with our RSA public key)
-                val encAesKeyLen = input.readInt()
+                // Length prefix is LITTLE-ENDIAN (must use readLeInt, NOT input.readInt!)
+                val encAesKeyLen = readLeInt(input)
                 WepWawetLogger.proxyDebug("Received encrypted AES key",
                     "length" to encAesKeyLen)
                 if (encAesKeyLen <= 0 || encAesKeyLen > 4096) {
@@ -250,8 +340,8 @@ class WePairingServer {
                 rsaCipher.init(Cipher.DECRYPT_MODE, rsaKeyPair!!.private)
                 val aesKeyBytes = rsaCipher.doFinal(encAesKey)
 
-                // Also receive IV (16 bytes)
-                val ivLen = input.readInt()
+                // Also receive IV (16 bytes), length-prefixed LITTLE-ENDIAN
+                val ivLen = readLeInt(input)
                 if (ivLen != AES_IV_SIZE) {
                     WepWawetLogger.proxyError("Invalid IV length: $ivLen (expected $AES_IV_SIZE)")
                     return
@@ -266,11 +356,11 @@ class WePairingServer {
                     "aes_key_bits" to (aesKeyBytes.size * 8),
                     "iv_bytes" to ivBytes.size)
 
-                // Step 4: Receive encrypted EncAuthRequest
+                // Step 4: Receive encrypted EncAuthRequest (length LITTLE-ENDIAN!)
                 val aesCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
                 aesCipher.init(Cipher.DECRYPT_MODE, currentAesKey, currentIv)
 
-                val encAuthReqLen = input.readInt()
+                val encAuthReqLen = readLeInt(input)
                 WepWawetLogger.proxyDebug("Received encrypted EncAuthRequest",
                     "length" to encAuthReqLen)
                 if (encAuthReqLen <= 0 || encAuthReqLen > MAX_SAFE_DATA_LENGTH) {
@@ -320,7 +410,8 @@ class WePairingServer {
                 val encCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
                 encCipher.init(Cipher.ENCRYPT_MODE, currentAesKey, currentIv)
                 val respBytes = encCipher.doFinal(respJson.toByteArray(Charsets.UTF_8))
-                output.writeInt(respBytes.size)
+                // LITTLE-ENDIAN length prefix!
+                writeLeInt(output, respBytes.size)
                 output.write(respBytes)
                 output.flush()
 
@@ -362,9 +453,12 @@ class WePairingServer {
      * Command loop — handles subsequent commands after pairing.
      * All messages are AES-encrypted with the established key.
      *
-     * Wire format per message:
-     *   writeInt(ciphertext_length)  (4 bytes big-endian)
-     *   ciphertext                   (AES/CBC/PKCS5Padding encrypted JSON)
+     * Wire format per message (LITTLE-ENDIAN length prefix — matches phone):
+     *   writeLeInt(ciphertext_length)  (4 bytes little-endian)
+     *   ciphertext                     (AES/CBC/PKCS5Padding encrypted JSON)
+     *
+     * Heartbeat: The phone sends "heartbeat\n" (10 ASCII bytes, no length prefix)
+     * every ~3 seconds. We must detect and skip these frames.
      *
      * The phone may send commands like:
      *   - Request wallpaper download
@@ -380,43 +474,61 @@ class WePairingServer {
         val decCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
         decCipher.init(Cipher.DECRYPT_MODE, currentAesKey, currentIv)
 
+        var heartbeatCount = 0
+        var messageCount = 0
         while (running && currentClient?.isConnected == true) {
             try {
-                val msgLen = input.readInt()
-                if (msgLen <= 0 || msgLen > MAX_SAFE_DATA_LENGTH) {
-                    WepWawetLogger.proxyWarn("Invalid message length in command loop: $msgLen")
-                    break
+                val (kind, payload) = readMessageOrHeartbeat(input)
+                when (kind) {
+                    "heartbeat" -> {
+                        heartbeatCount++
+                        if (heartbeatCount % 10 == 1) {
+                            WepWawetLogger.proxyDebug("Heartbeat received",
+                                "count" to heartbeatCount)
+                        }
+                        continue
+                    }
+                    "invalid" -> {
+                        WepWawetLogger.proxyWarn("Invalid message length in command loop")
+                        break
+                    }
+                    else -> {
+                        val msgBytes = payload ?: continue
+                        messageCount++
+                        val decrypted = decCipher.doFinal(msgBytes)
+                        val commandJson = String(decrypted, Charsets.UTF_8)
+
+                        WepWawetLogger.proxy("Received command",
+                            "length" to msgBytes.size,
+                            "msg_index" to messageCount,
+                            "decrypted_json" to commandJson.take(500))
+
+                        // TODO: Parse and handle specific commands
+                        // For now, send a generic "ok" response (LITTLE-ENDIAN length!)
+                        val encCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+                        encCipher.init(Cipher.ENCRYPT_MODE, currentAesKey, currentIv)
+                        val respBytes = encCipher.doFinal("""{"status":"ok"}""".toByteArray(Charsets.UTF_8))
+                        writeLeInt(output, respBytes.size)
+                        output.write(respBytes)
+                        output.flush()
+                    }
                 }
-                val msgBytes = ByteArray(msgLen)
-                input.readFully(msgBytes)
-
-                val decrypted = decCipher.doFinal(msgBytes)
-                val commandJson = String(decrypted, Charsets.UTF_8)
-
-                WepWawetLogger.proxy("Received command",
-                    "length" to msgLen,
-                    "decrypted_json" to commandJson.take(500))
-
-                // TODO: Parse and handle specific commands
-                // For now, send a generic "ok" response
-                val encCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-                encCipher.init(Cipher.ENCRYPT_MODE, currentAesKey, currentIv)
-                val respBytes = encCipher.doFinal("""{"status":"ok"}""".toByteArray(Charsets.UTF_8))
-                output.writeInt(respBytes.size)
-                output.write(respBytes)
-                output.flush()
 
             } catch (e: java.net.SocketTimeoutException) {
                 // Normal — keep alive
             } catch (e: Exception) {
                 if (running) {
                     WepWawetLogger.proxyWarn("Command loop ended",
-                        "exception" to e.javaClass.name)
+                        "exception" to e.javaClass.name,
+                        "heartbeats_seen" to heartbeatCount,
+                        "messages_seen" to messageCount)
                 }
                 break
             }
         }
-        WepWawetLogger.proxy("Command loop ended")
+        WepWawetLogger.proxy("Command loop ended",
+            "heartbeats_seen" to heartbeatCount,
+            "messages_seen" to messageCount)
     }
 }
 

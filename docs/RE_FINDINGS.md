@@ -128,14 +128,50 @@ cipher.doFinal(buffer)         → plaintext JSON
 }
 ```
 
-### 6. Constants
+### 6. Constants (verified from decompiled source)
 
 ```kotlin
+// TcpClient.java:
 MAX_SAFE_COMMAND_LENGTH = 4096
-MAX_SAFE_DATA_LENGTH = 1048592  // 1 MB
+MAX_SAFE_DATA_LENGTH    = 1048592  // ~1 MiB
+
+// TransferService.java:
+CONNECTION_PROTOCOL_VERSION = 4
+MPKG_SUPPORT_VERSION        = "PKGM0020"  // <-- THIS IS THE .mpkg MAGIC!
 ```
 
-### 7. RSA Public Key
+**CRITICAL**: `TcpClient$Companion.readInt` and `writeInt` use
+LITTLE-ENDIAN byte order (verified from decompiled source):
+```java
+public final int readInt(DataInputStream input) {
+    byte[] bArr = new byte[4];
+    input.read(bArr, 0, 4);
+    return ByteBuffer.wrap(bArr).order(ByteOrder.LITTLE_ENDIAN).getInt();
+}
+public final void writeInt(DataOutputStream output, int value) {
+    output.writeByte(value & 255);          // LSB first
+    output.writeByte((value >> 8) & 255);
+    output.writeByte((value >> 16) & 255);
+    output.writeByte((value >> 24) & 255);  // MSB last
+}
+```
+
+Java's `DataInputStream.readInt()` uses BIG-ENDIAN, so any re-implementation
+of the WE PC side MUST use little-endian length prefixes — otherwise every
+length prefix is misread and pairing fails silently.
+
+### 7. Heartbeat (verified from decompiled source)
+
+After pairing succeeds, the phone's `connector$lambda$2$lambda$1` thread
+sends the literal ASCII bytes `"heartbeat\n"` (10 bytes, NO length prefix)
+every ~3 seconds via `dataOutputStream.writeBytes("heartbeat\n")`.
+
+A WE PC-side server MUST detect and skip these frames. Otherwise, `readInt()`
+would interpret the bytes `h`,`e`,`a`,`r` (0x68, 0x65, 0x61, 0x72) as a
+little-endian 4-byte length = `0x72616568` = 1,919,014,504 bytes — far
+exceeding `MAX_SAFE_DATA_LENGTH` (1,048,592) and breaking the command loop.
+
+### 8. RSA Public Key
 
 ```kotlin
 class RSAPublicKeyHelper {
@@ -144,7 +180,7 @@ class RSAPublicKeyHelper {
 }
 ```
 
-### 8. Paired Server Data
+### 9. Paired Server Data
 
 ```kotlin
 class PairedServer {
@@ -153,28 +189,79 @@ class PairedServer {
 }
 ```
 
-## .mpkg Format (Partially RE'd)
+## .mpkg Format (Best-Effort RE — Updated)
 
-### What we know:
-- `.mpkg` is the Android-specific wallpaper format (distinct from `.pkg` which is the PC format)
-- PC WE converts `.pkg` content to `.mpkg` before transferring to the phone
-- The WE Android app loads `.mpkg` files via `SupportFileLoader`
-- `TransferService.MPKG_SUPPORT_VERSION` is a version string sent during pairing
-- The `EncAuthRequest` includes `mpkgVersion` so the PC knows what version to produce
-- `.mpkg` files are received via encrypted TCP transfer with `RangedInputStream`
-- `LocalWallpaperSparse` and `WallpaperInfoSparse` handle the metadata
+### Confirmed magic bytes
 
-### What we DON'T know (needs more RE):
-- The exact binary format of `.mpkg` (magic bytes, container type)
-- How `.pkg` content is converted to `.mpkg` on the PC side
-- Whether `.mpkg` is a ZIP, custom binary, or something else
-- How 3D scene wallpapers are converted for Android rendering
+The `.mpkg` format begins with the **8-byte ASCII magic `PKGM0020`**.
+This is confirmed by the constant `TransferService.MPKG_SUPPORT_VERSION = "PKGM0020"`
+which is sent in the `EncAuthRequest.mpkgVersion` field during pairing,
+telling the PC which .mpkg version the phone supports.
 
-### How to get a sample `.mpkg`:
-1. Pair a real phone with a real PC running WE
-2. Transfer a wallpaper
-3. Look in `/storage/emulated/0/Android/data/io.wallpaperengine.weclient/files/`
-4. Use `scripts/re_toolkit.sh mpkg` to analyze the format
+### VFS (Virtual File System) layout
+
+The `.mpkg` is a custom binary container that implements a VFS. The native
+library `libscenejni.so` parses it and exposes these JNI methods on `SceneLib`:
+
+- `String getWallpaperType(String filePath)` — returns `"Scene"`, `"Video"`, etc.
+- `VirtualFileRange getWallpaperFileVirtualOffset(String filePath)`
+  → returns `{vOffset: long, vSize: long}` describing where a virtual file lives
+- `WallpaperInfoSparse[] enumerateWallpapers()` — lists all wallpapers
+- `WallpaperInfoSparse getWallpaperInfoSparse(String filePath)`
+- `byte[] getWallpaperInfoPreviewBitmap(String filePath)`
+- `Point getWallpaperResolution(String filePath)`
+- `boolean isWallpaperVersionValid(String filePath)`
+- `String getWallpaperProjectString(String filePath, String key)`
+
+The Java side then uses `SupportFileLoader.loadBitmapFromVFS(vfsSource, offset, size)`
+which wraps the .mpkg file in a `RangedInputStream(FileInputStream(vfsSource),
+offset, size)` to read a single virtual file out of the container.
+
+For video wallpapers, `Util.getMPKGVideoReader(reader, offsets)` returns a
+`MediaDataSource` that does:
+```java
+reader.seek(position + offsets.getVOffset());
+return reader.read(buffer, offset, size);  // bounded by offsets.getVSize()
+```
+
+### URI scheme
+
+`Util.URI_PROTOCOL_MPKG_VFS = "MPKG_VFS://"` — wallpapers reference internal
+virtual files via this URI scheme.
+
+### What we still DON'T know
+
+- The exact byte layout of the VFS table (offsets, sizes, name table location).
+- How `.pkg` content (the PC format) is converted to `.mpkg` on the PC side.
+- How 3D scene wallpapers are converted for Android rendering.
+- The binary format of `libscenejni.so` itself (which contains the actual VFS parser).
+
+### How to get a sample `.mpkg` (then feed to `scripts/toolkit/mpkg_analyzer.py`)
+
+1. Pair a real phone with a real PC running WE.
+2. Transfer any wallpaper.
+3. The `.mpkg` files are saved at:
+   `/storage/emulated/0/Android/data/io.wallpaperengine.weclient/files/`
+4. Pull via adb:
+   ```bash
+   adb pull /sdcard/Android/data/io.wallpaperengine.weclient/files/ ./we-files
+   ```
+5. Analyze:
+   ```bash
+   ./scripts/toolkit/run.sh analyze ./we-files/some-wallpaper.mpkg --full
+   ```
+
+### RE next steps
+
+1. Use `scripts/toolkit/run.sh frida --out hooks.js` to generate a Frida
+   script that hooks `SceneLib.getWallpaperFileVirtualOffset` and prints
+   the (offset, size) for every virtual file the native lib parses.
+2. Compare the offsets against the binary layout to reverse the VFS table.
+3. Use `scripts/toolkit/run.sh capture` to capture a real pairing session
+   and confirm the wire format.
+4. The `scripts/toolkit/mpkg_packer.py` script implements a HEURISTIC layout
+   (8-byte magic + 4-byte LE count + N×16-byte VFS table + name table + blobs).
+   Iterate this layout against the real app with Frida hooks to confirm.
 
 ## Steam Workshop Download Methods
 

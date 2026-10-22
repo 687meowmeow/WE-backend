@@ -21,7 +21,9 @@ Wallpaper Engine has an official Android app, but it requires a PC running WE on
 | `.github/workflows/` | CI: per-component matrix builds → APK assembly → release |
 | `docker/Dockerfile.builder` | Pre-built GHCR image with NDK + Wine + Box64 toolchains |
 | `scripts/` | Fetch-and-package scripts for emulation components |
+| `scripts/toolkit/` | **Cross-platform Python RE toolkit** (Windows/macOS/Linux) — `.mpkg` analyzer, packer, WE pairing server, Frida hooks, etc. See `scripts/toolkit/README_TOOLKIT.md`. |
 | `docs/RESEARCH_SUMMARY.md` | Findings from the 4-area feasibility research |
+| `docs/RE_FINDINGS.md` | Reverse-engineered WE pairing protocol + .mpkg format details |
 | `ARCHITECTURE.md` | Architecture decisions, data flow, open work |
 
 ## Device requirements (target)
