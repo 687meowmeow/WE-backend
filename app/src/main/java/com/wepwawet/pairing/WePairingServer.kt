@@ -106,6 +106,7 @@ class WePairingServer {
     var onPairingSuccess: ((String) -> Unit)? = null  // deviceName
     var onPairingFailure: ((String) -> Unit)? = null  // errorMessage
     var onWallpaperRequested: ((String) -> String?)? = null  // wallpaperId -> mpkgFilePath
+    var onConnected: (() -> Unit)? = null  // called when command loop starts
 
     /**
      * Generate an RSA keypair for pairing.
@@ -495,6 +496,150 @@ class WePairingServer {
         }
     }
 
+    // Pending wallpaper transfers (queue of (file, title) pairs)
+    private val pendingWallpapers = java.util.concurrent.LinkedBlockingQueue<Pair<java.io.File, String>>()
+
+    /**
+     * Queue a wallpaper .mpkg file to be sent to the phone.
+     * Called from the UI when the user selects a wallpaper to "send to phone".
+     * The file will be sent during the command loop.
+     */
+    fun sendWallpaper(mpkgFile: java.io.File, title: String) {
+        WepWawetLogger.proxy("Wallpaper queued for transfer",
+            "file" to mpkgFile.name,
+            "title" to title,
+            "size" to mpkgFile.length())
+        pendingWallpapers.add(mpkgFile to title)
+    }
+
+    /**
+     * Send an AES-encrypted JSON object to the phone.
+     * Mirrors TcpClient$Companion.sendEncryptedGSONObject:
+     *   writeLeInt(ciphertext_length) + AES_encrypted(JSON)
+     * Each call creates a FRESH cipher (the phone does the same on its read side).
+     */
+    private fun sendEncryptedJson(output: DataOutputStream, obj: Any) {
+        val json = gson.toJson(obj)
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(Cipher.ENCRYPT_MODE, currentAesKey, currentIv)
+        val ciphertext = cipher.doFinal(json.toByteArray(Charsets.UTF_8))
+        writeLeInt(output, ciphertext.size)
+        output.write(ciphertext)
+        output.flush()
+    }
+
+    /**
+     * Send AES-encrypted raw data (file chunk) to the phone.
+     * Mirrors TcpClient$Companion.sendEncryptedGSONObject but for raw bytes:
+     *   writeLeInt(ciphertext_length) + AES_encrypted(data)
+     */
+    private fun sendEncryptedData(output: DataOutputStream, data: ByteArray) {
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(Cipher.ENCRYPT_MODE, currentAesKey, currentIv)
+        // PKCS7 pad to 16-byte boundary
+        val padLen = 16 - (data.size % 16)
+        val padded = data + ByteArray(padLen) { padLen.toByte() }
+        val ciphertext = cipher.doFinal(padded)
+        writeLeInt(output, ciphertext.size)
+        output.write(ciphertext)
+        output.flush()
+    }
+
+    /**
+     * Send a .mpkg wallpaper file to the phone using the DownloadInfo transfer protocol.
+     *
+     * Protocol (VERIFIED from decompiled TcpClient.java command loop lines 727-926):
+     * 1. Send {"command":"beginUpload"} — encrypted JSON
+     * 2. Send {"command":"transmissionStart","title":"...","file":"wallpapers/X.mpkg","size":totalSize}
+     * 3. For each ~1MB chunk:
+     *    a. Send {"command":"transmissionContinue","size":1} — encrypted JSON (size>0 = data follows)
+     *    b. Send 4-byte LE length + AES-encrypted chunk — the actual file bytes
+     * 4. Send {"command":"transmissionContinue","size":0} — encrypted JSON (done)
+     * 5. Phone moves temp file to filesDir/downloads/wallpapers/X.mpkg
+     */
+    private fun transferWallpaper(
+        output: DataOutputStream,
+        mpkgFile: java.io.File,
+        title: String,
+    ) {
+        val totalSize = mpkgFile.length()
+        val fileName = "wallpapers/${mpkgFile.name}"
+
+        WepWawetLogger.proxy("Starting wallpaper transfer",
+            "file" to fileName,
+            "title" to title,
+            "size" to totalSize,
+            "size_mb" to (totalSize / 1024.0 / 1024.0))
+
+        try {
+            // Step 1: beginUpload
+            sendEncryptedJson(output, DownloadInfo(command = "beginUpload"))
+            WepWawetLogger.proxy("Sent beginUpload")
+
+            // Step 2: transmissionStart
+            sendEncryptedJson(output, DownloadInfo(
+                command = "transmissionStart",
+                title = title,
+                file = fileName,
+                size = totalSize,
+            ))
+            WepWawetLogger.proxy("Sent transmissionStart",
+                "file" to fileName, "size" to totalSize)
+
+            // Step 3: send chunks
+            val chunkSize = 1024 * 1024  // 1 MB chunks
+            var bytesSent = 0L
+            var chunkNum = 0
+            java.io.FileInputStream(mpkgFile).use { fis ->
+                val buffer = ByteArray(chunkSize)
+                while (true) {
+                    val read = fis.read(buffer)
+                    if (read <= 0) break
+                    val chunk = if (read < chunkSize) buffer.copyOf(read) else buffer
+
+                    // Send transmissionContinue with size=1 (signals "data follows")
+                    sendEncryptedJson(output, DownloadInfo(
+                        command = "transmissionContinue",
+                        size = 1L,  // >0 means "read encrypted data next"
+                    ))
+
+                    // Send the AES-encrypted chunk data
+                    sendEncryptedData(output, chunk)
+
+                    bytesSent += read
+                    chunkNum++
+                    if (chunkNum % 10 == 0 || bytesSent == totalSize) {
+                        WepWawetLogger.proxy("Transfer progress",
+                            "chunk" to chunkNum,
+                            "bytes_sent" to bytesSent,
+                            "total" to totalSize,
+                            "pct" to (bytesSent * 100 / totalSize).toInt())
+                    }
+                }
+            }
+
+            // Step 4: transmissionContinue with size=0 (signals "done")
+            sendEncryptedJson(output, DownloadInfo(
+                command = "transmissionContinue",
+                size = 0L,  // 0 means "transfer complete"
+            ))
+            WepWawetLogger.proxy("Wallpaper transfer complete!",
+                "file" to fileName,
+                "bytes_sent" to bytesSent,
+                "chunks" to chunkNum)
+
+        } catch (e: Exception) {
+            WepWawetLogger.proxyError("Wallpaper transfer failed",
+                "file" to fileName,
+                "exception" to e.javaClass.name,
+                "message" to (e.message ?: ""))
+            // Send cancel
+            try {
+                sendEncryptedJson(output, DownloadInfo(command = "transmissionCancel"))
+            } catch (_: Exception) {}
+        }
+    }
+
     /**
      * Command loop — handles subsequent commands after pairing.
      * All messages are AES-encrypted with the established key.
@@ -549,14 +694,20 @@ class WePairingServer {
                             "msg_index" to messageCount,
                             "decrypted_json" to commandJson.take(500))
 
-                        // TODO: Parse and handle specific commands
-                        // For now, send a generic "ok" response (LITTLE-ENDIAN length!)
-                        val encCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-                        encCipher.init(Cipher.ENCRYPT_MODE, currentAesKey, currentIv)
-                        val respBytes = encCipher.doFinal("""{"status":"AuthOK"}""".toByteArray(Charsets.UTF_8))
-                        writeLeInt(output, respBytes.size)
-                        output.write(respBytes)
-                        output.flush()
+                        // Check for pending wallpaper transfers
+                        val pending = pendingWallpapers.poll()
+                        if (pending != null) {
+                            WepWawetLogger.proxy("Processing pending wallpaper transfer")
+                            transferWallpaper(output, pending.first, pending.second)
+                        } else {
+                            // No pending wallpaper — send generic response
+                            val encCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+                            encCipher.init(Cipher.ENCRYPT_MODE, currentAesKey, currentIv)
+                            val respBytes = encCipher.doFinal("""{"status":"AuthOK"}""".toByteArray(Charsets.UTF_8))
+                            writeLeInt(output, respBytes.size)
+                            output.write(respBytes)
+                            output.flush()
+                        }
                     }
                 }
 
@@ -611,3 +762,45 @@ data class EncAuthRequest(
 data class EncAuthResponse(
     var status: String = "",
 )
+
+/**
+ * DownloadInfo — the PC sends this to the phone to transfer wallpaper files.
+ *
+ * Fields from decompiled io.wallpaperengine.wedata.DownloadInfo:
+ *   command: String — "beginUpload", "transmissionStart", "transmissionContinue", "transmissionCancel"
+ *   title: String — wallpaper title
+ *   file: String — file path relative to downloads folder (e.g., "wallpapers/123.mpkg")
+ *   size: Long — total file size (for transmissionStart) or chunk flag (>0 = read data, 0 = done)
+ *   data: ByteArray — decrypted chunk data (phone-side only)
+ *   bytesRemaining: Long — bytes remaining (phone-side only)
+ *
+ * Transfer protocol (VERIFIED from decompiled TcpClient.java command loop):
+ * 1. PC sends {"command":"beginUpload"} — encrypted JSON
+ * 2. PC sends {"command":"transmissionStart","title":"...","file":"wallpapers/X.mpkg","size":totalSize}
+ * 3. For each chunk (~1MB):
+ *    a. PC sends {"command":"transmissionContinue","size":1} — encrypted JSON (size>0 = read data)
+ *    b. PC sends 4-byte LE length + AES-encrypted chunk_data — the actual file bytes
+ * 4. PC sends {"command":"transmissionContinue","size":0} — encrypted JSON (size=0 = done)
+ * 5. Phone moves temp file to filesDir/downloads/wallpapers/X.mpkg
+ */
+data class DownloadInfo(
+    var command: String = "",
+    var title: String = "",
+    var file: String = "",
+    var size: Long = 0L,
+    var data: ByteArray? = null,
+    var bytesRemaining: Long = 0L,
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is DownloadInfo) return false
+        return command == other.command && title == other.title && file == other.file && size == other.size
+    }
+    override fun hashCode(): Int {
+        var result = command.hashCode()
+        result = 31 * result + title.hashCode()
+        result = 31 * result + file.hashCode()
+        result = 31 * result + size.hashCode()
+        return result
+    }
+}

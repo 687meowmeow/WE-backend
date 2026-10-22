@@ -58,8 +58,11 @@ fun LogsScreen(onBack: () -> Unit) {
     }
 
     fun copyLogs() {
+        val formatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
+            .withZone(ZoneId.systemDefault())
         val text = events.reversed().joinToString("\n") { entry ->
             buildString {
+                append("[${formatter.format(entry.timestamp)}] ")
                 append("[${entry.domain.tag}] ${entry.level.name}: ${entry.message}")
                 if (entry.context.isNotEmpty()) {
                     append(" ")
@@ -130,6 +133,9 @@ fun LogsScreen(onBack: () -> Unit) {
     }
 }
 
+import java.time.format.DateTimeFormatter
+import java.time.ZoneId
+
 @Composable
 private fun LogEntryRow(entry: LogEntry) {
     val levelColor = when (entry.level) {
@@ -138,6 +144,11 @@ private fun LogEntryRow(entry: LogEntry) {
         WepWawetLogger.Level.WARN -> Color(0xFFFFB72E)
         WepWawetLogger.Level.ERROR -> Color(0xFFFF6B5C)
         WepWawetLogger.Level.FATAL -> Color(0xFFFFB72E)
+    }
+    val timeStr = remember(entry.seq) {
+        val formatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
+            .withZone(ZoneId.systemDefault())
+        formatter.format(entry.timestamp)
     }
     Card(
         colors = CardDefaults.cardColors(
@@ -150,6 +161,13 @@ private fun LogEntryRow(entry: LogEntry) {
     ) {
         Column(Modifier.padding(8.dp)) {
             Row(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = timeStr,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    modifier = Modifier.padding(end = 6.dp),
+                )
                 Text(
                     text = entry.domain.tag,
                     color = MaterialTheme.colorScheme.primary,
