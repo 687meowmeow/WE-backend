@@ -105,15 +105,18 @@ class WineProcessService : LifecycleService() {
             ACTION_STOP -> stopWine()
             ACTION_INVOKE_CONTROL -> {
                 val args = intent.getStringArrayExtra(EXTRA_CONTROL_ARGS)
-                serviceScope.launch {
-                    weControlClient?.invoke(*args)
+                if (args != null) {
+                    serviceScope.launch {
+                        weControlClient?.invoke(*args)
+                    }
                 }
             }
             ACTION_DOWNLOAD_WORKSHOP_ITEM -> {
                 val publishedFileId = intent.getStringExtra(EXTRA_PUBLISHED_FILE_ID)
-                    ?: return@START_STICKY
-                serviceScope.launch {
-                    downloadWorkshopItem(publishedFileId)
+                if (publishedFileId != null) {
+                    serviceScope.launch {
+                        downloadWorkshopItem(publishedFileId)
+                    }
                 }
             }
         }
