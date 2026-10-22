@@ -60,7 +60,13 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.findByName("release")
+            // Use release signing if keystore is set; otherwise debug-sign
+            // (debug-signed APK is fine for sideloading — just not for Play Store)
+            signingConfig = if (System.getenv("WEPWAWET_KEYSTORE_PATH") != null) {
+                signingConfigs.findByName("release")
+            } else {
+                signingConfigs.findByName("debug")
+            }
             // Native libs are extracted at install time so they can be loaded directly
             // (Winlator requires this for the Box64 binary that's exec'd)
             packaging {
