@@ -81,10 +81,23 @@ object WepWawetLogger {
     fun init(context: Context) {
         if (initialized) return
         initialized = true
-        val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-        val savedOrdinal = prefs.getInt(PREF_MIN_LEVEL, Level.INFO.ordinal)
-        minLevel = Level.entries.getOrElse(savedOrdinal) { Level.INFO }
-        LogPersistenceWorker.schedule(context)
+        // Read the persisted minimum log level (set by the Settings screen "Log level" picker).
+        // Wrap in try-catch — if SharedPreferences fails (very unlikely, but possible on
+        // device corruption), we still want the logger to work with the default INFO level.
+        runCatching {
+            val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            val savedOrdinal = prefs.getInt(PREF_MIN_LEVEL, Level.INFO.ordinal)
+            minLevel = Level.entries.getOrElse(savedOrdinal) { Level.INFO }
+        }
+        // WorkManager scheduling — wrap in try-catch. WorkManager.getInstance() can throw
+        // IllegalStateException if the on-demand initializer is misconfigured, and we don't
+        // want a WorkManager init failure to crash the app on boot. The in-memory ring
+        // buffer still works without the file-persistence worker.
+        runCatching {
+            LogPersistenceWorker.schedule(context)
+        }.onFailure { t ->
+            android.util.Log.e("WepWawetLogger", "LogPersistenceWorker.schedule failed", t)
+        }
         androidLog(Domain.APP, Level.INFO, "WepWawetLogger.init", "logger initialized", null)
     }
 

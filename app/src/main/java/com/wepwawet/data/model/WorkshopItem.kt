@@ -45,7 +45,7 @@ data class WorkshopItem(
     @SerializedName("creator_app_id") val creatorAppId: Long = 0L,
     @SerializedName("creator_steam_id") val creatorSteamId: String? = null,
     @SerializedName("visibility") val visibility: Int = 0,
-    @SerializedName("banned") val banned: Boolean = false,
+    @SerializedName("banned") val banned: Int = 0,
     @SerializedName("ban_reason") val banReason: String? = null,
     @SerializedName("banner") val banner: String? = null,
     @SerializedName("app_name") val appName: String? = null,

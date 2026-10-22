@@ -28,6 +28,14 @@
     <!-- Scoped storage on Android 10+; we use app-specific external storage (no permission needed) -->
     <!-- But for the official WE Android app to find the .mpkg outbox, we may need to expose via FileProvider -->
 
+    <!-- WRITE_EXTERNAL_STORAGE for Android 9 and below so we can write crash logs
+         and boot breadcrumbs to the public Downloads/WepWawet/ directory via legacy
+         File API. On Android 10+ we use MediaStore (no permission needed). -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
     <!-- Root detection: query SU binary — no permission needed but uses Runtime.exec -->
     <!-- (no manifest declaration required) -->
 
