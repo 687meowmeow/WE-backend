@@ -1,22 +1,39 @@
 package com.wepwawet.ui.screens
 
+import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -24,36 +41,99 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.wepwawet.data.WorkshopRepository
 import com.wepwawet.data.model.WorkshopItemTyped
+import com.wepwawet.log.WepWawetLogger
+import com.wepwawet.pairing.PairingService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.io.File
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Wallpaper detail screen.
+ *
+ * Shows:
+ *   - Full preview image (16:9)
+ *   - Title, description, tags (chips), type, resolution guess, subs count, file size
+ *   - "Download" button — downloads the preview image to a local cache (the actual
+ *     workshop content requires the Wine+Steam backend which is out of scope for v1;
+ *     downloading the preview at least gives the user visible feedback)
+ *   - "Send to Phone" button — if a phone is paired via [PairingService], queues the
+ *     cached file for transfer via the pairing protocol
+ *   - Progress indicator (linear) during download/transfer
+ *
+ * All actions are logged via [WepWawetLogger.workshop].
+ *
+ * @param repo shared workshop repository — used for getById() lookups + subscribe()
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun WallpaperDetailScreen(
     itemId: String,
     onBack: () -> Unit,
+    repo: WorkshopRepository,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
     var item by remember { mutableStateOf<WorkshopItemTyped?>(null) }
     var loading by remember { mutableStateOf(true) }
-    var subscribed by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isPaired by remember { mutableStateOf(PairingService.isPaired()) }
+
+    // Download / transfer state
+    var downloadProgress by remember { mutableStateOf(0f) }  // 0..1
+    var isDownloading by remember { mutableStateOf(false) }
+    var downloadedFile by remember { mutableStateOf<File?>(null) }
+    var isSending by remember { mutableStateOf(false) }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(itemId) {
         loading = true
-        // TODO: get from real WorkshopRepository
-        item = null
-        subscribed = false
-        loading = false
+        errorMessage = null
+        WepWawetLogger.workshop("WallpaperDetailScreen load", "id" to itemId)
+        try {
+            val loaded = repo.getById(itemId)
+            item = loaded
+            if (loaded == null) {
+                errorMessage = "Wallpaper not found."
+                WepWawetLogger.workshopWarn("WallpaperDetailScreen: item not found",
+                    "id" to itemId)
+            }
+        } catch (e: Exception) {
+            errorMessage = e.message ?: "Failed to load wallpaper."
+            WepWawetLogger.workshopWarn("WallpaperDetailScreen load failed",
+                "id" to itemId, "exception" to e.javaClass.name)
+        } finally {
+            loading = false
+        }
+    }
+
+    // Periodically poll pairing state (companion flag is cheap)
+    LaunchedEffect(Unit) {
+        while (true) {
+            isPaired = PairingService.isPaired()
+            kotlinx.coroutines.delay(1000)
+        }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(item?.title ?: "Loading…") },
+                title = { Text(item?.title ?: "Loading…", maxLines = 1) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
@@ -64,13 +144,26 @@ fun WallpaperDetailScreen(
     ) { padding ->
         if (loading) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Text("Loading…")
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CircularProgressIndicator()
+                    Text("Loading…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             return@Scaffold
         }
         val current = item ?: run {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Text("Wallpaper not found.")
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(errorMessage ?: "Wallpaper not found.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium)
+                }
             }
             return@Scaffold
         }
@@ -82,56 +175,312 @@ fun WallpaperDetailScreen(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            // === Preview image ===
             item {
-                AsyncImage(
-                    model = current.previewUrl,
-                    contentDescription = current.title,
-                    contentScale = ContentScale.Crop,
+                Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(220.dp),
-                )
-            }
-            item {
-                Text(current.title, style = MaterialTheme.typography.headlineSmall)
-            }
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("by ${current.creator}", style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("Type: ${current.type.displayName}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("Subscriptions: ${current.subscriptions}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("Size: ${current.fileSizeFormatted}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        .aspectRatio(16f / 9f),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                ) {
+                    AsyncImage(
+                        model = current.previewUrl,
+                        contentDescription = current.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
             }
+
+            // === Title ===
             item {
-                Text(current.item.description,
-                    style = MaterialTheme.typography.bodyMedium)
+                Text(current.title, style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold)
             }
+
+            // === Metadata block ===
             item {
-                Button(onClick = {
-                    subscribed = !subscribed
-                    // TODO: tell WineProcessService to subscribe + download
-                }, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (subscribed) "Subscribed" else "Subscribe")
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    ),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        MetadataRow("Type", current.type.displayName)
+                        MetadataRow("Creator", current.creator.ifBlank { "Unknown" })
+                        MetadataRow("Subscriptions", current.subscriptionsFormatted)
+                        MetadataRow("Favorites", current.favorited.toString())
+                        MetadataRow("Views", current.views.toString())
+                        MetadataRow("File size", current.fileSizeFormatted)
+                        MetadataRow("Created", current.createdDateFormatted)
+                        MetadataRow("Resolution", guessResolution(current))
+                    }
                 }
             }
+
+            // === Tags ===
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Tags", style = MaterialTheme.typography.titleSmall)
+                    if (current.tags.isEmpty()) {
+                        Text("No tags", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            current.tags.forEach { tag ->
+                                AssistChip(
+                                    onClick = {},
+                                    label = { Text(tag) },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // === Description ===
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Description", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        current.description.ifBlank { "No description available." },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+
+            // === Status message (download/send feedback) ===
+            item {
+                statusMessage?.let {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            it,
+                            modifier = Modifier.padding(12.dp),
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+
+            // === Progress ===
+            if (isDownloading || isSending) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        LinearProgressIndicator(
+                            progress = { if (isDownloading) downloadProgress else 0f },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            if (isDownloading) "Downloading… ${(downloadProgress * 100).toInt()}%"
+                            else "Sending to phone…",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            // === Download button ===
             item {
                 Button(
-                    onClick = { /* TODO: trigger wallpaper32.exe -control openWallpaper + .mpkg push */ },
+                    onClick = {
+                        WepWawetLogger.workshop("download tapped",
+                            "id" to current.id, "title" to current.title.take(80))
+                        scope.launch {
+                            isDownloading = true
+                            downloadProgress = 0f
+                            statusMessage = "Starting download…"
+                            val downloaded = downloadWallpaper(
+                                context = context,
+                                item = current,
+                                onProgress = { frac ->
+                                    downloadProgress = frac
+                                },
+                            )
+                            isDownloading = false
+                            downloadedFile = downloaded
+                            statusMessage = if (downloaded != null) {
+                                "Saved to ${downloaded.absolutePath}"
+                            } else {
+                                "Download failed — check logs"
+                            }
+                            // Mark as subscribed
+                            repo.subscribe(current.id)
+                        }
+                    },
+                    enabled = !isDownloading && current.previewUrl != null,
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = subscribed,
+                ) {
+                    Icon(Icons.Filled.Download, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (isDownloading) "Downloading…" else "Download")
+                }
+            }
+
+            // === Send to phone button ===
+            item {
+                Button(
+                    onClick = {
+                        WepWawetLogger.workshop("send-to-phone tapped",
+                            "id" to current.id,
+                            "is_paired" to PairingService.isPaired(),
+                            "has_file" to (downloadedFile != null))
+                        scope.launch {
+                            isSending = true
+                            statusMessage = null
+                            try {
+                                if (!PairingService.isPaired()) {
+                                    statusMessage = "Not paired — open the Pairing tab first."
+                                    WepWawetLogger.workshopWarn(
+                                        "send-to-phone: not paired, aborting",
+                                        "id" to current.id)
+                                    return@launch
+                                }
+                                // Reuse the downloaded file if available, otherwise
+                                // download it now (without UI progress).
+                                val file = downloadedFile ?: run {
+                                    statusMessage = "Downloading preview…"
+                                    downloadWallpaper(context, current) { }
+                                }
+                                if (file == null || !file.exists()) {
+                                    statusMessage = "Failed to locate file for transfer."
+                                    return@launch
+                                }
+                                PairingService.queueWallpaper(file, current.title)
+                                statusMessage = "Queued for transfer to " +
+                                    (PairingService.pairedDeviceName ?: "phone")
+                                WepWawetLogger.workshop("send-to-phone queued",
+                                    "file" to file.name,
+                                    "size" to file.length())
+                            } finally {
+                                isSending = false
+                            }
+                        }
+                    },
+                    enabled = !isSending && !isDownloading,
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Filled.Send, contentDescription = null)
-                    Text("Send to phone")
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (isSending) "Sending…"
+                        else if (!isPaired) "Send to phone (pair first)"
+                        else "Send to phone"
+                    )
+                }
+            }
+
+            // === Bottom spacer ===
+            item { Spacer(Modifier.height(48.dp)) }
+        }
+    }
+}
+
+// ====== Composable sub-parts ======
+
+@Composable
+private fun MetadataRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+// ====== Side helper: download the preview image to a local cache ======
+
+private val downloadHttpClient = OkHttpClient.Builder().build()
+
+/**
+ * Best-effort download of the workshop item's preview_url to the app's external
+ * cache dir (`/sdcard/Android/data/com.wepwawet/cache/wallpapers/<id>.jpg`).
+ *
+ * NOTE: This downloads the *preview thumbnail*, not the actual wallpaper content
+ * (which requires the Wine+Steam backend to fetch from Steam's CDN with auth).
+ * For v1, we use the preview as a stand-in so the user gets visible feedback.
+ *
+ * @return the downloaded File, or `null` on failure
+ */
+private suspend fun downloadWallpaper(
+    context: Context,
+    item: WorkshopItemTyped,
+    onProgress: (Float) -> Unit,
+): File? = withContext(Dispatchers.IO) {
+    val url = item.previewUrl ?: return@withContext null
+    try {
+        val outDir = File(context.externalCacheDir, "wallpapers").apply { mkdirs() }
+        val outFile = File(outDir, "${item.id}.jpg")
+        // If we've already downloaded it, just return it
+        if (outFile.exists() && outFile.length() > 0) {
+            onProgress(1f)
+            WepWawetLogger.workshop("downloadWallpaper: cache hit",
+                "file" to outFile.name, "size" to outFile.length())
+            return@withContext outFile
+        }
+
+        val request = Request.Builder().url(url).build()
+        val response = downloadHttpClient.newCall(request).execute()
+        if (!response.isSuccessful) {
+            WepWawetLogger.workshopWarn("downloadWallpaper HTTP error",
+                "code" to response.code, "url" to url.take(120))
+            return@withContext null
+        }
+        val body = response.body ?: return@withContext null
+        val totalBytes = body.contentLength().toFloat().coerceAtLeast(1f)
+        body.byteStream().use { input ->
+            outFile.outputStream().use { output ->
+                val buffer = ByteArray(8 * 1024)
+                var read: Int
+                var downloaded = 0L
+                while (input.read(buffer).also { read = it } != -1) {
+                    output.write(buffer, 0, read)
+                    downloaded += read
+                    onProgress((downloaded / totalBytes).coerceIn(0f, 1f))
                 }
             }
         }
+        onProgress(1f)
+        WepWawetLogger.workshop("downloadWallpaper done",
+            "file" to outFile.name, "size" to outFile.length())
+        outFile
+    } catch (e: Exception) {
+        WepWawetLogger.workshopWarn("downloadWallpaper failed",
+            "exception" to e.javaClass.name, "message" to (e.message ?: ""))
+        null
     }
+}
+
+/**
+ * Guess the wallpaper resolution from the workshop tags.
+ * Steam WE workshop items typically include resolution tags like "1920x1080" or "3840x2160".
+ * Returns "Unknown" if no resolution tag is found.
+ */
+private fun guessResolution(item: WorkshopItemTyped): String {
+    val pattern = Regex("(\\d{3,5})\\s*[xX×]\\s*(\\d{3,5})")
+    item.tags.forEach { tag ->
+        val m = pattern.find(tag)
+        if (m != null) return "${m.groupValues[1]}x${m.groupValues[2]}"
+    }
+    return "Unknown"
 }

@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Login
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -25,14 +27,24 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.wepwawet.BuildConfig
+import com.wepwawet.auth.SteamLoginActivity
+import com.wepwawet.log.WepWawetLogger
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onOpenSteamLogin: () -> Unit = {},
+) {
+    val context = LocalContext.current
     var autoStart by remember { mutableStateOf(false) }
     var verboseLog by remember { mutableStateOf(true) }
+    // Re-check login state on every recomposition (cheap SharedPreferences read)
+    var steamLoggedIn by remember { mutableStateOf(SteamLoginActivity.isLoggedIn(context)) }
+    var steamId by remember { mutableStateOf(SteamLoginActivity.getSteamId(context)) }
 
     Scaffold(
         topBar = {
@@ -70,6 +82,56 @@ fun SettingsScreen(onBack: () -> Unit) {
                     ) {
                         Text(if (autoStart) "Enabled" else "Disabled")
                         Switch(checked = autoStart, onCheckedChange = { autoStart = it })
+                    }
+                }
+            }
+
+            // Steam account
+            Card {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Steam account", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Sign in to Steam to subscribe to and download workshop items. " +
+                            "Your password stays on Steam's servers — WepWawet only " +
+                            "stores the resulting session cookies.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        if (steamLoggedIn)
+                            "Logged in as ${steamId ?: "unknown Steam ID"}"
+                        else "Not logged in",
+                        color = if (steamLoggedIn)
+                            MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            WepWawetLogger.lifecycle("SettingsScreen: open Steam login")
+                            onOpenSteamLogin()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Filled.Login, contentDescription = null)
+                        Spacer(Modifier.height(0.dp))
+                        Text("  ${if (steamLoggedIn) "Re-authenticate" else "Log in to Steam"}")
+                    }
+                    if (steamLoggedIn) {
+                        Spacer(Modifier.height(8.dp))
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = {
+                                WepWawetLogger.lifecycle("SettingsScreen: Steam logout")
+                                SteamLoginActivity.logout(context)
+                                steamLoggedIn = false
+                                steamId = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Log out")
+                        }
                     }
                 }
             }

@@ -68,9 +68,16 @@
         </activity>
 
         <!-- ====== Steam login (WebView, separate Activity so it has its own back-stack) ====== -->
+        <!--
+            configChanges prevents the WebView from being destroyed on rotation,
+            which would lose the user's in-progress login. launchMode=singleTop
+            prevents stacking multiple SteamLoginActivity instances.
+        -->
         <activity
             android:name=".auth.SteamLoginActivity"
             android:exported="false"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode|density"
             android:theme="@style/Theme.WepWawet" />
 
         <!-- ====== Foreground services ====== -->

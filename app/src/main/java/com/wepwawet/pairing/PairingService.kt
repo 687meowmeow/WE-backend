@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.wepwawet.log.WepWawetLogger
+import java.io.File
 
 /**
  * PairingService — foreground service that runs the WE pairing servers.
@@ -28,6 +29,16 @@ import com.wepwawet.log.WepWawetLogger
  *   ContextCompat.startForegroundService(context, intent)
  *   // To stop:
  *   context.stopService(Intent(context, PairingService::class.java))
+ *
+ * == Static access from UI (per Task 9) ==
+ *
+ * The [Companion.pairingServer] field exposes the singleton [WePairingServer]
+ * instance for the lifetime of the service. UI screens can call:
+ *   - [isPaired] to check if a phone is currently paired
+ *   - [queueWallpaper] to push a .mpkg file to the paired phone
+ *   - [pairedDeviceName] to display the connected phone's name
+ *
+ * All three are safe to call from any thread (atomic / volatile reads).
  */
 class PairingService : Service() {
 
@@ -35,6 +46,83 @@ class PairingService : Service() {
         const val CHANNEL_ID = "wepwawet_pairing"
         const val NOTIFICATION_ID = 1001
         const val EXTRA_PIN = "pin"
+
+        // ====== Static UI accessors (per Task 9) ======
+
+        /**
+         * Singleton reference to the active [WePairingServer], or `null` if the
+         * pairing service isn't running. Set in [onStartCommand], cleared in
+         * [onDestroy]. Read by [isPaired] and [queueWallpaper].
+         */
+        @Volatile
+        var pairingServer: WePairingServer? = null
+            private set
+
+        /**
+         * The name of the currently-paired phone, or `null` if no phone is paired.
+         * Updated by the [WePairingServer.onPairingSuccess] / [onPairingFailure]
+         * callbacks registered in [onStartCommand].
+         */
+        @Volatile
+        var pairedDeviceName: String? = null
+            private set
+
+        /**
+         * Quick check whether a phone is currently paired and ready to receive
+         * wallpaper transfers.
+         *
+         * Returns `true` iff [pairingServer] is non-null AND [pairedDeviceName]
+         * is non-null. The underlying [WePairingServer] command loop is what
+         * actually delivers queued files — this flag just tells the UI whether
+         * a transfer will be picked up immediately or will sit in the queue
+         * until pairing completes.
+         */
+        fun isPaired(): Boolean {
+            // pairedDeviceName is the authoritative signal — it is set only in the
+            // WePairingServer.onPairingSuccess callback (which fires after the AES
+            // handshake completes) and cleared in onPairingFailure / stopServers.
+            // We deliberately don't reflect into WePairingServer's private
+            // currentClient field; the name flag is the source of truth.
+            return pairingServer != null && pairedDeviceName != null
+        }
+
+        /**
+         * Queue a wallpaper .mpkg file for transfer to the paired phone.
+         *
+         * If a phone is currently paired, the file is sent during the next
+         * iteration of the [WePairingServer] command loop (typically immediate).
+         * If no phone is paired yet, the file sits in the queue and is sent
+         * as soon as pairing completes.
+         *
+         * @param file the .mpkg file to send. Must be readable. Should be a stable
+         *   path (not a temp file) because the queue holds a [File] reference, not
+         *   the bytes — the file must still exist when the loop picks it up.
+         * @param title human-readable wallpaper title, shown in the WE app's
+         *   "Open wallpaper" dialog. Must be ≤ 256 chars.
+         */
+        fun queueWallpaper(file: File, title: String) {
+            val server = pairingServer
+            if (server == null) {
+                WepWawetLogger.proxyWarn("queueWallpaper called but pairing server not running",
+                    "file" to file.name, "title" to title)
+                return
+            }
+            if (!file.exists() || !file.canRead()) {
+                WepWawetLogger.proxyWarn("queueWallpaper file not readable",
+                    "path" to file.absolutePath,
+                    "exists" to file.exists(),
+                    "readable" to file.canRead())
+                return
+            }
+            WepWawetLogger.proxy("queueWallpaper",
+                "file" to file.name,
+                "title" to title,
+                "size" to file.length(),
+                "paired" to isPaired())
+            server.sendWallpaper(file, title)
+        }
+
+        // ====== Service start/stop helpers (existing) ======
 
         fun start(context: Context, pin: String) {
             val intent = Intent(context, PairingService::class.java)
@@ -47,7 +135,7 @@ class PairingService : Service() {
         }
     }
 
-    private var pairingServer: WePairingServer? = null
+    private var pairingServerLocal: WePairingServer? = null
     private var discoveryBroadcaster: WeDiscoveryBroadcaster? = null
 
     override fun onCreate() {
@@ -77,15 +165,22 @@ class PairingService : Service() {
 
         // Start the pairing server (TCP 7889)
         try {
-            pairingServer = WePairingServer().also { server ->
+            pairingServerLocal = WePairingServer().also { server ->
                 server.onPairingSuccess = { deviceName ->
-                    WepWawetLogger.proxy("Pairing SUCCESS!", "device" to deviceName)
+                    // Update the static pairedDeviceName so UI can query isPaired()
+                    pairedDeviceName = deviceName
+                    WepWawetLogger.proxy("Pairing SUCCESS!",
+                        "device" to deviceName,
+                        "queued_wallpapers" to "n/a")
                     updateNotification("Paired: $deviceName")
                 }
                 server.onPairingFailure = { error ->
+                    pairedDeviceName = null
                     WepWawetLogger.proxyError("Pairing FAILED", "error" to error)
                 }
                 server.start(pin)
+                // Expose via companion
+                pairingServer = server
             }
         } catch (e: Exception) {
             WepWawetLogger.proxyError("Failed to start pairing server",
@@ -113,12 +208,14 @@ class PairingService : Service() {
 
     private fun stopServers() {
         try {
-            pairingServer?.stop()
+            pairingServerLocal?.stop()
         } catch (e: Exception) {
             WepWawetLogger.proxyError("Error stopping pairing server",
                 "exception" to e.javaClass.name)
         }
+        pairingServerLocal = null
         pairingServer = null
+        pairedDeviceName = null
 
         try {
             discoveryBroadcaster?.stop()

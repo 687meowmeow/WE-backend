@@ -1,8 +1,7 @@
 package com.wepwawet.data.api
 
+import com.google.gson.annotations.SerializedName
 import com.wepwawet.data.model.WorkshopItem
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
 import retrofit2.http.Body
 import retrofit2.http.POST
 import retrofit2.http.FormUrlEncoded
@@ -25,8 +24,12 @@ import retrofit2.http.Field
  *
  * Authenticated endpoints (IPublishedFileService) would let us search/filter properly,
  * but they require a free Steam Web API key the user can obtain at
- * https://steamcommunity.com/dev/apikey. v1 will use HTML scraping for browse + bulk
+ * https://steamcommunity.com/dev/apikey. v1 uses HTML scraping for browse + bulk
  * GetPublishedFileDetails for enrichment.
+ *
+ * NOTE: This Retrofit interface is declared for completeness but [com.wepwawet.data.SteamApiService]
+ * builds the requests manually with OkHttp + Gson — Retrofit can't represent the variable-arity
+ * `publishedfileids[N]` form fields cleanly.
  */
 interface SteamRemoteStorageApi {
 
@@ -38,10 +41,6 @@ interface SteamRemoteStorageApi {
      *   body: itemcount=2&publishedfileids[0]=12345&publishedfileids[1]=67890
      *
      * Anonymous access confirmed.
-     *
-     * Note: this single-item declaration is a Retrofit formality — for the multi-item case
-     * we use the [com.wepwawet.data.SteamApiService.getBatchDetails] impl which builds the
-     * FormBody manually with OkHttp.
      */
     @FormUrlEncoded
     @POST("ISteamRemoteStorage/GetPublishedFileDetails/v1/")
@@ -63,44 +62,38 @@ interface SteamRemoteStorageApi {
     ): GetCollectionDetailsResponse
 }
 
-// ====== Response models ======
+// ====== Response models (parsed via Gson in [com.wepwawet.data.SteamApiService]) ======
 
-@Serializable
 data class GetPublishedFileDetailsResponse(
-    @SerialName("response") val response: PublishedFileDetailsResponse
+    @SerializedName("response") val response: PublishedFileDetailsResponse,
 )
 
-@Serializable
 data class PublishedFileDetailsResponse(
-    @SerialName("result") val result: Int = 0,
-    @SerialName("total") val total: Int = 0,
-    @SerialName("publishedfiledetails") val publishedFileDetails: List<WorkshopItem> = emptyList(),
+    @SerializedName("result") val result: Int = 0,
+    @SerializedName("total") val total: Int = 0,
+    @SerializedName("publishedfiledetails") val publishedFileDetails: List<WorkshopItem> = emptyList(),
 )
 
-@Serializable
 data class GetCollectionDetailsResponse(
-    @SerialName("response") val response: CollectionDetailsResponse
+    @SerializedName("response") val response: CollectionDetailsResponse,
 )
 
-@Serializable
 data class CollectionDetailsResponse(
-    @SerialName("result") val result: Int = 0,
-    @SerialName("collectioncount") val collectionCount: Int = 0,
-    @SerialName("collectiondetails") val collectionDetails: List<CollectionDetail> = emptyList(),
+    @SerializedName("result") val result: Int = 0,
+    @SerializedName("collectioncount") val collectionCount: Int = 0,
+    @SerializedName("collectiondetails") val collectionDetails: List<CollectionDetail> = emptyList(),
 )
 
-@Serializable
 data class CollectionDetail(
-    @SerialName("collectionid") val collectionId: Long = 0,
-    @SerialName("result") val result: Int = 0,
-    @SerialName("children") val children: List<CollectionChild> = emptyList(),
+    @SerializedName("collectionid") val collectionId: Long = 0,
+    @SerializedName("result") val result: Int = 0,
+    @SerializedName("children") val children: List<CollectionChild> = emptyList(),
 )
 
-@Serializable
 data class CollectionChild(
-    @SerialName("publishedfileid") val publishedFileId: String,
-    @SerialName("sortorder") val sortOrder: Int = 0,
-    @SerialName("filetype") val fileType: String = "",
+    @SerializedName("publishedfileid") val publishedFileId: String,
+    @SerializedName("sortorder") val sortOrder: Int = 0,
+    @SerializedName("filetype") val fileType: String = "",
 )
 
 // ====== Custom exception for API errors ======
