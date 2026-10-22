@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.asStateFlow
  *   - Browse:Paginated scroll loading (Steam workshop doesn't expose cursor; we use page numbers)
  *   - In-memory cache of the current browse session (so navigation between screens doesn't re-fetch)
  *   - Subscriptions state (which IDs are subscribed) — synced with the emulated Steam's `workshop/`
- *     folder via [com.wepwawet.wine.WinePrefixManager.observeSubscriptions]
  *   - Lookup by ID (for the Wallpaper detail screen)
  */
 class WorkshopRepository constructor(
@@ -82,7 +81,6 @@ class WorkshopRepository constructor(
 
     /**
      * Add a subscription locally — the actual Steam-side subscription is initiated by
-     * [com.wepwawet.wine.WeControlClient.subscribeToWorkshopItem] which talks to the
      * emulated Steam client via `steam://subscribe/<id>`.
      */
     suspend fun subscribe(itemId: String) {

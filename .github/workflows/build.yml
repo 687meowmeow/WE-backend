@@ -5,30 +5,15 @@ on:
     branches: [main, develop]
     tags: ['v*']
   workflow_dispatch:
-    inputs:
-      debug_release:
-        description: 'Build a release APK without tagging'
-        type: boolean
-        default: false
 
 permissions:
   contents: write
-  packages: read
-  attestations: write
-  id-token: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ============================================================================
-  # Job 0: Check if this commit already has a v* tag (prevents duplicate runs)
-  # ============================================================================
-  # When you push a commit AND a tag simultaneously, GitHub Actions triggers
-  # build.yml twice (once for the branch push, once for the tag push). This
-  # job detects that situation and sets skip=true for the branch-push run,
-  # so only the tag-triggered run proceeds (which includes the release job).
   check-tag:
     name: Check for duplicate tag run
     runs-on: ubuntu-24.04
@@ -38,9 +23,6 @@ jobs:
       - name: Check if commit has a v* tag
         id: check
         run: |
-          # Use GitHub API (synchronous, no git fetch race condition)
-          # The /repos/{owner}/{repo}/tags endpoint returns tags with their
-          # commit SHA (already dereferenced for annotated tags).
           TAG=$(curl -sS -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/tags?per_page=100" | \
@@ -55,92 +37,16 @@ jobs:
           " 2>/dev/null || true)
           echo "Found tag: '${TAG}'"
           if [ "${{ github.ref_type }}" = "branch" ] && [ -n "$TAG" ]; then
-            echo "This is a branch push but the commit already has tag '$TAG' — skipping"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
-  # ============================================================================
-  # Job 1: 5-way matrix of component builds (all run in parallel)
-  # ============================================================================
-  build-components:
-    name: Build ${{ matrix.component }}
+  build-apk:
+    name: Build APK
     needs: check-tag
     if: needs.check-tag.outputs.skip != 'true'
     runs-on: ubuntu-24.04
-    container:
-      image: ghcr.io/687meowmeow/we-backend/builder:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - component: box64
-            artifact: box64-arm64-winlator.wcp
-            version: latest-main
-          - component: wine
-            artifact: wine-10.10-arm64-prefix.tar.zst
-            version: wine-10.10
-          - component: mesa-turnip
-            artifact: libvulkan_turnip.so
-            version: whitebelyash-tu8
-          - component: dxvk
-            artifact: dxvk-2.7.1.tar.zst
-            version: v2.7.1
-          - component: vkd3d
-            artifact: vkd3d-2.12.tar.zst
-            version: v2.12
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Restore ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: ${{ matrix.component }}-arm64
-          max-size: '1G'
-
-      - name: Cache built artifact
-        id: cache
-        uses: actions/cache@v4
-        with:
-          path: artifacts/${{ matrix.artifact }}
-          key: ${{ matrix.component }}-artifact-v${{ matrix.version }}-${{ hashFiles('scripts/build_component.sh') }}
-
-      - name: Build ${{ matrix.component }}
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: |
-          chmod +x scripts/build_component.sh
-          ./scripts/build_component.sh ${{ matrix.component }}
-
-      - name: Verify artifact
-        run: |
-          test -f artifacts/${{ matrix.artifact }} || {
-            echo "::error::Expected artifact not produced: ${{ matrix.artifact }}"
-            exit 1
-          }
-          ls -lh artifacts/${{ matrix.artifact }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.component }}
-          path: artifacts/${{ matrix.artifact }}
-          retention-days: 14
-          compression-level: 0
-
-  assemble-apk:
-    name: Assemble APK
-    needs: [check-tag, build-components]
-    if: needs.check-tag.outputs.skip != 'true'
-    runs-on: ubuntu-24.04
-    # NO container — use the host runner which has full write access
-    # to install Android SDK components. The container approach failed
-    # because the builder user can't write to /opt/android-sdk/ and AGP
-    # couldn't find/install platforms;android-35.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -149,23 +55,6 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
-
-      - name: Download all 5 component artifacts
-        uses: actions/download-artifact@v4
-        with:
-          merge-multiple: true
-          path: app/src/main/assets/
-
-      - name: Verify all 5 components present
-        run: |
-          for f in box64-arm64-winlator.wcp wine-10.10-arm64-prefix.tar.zst \
-                   libvulkan_turnip.so dxvk-2.7.1.tar.zst vkd3d-2.12.tar.zst; do
-            test -f "app/src/main/assets/$f" || {
-              echo "::error::Missing component: $f"
-              exit 1
-            }
-          done
-          ls -lh app/src/main/assets/
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -176,51 +65,26 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Decode keystore
-        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || github.event.inputs.debug_release }}
-        run: |
-          if [ -z "${{ secrets.WEPWAWET_KEYSTORE_BASE64 }}" ]; then
-            echo "::warning::Release keystore not set; will produce unsigned APK"
-            exit 0
-          fi
-          echo "${{ secrets.WEPWAWET_KEYSTORE_BASE64 }}" | base64 -d > ${{ runner.temp }}/wepwawet.keystore
-          echo "WEPWAWET_KEYSTORE_PATH=${{ runner.temp }}/wepwawet.keystore" >> $GITHUB_ENV
-          echo "WEPWAWET_KEYSTORE_PASS=${{ secrets.WEPWAWET_KEYSTORE_PASS }}" >> $GITHUB_ENV
-          echo "WEPWAWET_KEY_ALIAS=${{ secrets.WEPWAWET_KEY_ALIAS }}" >> $GITHUB_ENV
-          echo "WEPWAWET_KEY_PASS=${{ secrets.WEPWAWET_KEY_PASS }}" >> $GITHUB_ENV
-
       - name: Build APK
-        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace --info
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
 
-      - name: Build AAB
-        run: ./gradlew :app:bundleRelease --no-daemon --stacktrace --info
-
-      - name: Locate built APK
+      - name: Locate APK
         id: find-apk
         run: |
           APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          AAB=$(find app/build/outputs/bundle/release -name '*.aab' | head -1)
           echo "apk_path=$APK" >> $GITHUB_OUTPUT
-          echo "aab_path=$AAB" >> $GITHUB_OUTPUT
-          ls -lh "$APK" "$AAB"
-
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: ${{ steps.find-apk.outputs.apk_path }}
+          ls -lh "$APK"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: wepwawet-apk
-          path: |
-            ${{ steps.find-apk.outputs.apk_path }}
-            ${{ steps.find-apk.outputs.aab_path }}
+          path: ${{ steps.find-apk.outputs.apk_path }}
           retention-days: 30
 
   release:
     name: Publish GitHub Release
-    needs: [check-tag, assemble-apk]
+    needs: [check-tag, build-apk]
     if: needs.check-tag.outputs.skip != 'true' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     steps:
@@ -236,41 +100,15 @@ jobs:
         id: find
         run: |
           APK=$(find release -name '*.apk' | head -1)
-          AAB=$(find release -name '*.aab' | head -1)
           echo "apk=$APK" >> $GITHUB_OUTPUT
-          echo "aab=$AAB" >> $GITHUB_OUTPUT
           ls -lh release/
 
-      - name: Split APK if >2GB
-        run: |
-          APK_SIZE=$(stat -c%s "${{ steps.find.outputs.apk }}")
-          if [ "$APK_SIZE" -gt 2000000000 ]; then
-            echo "APK exceeds 2GB; splitting"
-            cd release/ && split -b 1900M -d -a 2 \
-              "$(basename ${{ steps.find.outputs.apk }})" \
-              "$(basename ${{ steps.find.outputs.apk }}).part"
-            rm "${{ steps.find.outputs.apk }}"
-            ls -lh release/
-          fi
-
-      - name: Create or update release
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            release/*
+          files: ${{ steps.find.outputs.apk }}
           draft: true
-          prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
+          prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') }}
           generate_release_notes: true
-          body: |
-            ## WepWawet ${{ github.ref_name }}
-
-            Pre-alpha — see [README](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/README.md)
-            and [ARCHITECTURE](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/ARCHITECTURE.md)
-            for installation instructions and current limitations.
-
-            If the APK was split into `.part00`, `.part01`, ... parts, reassemble with:
-            ```
-            cat wepwawet-*.part00 wepwawet-*.part01 ... > wepwawet.apk
-            ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

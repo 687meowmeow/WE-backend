@@ -19,15 +19,10 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0-alpha"
-        // Explicitly set buildToolsVersion to match what's installed in the
         // Docker image (35.0.0) — AGP 8.7.0 defaults to 34.0.0 which isn't
         // installed, and the builder user can't install it (no write access
         // to /opt/android-sdk/).
-        buildToolsVersion = "35.0.0"
         // WE app targets Snapdragon 8 Gen 2+ — only arm64-v8a makes sense
-        ndk {
-            abiFilters += "arm64-v8a"
-        }
         // Custom Application ID field so we can carry version metadata into the APK
         buildConfigField("String", "GIT_SHA", "\"${getGitSha()}\"")
         buildConfigField("String", "BUILD_TIME", "\"${getBuildTime()}\"")
@@ -69,11 +64,6 @@ android {
             }
             // Native libs are extracted at install time so they can be loaded directly
             // (Winlator requires this for the Box64 binary that's exec'd)
-            packaging {
-                jniLibs.useLegacyPackaging = true
-                // Bundle rootfs tarball as-is, no compression (we'll zstd it ourselves)
-                resources.excludes += listOf("META-INF/*.DSA", "META-INF/*.SF", "META-INF/*.RSA")
-            }
         }
         debug {
             isDebuggable = true
