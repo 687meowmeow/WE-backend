@@ -12,6 +12,22 @@
 -keep class com.google.gson.** { *; }
 -keepattributes Signature
 -keepattributes *Annotation*
+-keepattributes EnclosingMethod, InnerClasses
+
+# Gson TypeToken — anonymous subclasses (e.g. `object : TypeToken<List<T>>() {}`)
+# require the generic Signature attribute to be preserved, otherwise Gson
+# throws "TypeToken must be created with a type argument" at <clinit> time.
+# Keep ALL TypeToken subclasses (anonymous or named) and their generic
+# signatures, no matter what package they live in.
+-keep class * extends com.google.gson.reflect.TypeToken
+-keep class com.google.gson.reflect.TypeToken { *; }
+-keep class com.google.gson.reflect.TypeToken$* { *; }
+-keepclasseswithmembers class * {
+    extends com.google.gson.reflect.TypeToken;
+}
+-keep,allowobfuscation class * {
+    extends com.google.gson.reflect.TypeToken;
+}
 
 # Kotlinx Serialization — required for the JSON converter
 -dontnote kotlinx.serialization.AnnotationsKt

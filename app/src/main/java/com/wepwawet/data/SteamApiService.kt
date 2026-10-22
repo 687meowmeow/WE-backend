@@ -7,7 +7,10 @@ import com.google.gson.JsonDeserializer
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonArray
-import com.google.gson.reflect.TypeToken
+// TypeToken import removed — TypeToken<T>() {} anonymous subclasses cause R8
+// stripping of the generic Signature attribute, which crashes at <clinit>
+// time with 'TypeToken must be created with a type argument'. Use explicit
+// Class<T> for fromJson instead (as the methods below already do).
 import com.wepwawet.data.api.GetPublishedFileDetailsResponse
 import com.wepwawet.data.api.SteamApiException
 import com.wepwawet.data.model.WallpaperType
@@ -382,8 +385,12 @@ class SteamApiService(
             }
         }
 
-        /** Gson [TypeToken] for List<WorkshopItem> — used by future bulk calls. */
-        val WORKSHOP_ITEM_LIST_TYPE: Type =
-            object : TypeToken<List<WorkshopItem>>() {}.type
+        // NOTE: The previous `val WORKSHOP_ITEM_LIST_TYPE: Type = object : TypeToken<List<WorkshopItem>>() {}.type`
+        // was REMOVED — it caused an IllegalStateException at <clinit> time because
+        // R8 strips the generic Signature attribute from anonymous TypeToken
+        // subclasses during minification, so Gson can't extract the type argument
+        // via reflection. If bulk List<WorkshopItem> parsing is needed in the
+        // future, use `gson.fromJson(json, Array<WorkshopItem>::class.java)` and
+        // convert to a List, which avoids TypeToken entirely.
     }
 }
