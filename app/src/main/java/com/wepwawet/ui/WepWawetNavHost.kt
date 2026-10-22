@@ -75,7 +75,7 @@ fun WepWawetNavHost() {
     // Shared repository instance — see class doc
     val repo = remember { WorkshopRepository(SteamApiService()) }
 
-    NavHost(navController = nav, startDestination = "pairing") {
+    NavHost(navController = nav, startDestination = "workshop") {
 
         composable("workshop") {
             WorkshopBrowserScreen(

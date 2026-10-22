@@ -65,11 +65,7 @@ fun PairingScreen(
             TopAppBar(
                 title = { Text("Pairing") },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        PairingService.stop(context)
-                        running = false
-                        onBack()
-                    }) {
+                    IconButton(onClick = onBack) {
                         Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
