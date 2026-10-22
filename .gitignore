@@ -37,3 +37,4 @@ prefix-snapshot/
 *.swp
 *.swo
 *~
+upload/
