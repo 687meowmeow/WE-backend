@@ -324,7 +324,7 @@ fun WallpaperDetailScreen(
                                 }
 
                                 // Create a minimal .mpkg file containing the preview
-                                val mpkgFile = java.io.File(context.cacheDir, "${current.id}.mpkg")
+                                var mpkgFile = java.io.File(context.cacheDir, "${current.id}.mpkg")
                                 try {
                                     val previewBytes = previewFile.readBytes()
                                     val projectName = "project.json"
@@ -335,18 +335,16 @@ fun WallpaperDetailScreen(
                                     out.write("PKGM0020".toByteArray()) // magic
                                     out.write(byteArrayOf(2, 0, 0, 0)) // entry_count = 2
                                     // Entry 0: project.json
-                                    out.write(projectName.toByteArray().size) // name_len as 4-byte LE
-                                    out.write(byteArrayOf(0, 0, 0))
+                                    out.write(byteArrayOf(projectName.toByteArray().size.toByte(), 0, 0, 0))
                                     out.write(projectName.toByteArray())
                                     out.write(byteArrayOf(0, 0, 0, 0)) // offset = 0
-                                    out.write(projectJson.size and 0xFF, (projectJson.size shr 8) and 0xFF, (projectJson.size shr 16) and 0xFF, (projectJson.size shr 24) and 0xFF) // size
+                                    out.write(byteArrayOf((projectJson.size and 0xFF).toByte(), ((projectJson.size shr 8) and 0xFF).toByte(), ((projectJson.size shr 16) and 0xFF).toByte(), ((projectJson.size shr 24) and 0xFF).toByte()))
                                     // Entry 1: preview.jpg
                                     val prevName = "preview.jpg"
-                                    out.write(prevName.toByteArray().size)
-                                    out.write(byteArrayOf(0, 0, 0))
+                                    out.write(byteArrayOf(prevName.toByteArray().size.toByte(), 0, 0, 0))
                                     out.write(prevName.toByteArray())
-                                    out.write(projectJson.size and 0xFF, (projectJson.size shr 8) and 0xFF, (projectJson.size shr 16) and 0xFF, (projectJson.size shr 24) and 0xFF) // offset
-                                    out.write(previewBytes.size and 0xFF, (previewBytes.size shr 8) and 0xFF, (previewBytes.size shr 16) and 0xFF, (previewBytes.size shr 24) and 0xFF) // size
+                                    out.write(byteArrayOf((projectJson.size and 0xFF).toByte(), ((projectJson.size shr 8) and 0xFF).toByte(), ((projectJson.size shr 16) and 0xFF).toByte(), ((projectJson.size shr 24) and 0xFF).toByte()))
+                                    out.write(byteArrayOf((previewBytes.size and 0xFF).toByte(), ((previewBytes.size shr 8) and 0xFF).toByte(), ((previewBytes.size shr 16) and 0xFF).toByte(), ((previewBytes.size shr 24) and 0xFF).toByte()))
                                     // Data section
                                     out.write(projectJson)
                                     out.write(previewBytes)
