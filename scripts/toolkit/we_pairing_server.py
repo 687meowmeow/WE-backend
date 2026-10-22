@@ -36,7 +36,7 @@ PAIRING (TCP 7889, all length prefixes are 4-byte LITTLE-ENDIAN u32)
        "displayWidth":1080,"displayHeight":2400,"version":4,
        "mpkgVersion":"PKGM0020","appVersion":"2.21.0"}
 
-    The EncAuthResponse is small (16 bytes plaintext like `{"status":"ok"}`+pad
+    The EncAuthResponse is small (16 bytes plaintext like `{"status":"AuthOK"}`+pad
     = 16 bytes ciphertext; with length prefix = 20 bytes). But the real protocol
     sends 32-byte responses — possibly 2 separate 16-byte messages, or a longer
     JSON like `{"status":"ok","session":"..."}`. (Needs Frida hooks to confirm.)
@@ -82,7 +82,7 @@ from pathlib import Path
 from typing import Optional
 
 try:
-    from Crypto.Cipher import AES, PKCS1_v1_5
+    from Crypto.Cipher import AES, PKCS1_OAEP
     from Crypto.PublicKey import RSA
     from Crypto.Util.number import bytes_to_long, long_to_bytes
 except ImportError:
@@ -234,8 +234,8 @@ def handle_connection(client: socket.socket, addr, key, pin: str) -> None:
             else:
                 enc_third = data
 
-        # Decrypt AES key + IV with our RSA private key (RSA/ECB/PKCS1Padding)
-        rsa_cipher = PKCS1_v1_5.new(key)
+        # Decrypt AES key + IV with our RSA private key (RSA/ECB/OAEPPadding)
+        rsa_cipher = PKCS1_OAEP.new(key)
         aes_key = rsa_cipher.decrypt(enc_aes_key, sentinel=b"")
         if not aes_key or len(aes_key) not in (16, 24, 32):
             print(f"[server] ERROR: RSA decryption of AES key produced bad result "
@@ -286,7 +286,7 @@ def handle_connection(client: socket.socket, addr, key, pin: str) -> None:
         # === PC → phone: Send AES-encrypted EncAuthResponse ===
         # Real capture showed 32-byte responses (2 AES blocks = 16-byte ciphertext each,
         # or one 32-byte ciphertext for a longer JSON).
-        status = "ok" if pin_valid else "invalid_pin"
+        status = "AuthOK" if pin_valid else "AuthFailed"
         resp_json = json.dumps({"status": status}).encode("utf-8")
         # Pad to 32 bytes (PKCS7) so ciphertext is 32 bytes = 2 AES blocks
         pad_len = 32 - (len(resp_json) % 32) if len(resp_json) % 32 != 0 else 32
@@ -344,7 +344,7 @@ def handle_connection(client: socket.socket, addr, key, pin: str) -> None:
             cmd = plaintext.decode("utf-8", errors="replace")
             print(f"[server] Command #{messages} ({len(payload)}B): {cmd[:300]}")
             # Send a 32-byte ack response (matching real protocol's 32-byte responses)
-            resp = '{"status":"ok"}'.encode("utf-8")
+            resp = '{"status":"AuthOK"}'.encode("utf-8")
             pad_len = 32 - len(resp) if len(resp) < 32 else 16
             resp_padded = resp + bytes([pad_len] * pad_len)
             ct = enc_cmd_cipher.encrypt(resp_padded)
@@ -377,7 +377,7 @@ def serve(port: int, pin: str, keypair_path: Optional[Path],
     print(f"PIN: {pin}")
     print(f"RSA key size: {key.size_in_bits()} bits (= {RSA_BLOCK_SIZE}-byte modulus)")
     print(f"RSA exponent: {key.e} (sent first as 3-byte BE BigInteger)")
-    print(f"Pairing protocol: PKGM0020, AES-CBC + RSA/ECB/PKCS1Padding")
+    print(f"Pairing protocol: PKGM0020, AES-CBC + RSA/ECB/OAEPPadding")
     print(f"Discovery: run we_discovery_broadcaster.py separately")
     print(f"Press Ctrl-C to stop.")
     print()

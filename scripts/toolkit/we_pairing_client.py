@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 
 try:
-    from Crypto.Cipher import AES, PKCS1_v1_5
+    from Crypto.Cipher import AES, PKCS1_OAEP
     from Crypto.PublicKey import RSA
     from Crypto.Util.number import bytes_to_long, long_to_bytes
 except ImportError:
@@ -147,9 +147,9 @@ def read_encrypted_json(sock, key: bytes, iv: bytes) -> dict:
 # === RSA encrypt (phone side — encrypts with PC's public key) ===
 
 def rsa_encrypt(pubkey: RSA.RsaKey, data: bytes) -> bytes:
-    """RSA/ECB/PKCS1Padding encrypt. The phone uses this to encrypt
+    """RSA/ECB/OAEPPadding encrypt. The phone uses this to encrypt
     the AES key, IV, and third block with the PC's RSA public key."""
-    cipher = PKCS1_v1_5.new(pubkey)
+    cipher = PKCS1_OAEP.new(pubkey)
     return cipher.encrypt(data)
 
 
@@ -325,7 +325,7 @@ def perform_pairing(pc_host: str, pc_port: int, pin: str,
                 cmd = read_encrypted_json(sock, aes_key, iv)
                 print(f"  [command] {json.dumps(cmd)[:300]}")
                 # Send a generic "ok" response
-                send_encrypted_json(sock, aes_key, iv, {"status": "ok"})
+                send_encrypted_json(sock, aes_key, iv, {"status": "AuthOK"})
             except socket.timeout:
                 continue
             except KeyboardInterrupt:

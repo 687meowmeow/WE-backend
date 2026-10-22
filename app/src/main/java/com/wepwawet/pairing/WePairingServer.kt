@@ -310,7 +310,8 @@ class WePairingServer {
      * 1. Send RSA public key (modulus + exponent, length-prefixed LE)
      * 2. Receive encrypted AES key (RSA-encrypted, length-prefixed LE)
      * 3. Receive AES IV (16 raw bytes, length-prefixed LE)
-     * 4. Decrypt AES key with RSA private key (RSA/ECB/PKCS1Padding)
+     * 4. Decrypt AES key with RSA private key (RSA/ECB/OAEPPadding)
+     *    VERIFIED from decompiled TcpClient line 541
      * 5. Receive encrypted EncAuthRequest (AES/CBC/PKCS5Padding)
      * 6. Decrypt with AES, parse JSON, verify PIN
      * 7. Send encrypted EncAuthResponse (AES/CBC/PKCS5Padding)
@@ -374,8 +375,11 @@ class WePairingServer {
                 val encThird = readLengthPrefixed(input, "RSA-encrypted third block")
                     ?: return
 
-                // Decrypt with RSA/ECB/PKCS1Padding
-                val rsaCipher = Cipher.getInstance("RSA/ECB/PKCS1Padding")
+                // Decrypt with RSA/ECB/OAEPPadding — VERIFIED from decompiled
+                // TcpClient.connector$lambda$2 line 541:
+                //   Cipher.getInstance("RSA/ECB/OAEPPadding")
+                // NOT PKCS1Padding — using the wrong padding = pairing failure!
+                val rsaCipher = Cipher.getInstance("RSA/ECB/OAEPPadding")
                 rsaCipher.init(Cipher.DECRYPT_MODE, rsaKeyPair!!.private)
                 val aesKeyBytes = rsaCipher.doFinal(encAesKey)
                 val ivBytes = rsaCipher.doFinal(encIv)
@@ -434,7 +438,10 @@ class WePairingServer {
 
                 // Step 7: Send encrypted EncAuthResponse
                 val authResponse = EncAuthResponse()
-                authResponse.status = if (pinValid) "ok" else "invalid_pin"
+                // VERIFIED from decompiled TcpClient line 677:
+                //   if (encAuthResponse.getStatus().equals("AuthOK"))
+                // The success status is "AuthOK", NOT "ok"!
+                authResponse.status = if (pinValid) "AuthOK" else "AuthFailed"
 
                 val respJson = gson.toJson(authResponse)
                 WepWawetLogger.proxyDebug("Sending EncAuthResponse",
@@ -542,7 +549,7 @@ class WePairingServer {
                         // For now, send a generic "ok" response (LITTLE-ENDIAN length!)
                         val encCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
                         encCipher.init(Cipher.ENCRYPT_MODE, currentAesKey, currentIv)
-                        val respBytes = encCipher.doFinal("""{"status":"ok"}""".toByteArray(Charsets.UTF_8))
+                        val respBytes = encCipher.doFinal("""{"status":"AuthOK"}""".toByteArray(Charsets.UTF_8))
                         writeLeInt(output, respBytes.size)
                         output.write(respBytes)
                         output.flush()
