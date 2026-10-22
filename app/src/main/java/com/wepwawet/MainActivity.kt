@@ -1,5 +1,6 @@
 package com.wepwawet
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -10,21 +11,23 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import com.wepwawet.log.WepWawetLogger
+import com.wepwawet.pairing.PairingService
 import com.wepwawet.ui.WepWawetNavHost
 import com.wepwawet.ui.theme.WepWawetTheme
 
-/**
- * The single Activity for the app. All screens live inside a Compose NavHost.
- *
- * We do NOT use the navigation-compose singular routes per-screen pattern — the WE Android
- * pairing flow has many entry points (deep-link from notification, deep-link from WE app,
- * deep-link from Workshop browser), so we use a single NavHost with route arguments.
- */
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WepWawetLogger.lifecycle("MainActivity.onCreate", "intent" to (intent?.dataString ?: "null"))
+
+        // Auto-start the pairing proxy on app launch
+        try {
+            PairingService.start(this, "1234")
+            WepWawetLogger.lifecycle("Auto-started pairing proxy")
+        } catch (e: Exception) {
+            WepWawetLogger.lifecycle("Failed to auto-start proxy: ${e.message}")
+        }
 
         enableEdgeToEdge()
         setContent {

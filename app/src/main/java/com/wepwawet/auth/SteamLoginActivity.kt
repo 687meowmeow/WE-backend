@@ -81,12 +81,16 @@ class SteamLoginActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WepWawetLogger.lifecycle("SteamLoginActivity.onCreate")
 
-        // Boil up the cookie manager first so it accepts cookies from the get-go
-        CookieManager.getInstance().apply {
-            setAcceptCookie(true)
-            setAcceptThirdPartyCookies(null, false)
+        // If already logged in (cookies from previous session), skip login
+        val existingCookies = CookieManager.getInstance().getCookie("https://steamcommunity.com/")
+        if (existingCookies != null && existingCookies.contains("steamLoginSecure")) {
+            WepWawetLogger.steam("SteamLogin: already logged in (cookies present)")
+            handleLoginSuccess()
+            return
         }
 
+        // Create WebView FIRST — CookieManager.setAcceptThirdPartyCookies
+        // requires a non-null WebView on Android 16
         webView = WebView(this).apply {
             settings.apply {
                 javaScriptEnabled = true
@@ -96,13 +100,10 @@ class SteamLoginActivity : ComponentActivity() {
                 setSupportZoom(true)
                 builtInZoomControls = true
                 displayZoomControls = false
-                // Allow the redirect-after-login to land on the goto target.
-                // Steam's login flow does an HTTP 302 chain — WebView must
-                // follow it or we'd be stuck on an intermediate page.
                 javaScriptCanOpenWindowsAutomatically = true
             }
-            CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
             CookieManager.getInstance().setAcceptCookie(true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
 
             webViewClient = SteamLoginWebViewClient()
             loadUrl(LOGIN_URL)
@@ -110,6 +111,20 @@ class SteamLoginActivity : ComponentActivity() {
         WepWawetLogger.steam("SteamLoginActivity loading URL",
             "url" to LOGIN_URL)
         setContentView(webView)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        // Check if user logged in before finishing
+        val cookies = CookieManager.getInstance().getCookie("https://steamcommunity.com/")
+        if (cookies != null && cookies.contains("steamLoginSecure")) {
+            WepWawetLogger.steam("SteamLogin: back pressed, detected login cookies")
+            handleLoginSuccess()
+        } else {
+            WepWawetLogger.steam("SteamLogin: back pressed, no login cookies")
+            setResult(Activity.RESULT_CANCELED)
+            finish()
+        }
     }
 
     /**

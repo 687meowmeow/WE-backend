@@ -676,8 +676,14 @@ class WePairingServer {
                     "heartbeat" -> {
                         heartbeatCount++
                         if (heartbeatCount % 10 == 1) {
-                            WepWawetLogger.proxyDebug("Heartbeat received",
+                            WepWawetLogger.proxy("Heartbeat received",
                                 "count" to heartbeatCount)
+                        }
+                        // Check for pending wallpaper transfers after every heartbeat
+                        val pending = pendingWallpapers.poll()
+                        if (pending != null) {
+                            WepWawetLogger.proxy("Processing pending wallpaper transfer (from heartbeat)")
+                            transferWallpaper(output, pending.first, pending.second)
                         }
                         continue
                     }

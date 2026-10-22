@@ -290,51 +290,14 @@ fun WallpaperDetailScreen(
                 }
             }
 
-            // === Download button ===
-            item {
-                Button(
-                    onClick = {
-                        WepWawetLogger.workshop("download tapped",
-                            "id" to current.id, "title" to current.title.take(80))
-                        scope.launch {
-                            isDownloading = true
-                            downloadProgress = 0f
-                            statusMessage = "Starting download…"
-                            val downloaded = downloadWallpaper(
-                                context = context,
-                                item = current,
-                                onProgress = { frac ->
-                                    downloadProgress = frac
-                                },
-                            )
-                            isDownloading = false
-                            downloadedFile = downloaded
-                            statusMessage = if (downloaded != null) {
-                                "Saved to ${downloaded.absolutePath}"
-                            } else {
-                                "Download failed — check logs"
-                            }
-                            // Mark as subscribed
-                            repo.subscribe(current.id)
-                        }
-                    },
-                    enabled = !isDownloading && current.previewUrl != null,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(Icons.Filled.Download, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(if (isDownloading) "Downloading…" else "Download")
-                }
-            }
-
-            // === Send to phone button ===
+            // === Send to phone button (no download needed) ===
             item {
                 Button(
                     onClick = {
                         WepWawetLogger.workshop("send-to-phone tapped",
                             "id" to current.id,
                             "is_paired" to PairingService.isPaired(),
-                            "has_file" to (downloadedFile != null))
+                            "title" to current.title.take(80))
                         scope.launch {
                             isSending = true
                             statusMessage = null
@@ -346,28 +309,71 @@ fun WallpaperDetailScreen(
                                         "id" to current.id)
                                     return@launch
                                 }
-                                // Reuse the downloaded file if available, otherwise
-                                // download it now (without UI progress).
-                                val file = downloadedFile ?: run {
-                                    statusMessage = "Downloading preview…"
-                                    downloadWallpaper(context, current) { }
-                                }
-                                if (file == null || !file.exists()) {
-                                    statusMessage = "Failed to locate file for transfer."
+
+                                // Download the preview image and pack it as a .mpkg
+                                // The WE Android app expects .mpkg files — we create a
+                                // minimal .mpkg container with the preview as the file.
+                                // This won't be a full wallpaper (we can't download the
+                                // actual .pkg content without SteamCMD), but it tests
+                                // the transfer pipeline.
+                                statusMessage = "Preparing wallpaper for transfer…"
+                                val previewFile = downloadWallpaper(context, current) { }
+                                if (previewFile == null || !previewFile.exists()) {
+                                    statusMessage = "Failed to download preview image."
                                     return@launch
                                 }
-                                PairingService.queueWallpaper(file, current.title)
+
+                                // Create a minimal .mpkg file containing the preview
+                                val mpkgFile = java.io.File(context.cacheDir, "${current.id}.mpkg")
+                                try {
+                                    val previewBytes = previewFile.readBytes()
+                                    val projectName = "project.json"
+                                    val projectJson = """{"file":"preview.jpg","title":"${current.title}","type":"Image","preview":"preview.jpg"}""".toByteArray()
+                                    // Build .mpkg: header_marker(4) + magic(8) + count(4) + entries + data
+                                    val out = java.io.ByteArrayOutputStream()
+                                    out.write(byteArrayOf(8, 0, 0, 0)) // header_marker = 8
+                                    out.write("PKGM0020".toByteArray()) // magic
+                                    out.write(byteArrayOf(2, 0, 0, 0)) // entry_count = 2
+                                    // Entry 0: project.json
+                                    out.write(projectName.toByteArray().size) // name_len as 4-byte LE
+                                    out.write(byteArrayOf(0, 0, 0))
+                                    out.write(projectName.toByteArray())
+                                    out.write(byteArrayOf(0, 0, 0, 0)) // offset = 0
+                                    out.write(projectJson.size and 0xFF, (projectJson.size shr 8) and 0xFF, (projectJson.size shr 16) and 0xFF, (projectJson.size shr 24) and 0xFF) // size
+                                    // Entry 1: preview.jpg
+                                    val prevName = "preview.jpg"
+                                    out.write(prevName.toByteArray().size)
+                                    out.write(byteArrayOf(0, 0, 0))
+                                    out.write(prevName.toByteArray())
+                                    out.write(projectJson.size and 0xFF, (projectJson.size shr 8) and 0xFF, (projectJson.size shr 16) and 0xFF, (projectJson.size shr 24) and 0xFF) // offset
+                                    out.write(previewBytes.size and 0xFF, (previewBytes.size shr 8) and 0xFF, (previewBytes.size shr 16) and 0xFF, (previewBytes.size shr 24) and 0xFF) // size
+                                    // Data section
+                                    out.write(projectJson)
+                                    out.write(previewBytes)
+                                    mpkgFile.writeBytes(out.toByteArray())
+                                    WepWawetLogger.workshop("mpkg created",
+                                        "file" to mpkgFile.name,
+                                        "size" to mpkgFile.length())
+                                } catch (e: Exception) {
+                                    WepWawetLogger.workshopWarn("mpkg creation failed: ${e.message}")
+                                    // Fallback: just send the preview file directly
+                                    val renamed = java.io.File(context.cacheDir, "${current.id}.mpkg")
+                                    previewFile.copyTo(renamed, overwrite = true)
+                                    mpkgFile = renamed
+                                }
+
+                                PairingService.queueWallpaper(mpkgFile, current.title)
                                 statusMessage = "Queued for transfer to " +
                                     (PairingService.pairedDeviceName ?: "phone")
                                 WepWawetLogger.workshop("send-to-phone queued",
-                                    "file" to file.name,
-                                    "size" to file.length())
+                                    "file" to mpkgFile.name,
+                                    "size" to mpkgFile.length())
                             } finally {
                                 isSending = false
                             }
                         }
                     },
-                    enabled = !isSending && !isDownloading,
+                    enabled = !isSending,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Filled.Send, contentDescription = null)

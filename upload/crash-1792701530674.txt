@@ -1,0 +1,71 @@
+=== WepWawet crash report ===
+Time: 2026-10-22T20:38:50.674Z
+Thread: main (id=2)
+Process: 17685
+Device: OnePlus CPH2749 (OP611FL1)
+Android: 16 (SDK 36)
+ABI: arm64-v8a
+App version: 0.1.0-alpha (1)
+Git sha: 90b7ea9
+Build time: 2026-10-22T20:34:11Z
+
+--- Exception ---
+java.lang.RuntimeException: Unable to start activity ComponentInfo{com.wepwawet/com.wepwawet.auth.SteamLoginActivity}: java.lang.NullPointerException: Attempt to invoke virtual method 'android.webkit.WebSettings android.webkit.WebView.getSettings()' on a null object reference
+	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4630)
+	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4827)
+	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:242)
+	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:138)
+	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:108)
+	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:85)
+	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3116)
+	at android.os.Handler.dispatchMessage(Handler.java:115)
+	at android.os.Looper.loopOnce(Looper.java:298)
+	at android.os.Looper.loop(Looper.java:408)
+	at android.app.ActivityThread.main(ActivityThread.java:9964)
+	at java.lang.reflect.Method.invoke(Native Method)
+	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:613)
+	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1074)
+Caused by: java.lang.NullPointerException: Attempt to invoke virtual method 'android.webkit.WebSettings android.webkit.WebView.getSettings()' on a null object reference
+	at com.android.webview.chromium.CookieManagerAdapter.setAcceptThirdPartyCookies(chromium-SystemWebViewGoogle6432.aab-stable-805904303:16)
+	at com.wepwawet.auth.SteamLoginActivity.onCreate(SourceFile:22)
+	at android.app.Activity.performCreate(Activity.java:9391)
+	at android.app.Activity.performCreate(Activity.java:9363)
+	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1541)
+	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4604)
+	... 13 more
+
+
+--- Recent log entries (last 2000) ---
+[2026-10-22T15:38:43.031733-05:00] INFO/WEP-APP WepWawetApplication.onCreate app_version=0.1.0-alpha git_sha=90b7ea9 build_time=2026-10-22T20:34:11Z device_model=OnePlus CPH2749 android_version=36 abi=arm64-v8a
+[2026-10-22T15:38:43.036153-05:00] INFO/WEP-LIFE MainActivity.onCreate intent=null
+[2026-10-22T15:38:43.040519-05:00] INFO/WEP-LIFE MainActivity.onResume
+[2026-10-22T15:38:43.112631-05:00] INFO/WEP-WS WorkshopBrowserScreen first composition — startBrowse
+[2026-10-22T15:38:43.112694-05:00] INFO/WEP-WS loadNextPage start page=1 sort=mostsubscribed tag=none query=none
+[2026-10-22T15:38:43.112981-05:00] INFO/WEP-WS filter/sort changed — restarting browse sort=mostsubscribed tag=all
+[2026-10-22T15:38:43.112994-05:00] INFO/WEP-WS clearSearch
+[2026-10-22T15:38:43.113177-05:00] INFO/WEP-STEAM browseWorkshop start sort=mostsubscribed page=1 tags=
+[2026-10-22T15:38:43.92586-05:00] INFO/WEP-STEAM getPublishedFileDetails start id_count=30
+[2026-10-22T15:38:44.905564-05:00] WARN/WEP-PROXY getPublishedFileDetails parse error exception=com.google.gson.JsonSyntaxException message=java.lang.IllegalStateException: Expected BOOLEAN but was NUMBER at path $.banned
+[2026-10-22T15:38:44.905755-05:00] WARN/WEP-WS loadNextPage failed page=1 exception=com.wepwawet.data.api.SteamApiException$ParseError message=GetPublishedFileDetails parse failed
+[2026-10-22T15:38:44.905918-05:00] INFO/WEP-WS loadNextPage start page=1 sort=mostsubscribed tag=none query=none
+[2026-10-22T15:38:44.906027-05:00] INFO/WEP-STEAM browseWorkshop start sort=mostsubscribed page=1 tags=
+[2026-10-22T15:38:45.226233-05:00] INFO/WEP-STEAM getPublishedFileDetails start id_count=30
+[2026-10-22T15:38:45.430597-05:00] WARN/WEP-PROXY getPublishedFileDetails parse error exception=com.google.gson.JsonSyntaxException message=java.lang.IllegalStateException: Expected BOOLEAN but was NUMBER at path $.banned
+[2026-10-22T15:38:45.432216-05:00] WARN/WEP-WS loadNextPage failed page=1 exception=com.wepwawet.data.api.SteamApiException$ParseError message=GetPublishedFileDetails parse failed
+[2026-10-22T15:38:47.838175-05:00] INFO/WEP-WS WorkshopBrowserScreen first composition — startBrowse
+[2026-10-22T15:38:47.838212-05:00] INFO/WEP-WS loadNextPage start page=1 sort=mostsubscribed tag=none query=none
+[2026-10-22T15:38:47.83826-05:00] INFO/WEP-WS filter/sort changed — restarting browse sort=mostsubscribed tag=all
+[2026-10-22T15:38:47.838267-05:00] INFO/WEP-WS clearSearch
+[2026-10-22T15:38:47.83837-05:00] INFO/WEP-STEAM browseWorkshop start sort=mostsubscribed page=1 tags=
+[2026-10-22T15:38:48.205837-05:00] INFO/WEP-STEAM getPublishedFileDetails start id_count=30
+[2026-10-22T15:38:48.380583-05:00] WARN/WEP-PROXY getPublishedFileDetails parse error exception=com.google.gson.JsonSyntaxException message=java.lang.IllegalStateException: Expected BOOLEAN but was NUMBER at path $.banned
+[2026-10-22T15:38:48.381906-05:00] WARN/WEP-WS loadNextPage failed page=1 exception=com.wepwawet.data.api.SteamApiException$ParseError message=GetPublishedFileDetails parse failed
+[2026-10-22T15:38:48.382156-05:00] INFO/WEP-WS loadNextPage start page=1 sort=mostsubscribed tag=none query=none
+[2026-10-22T15:38:48.382523-05:00] INFO/WEP-STEAM browseWorkshop start sort=mostsubscribed page=1 tags=
+[2026-10-22T15:38:48.712487-05:00] INFO/WEP-STEAM getPublishedFileDetails start id_count=30
+[2026-10-22T15:38:49.004597-05:00] WARN/WEP-PROXY getPublishedFileDetails parse error exception=com.google.gson.JsonSyntaxException message=java.lang.IllegalStateException: Expected BOOLEAN but was NUMBER at path $.banned
+[2026-10-22T15:38:49.004776-05:00] WARN/WEP-WS loadNextPage failed page=1 exception=com.wepwawet.data.api.SteamApiException$ParseError message=GetPublishedFileDetails parse failed
+[2026-10-22T15:38:49.831246-05:00] INFO/WEP-LIFE SettingsScreen: open Steam login
+[2026-10-22T15:38:50.629295-05:00] INFO/WEP-LIFE SteamLoginScreen sign-in tapped
+[2026-10-22T15:38:50.640685-05:00] INFO/WEP-LIFE MainActivity.onPause
+[2026-10-22T15:38:50.649712-05:00] INFO/WEP-LIFE SteamLoginActivity.onCreate
