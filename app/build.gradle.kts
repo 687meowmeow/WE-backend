@@ -134,6 +134,7 @@ dependencies {
 
     // Image loading
     implementation(libs.coil.compose)
+    implementation("com.google.code.gson:gson:2.10.1")
 
     // WorkManager (for log persistence + background tasks)
     implementation(libs.androidx.work.runtime.ktx)
