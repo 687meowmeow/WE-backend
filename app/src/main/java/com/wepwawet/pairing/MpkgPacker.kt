@@ -224,6 +224,14 @@ object MpkgPacker {
     /**
      * Verify the .mpkg file we just wrote by reading the header back.
      * Catches issues like off-by-one in struct packing early.
+     *
+     * CRITICAL: every read is bounds-checked to prevent OOM if the file is
+     * somehow malformed (e.g. on disk corruption or a packing bug). The
+     * previous version had a bug where reading the magic via
+     * `String(data, 4, 8, ...)` didn't advance the ByteBuffer position,
+     * so the subsequent `buf.int` re-read bytes 4-7 ("PKGM") as the
+     * entry count = 1,296,517,968. The for loop then tried to allocate
+     * a 808 MB ByteArray on the first iteration → OOM crash.
      */
     private fun verifyMpkg(file: File, expectedEntries: List<Pair<String, ByteArray>>) {
         try {
@@ -234,9 +242,28 @@ object MpkgPacker {
                 return
             }
             val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
-            val headerMarker = buf.int
-            val magic = String(data, 4, 8, Charsets.US_ASCII)
-            val entryCount = buf.int
+            val headerMarker = buf.int  // position 0→4
+            // Read magic by ADVANCING the buffer position (not by direct array
+            // access, which doesn't move the position and would cause the next
+            // buf.int to re-read bytes 4-7 as the entry count).
+            val magicBytes = ByteArray(8)
+            buf.get(magicBytes)  // position 4→12
+            val magic = String(magicBytes, Charsets.US_ASCII)
+            val entryCount = buf.int  // position 12→16, NOW reads the real count
+
+            // Sanity-check entryCount before the loop. If it's some absurd
+            // number (because the file is corrupt or our packing is wrong),
+            // bail out instead of trying to iterate billions of times.
+            if (entryCount !in 1..4096) {
+                WepWawetLogger.proxyWarn("MpkgPacker verify: implausible entry count",
+                    "file" to file.name,
+                    "header_marker" to headerMarker,
+                    "magic" to magic,
+                    "entry_count" to entryCount,
+                    "expected" to expectedEntries.size)
+                return
+            }
+
             WepWawetLogger.proxy("MpkgPacker verified",
                 "file" to file.name,
                 "file_size" to data.size,
@@ -245,9 +272,30 @@ object MpkgPacker {
                 "entry_count" to entryCount,
                 "matches_expected" to (headerMarker == HEADER_MARKER && magic == MAGIC && entryCount == expectedEntries.size))
 
-            // Read VFS entries
+            // Read VFS entries — each one bounds-checked to prevent OOM
             for (i in 0 until entryCount) {
+                if (buf.remaining() < 4) {
+                    WepWawetLogger.proxyWarn("MpkgPacker verify: truncated at name_len",
+                        "index" to i)
+                    return
+                }
                 val nameLen = buf.int
+                // Sanity-check name_len. VFS entry names are short UTF-8
+                // strings ("project.json", "preview.jpg", etc.) — anything
+                // over 256 chars is almost certainly a parsing bug.
+                if (nameLen !in 1..256) {
+                    WepWawetLogger.proxyWarn("MpkgPacker verify: implausible name_len",
+                        "index" to i,
+                        "name_len" to nameLen)
+                    return
+                }
+                if (buf.remaining() < nameLen + 8) {
+                    WepWawetLogger.proxyWarn("MpkgPacker verify: truncated mid-entry",
+                        "index" to i,
+                        "name_len" to nameLen,
+                        "remaining" to buf.remaining())
+                    return
+                }
                 val nameBytes = ByteArray(nameLen)
                 buf.get(nameBytes)
                 val name = String(nameBytes, Charsets.UTF_8)

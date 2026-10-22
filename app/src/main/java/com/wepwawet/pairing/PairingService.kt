@@ -144,14 +144,58 @@ class PairingService : Service() {
         WepWawetLogger.proxy("PairingService.onCreate")
     }
 
+    /**
+     * Called by the system on Android 14+ (API 34+) when the foreground service
+     * has reached its time limit OR when the system has decided the service
+     * should stop (e.g. on Android 16 the dataSync FGS type can be asked to
+     * stop shortly after starting if the system thinks it's no longer needed).
+     *
+     * If we don't call stopSelf() within the system's timeout window (a few
+     * seconds), the system throws ForegroundServiceDidNotStopInTimeException
+     * and kills the app process — which is exactly the crash the user saw
+     * after the OOM killed the previous process.
+     *
+     * Our strategy: gracefully stop the servers and call stopForeground +
+     * stopSelf. The proxy will be restarted when the user returns to the
+     * Pairing screen (via PairingScreen's DisposableEffect →
+     * PairingService.start()) or on the next app launch (MainActivity.onCreate
+     * calls PairingService.start()).
+     *
+     * We do NOT auto-restart via AlarmManager — that's fragile on Android 14+
+     * (requires SCHEDULE_EXACT_ALARM permission, and the alarm might not fire
+     * if the app is killed under memory pressure). The proxy is meant to be
+     * "active while the app is in use" — auto-restart on next user action is
+     * the right UX for this use case.
+     */
+    override fun onTimeout(startId: Int) {
+        WepWawetLogger.proxyWarn("PairingService.onTimeout — system requested stop",
+            "start_id" to startId,
+            "action" to "graceful_stop")
+        // Stop the pairing servers cleanly so pairedDeviceName is cleared
+        stopServers()
+        // Remove the foreground notification
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        // Stop the service — the proxy will resume on next PairingService.start()
+        // call (either from MainActivity.onCreate auto-start or from the user
+        // returning to the Pairing screen).
+        stopSelf()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         WepWawetLogger.proxy("PairingService.onStartCommand", "flags" to flags)
 
-        // Start as foreground service immediately (Android 12+ requirement)
+        // Start as foreground service immediately (Android 12+ requirement).
+        // Use FOREGROUND_SERVICE_TYPE_SPECIAL_USE because:
+        //   1. The pairing proxy is a long-running TCP server, not a short
+        //      data sync operation (dataSync would time out on Android 14+)
+        //   2. The manifest declares foregroundServiceType="specialUse"
+        //      with a property explaining the use case
+        //   3. Android docs explicitly recommend specialUse for long-running
+        //      foreground services
         val notification = createNotification("WepWawet pairing proxy running")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIFICATION_ID, notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
