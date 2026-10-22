@@ -34,7 +34,7 @@ class WeDiscoveryBroadcaster(private val context: Context) {
     companion object {
         const val UDP_PORT = 7884
         const val MULTICAST_GROUP = "239.100.0.1"
-        private const val BROADCAST_INTERVAL_MS = 5000L
+        private const val BROADCAST_INTERVAL_MS = 1300L  // VERIFIED from Wireshark: PC broadcasts every ~1.3s
     }
 
     private var multicastSocket: MulticastSocket? = null
@@ -81,11 +81,18 @@ class WeDiscoveryBroadcaster(private val context: Context) {
             multicastSocket = socket
 
             val group = InetAddress.getByName(MULTICAST_GROUP)
-            val pid = (10000..99999).random().toString()
-            val payload = "WallpaperEngine/Ping:$pid:$hostname:1:lo"
+            // VERIFIED from decompiled DiscoverService.java:
+            //   parts[1] = TCP port (5 chars, zero-padded) — phone does parseInt(parts[1])
+            //   parts[3] = protocolVersion — phone checks protocolVersion == 4 (DiscoverDevicesActivity line 181)
+            //   parts[4] = deviceGuid (UUID string)
+            // Real PC sends: "WallpaperEngine/Ping:07889:LAPTOP-NAME:4:5FB2F0F0-..."
+            // Our previous code sent ":1:" for protocolVersion → phone showed "different version" error!
+            val guid = java.util.UUID.randomUUID().toString().uppercase()
+            val payload = "WallpaperEngine/Ping:07889:$hostname:4:$guid"
             val bytes = payload.toByteArray(Charsets.US_ASCII)
 
-            WepWawetLogger.proxy("Discovery broadcaster listening on UDP $UDP_PORT")
+            WepWawetLogger.proxy("Discovery broadcaster listening on UDP $UDP_PORT",
+                "payload" to payload)
 
             // Also listen for incoming UDP (the phone may send a Pong)
             socket.soTimeout = 1000  // wake up every 1s to check running
