@@ -1146,3 +1146,101 @@ Stage Summary:
 - With these logs, the next iteration can identify the actual cause
   of the boot crash (which the previous "no logs being made" state
   made impossible to diagnose).
+
+---
+Task ID: 2
+Agent: main (Z.ai CLI)
+Task: Fix "it crashed on start" — user reported the WepWawet APK crashed on
+launch and uploaded boot.txt and crash-latest.txt from
+Downloads/WepWawet/ (which confirms the previous Task 1 fix is now
+correctly writing to user-visible storage).
+
+Work Log:
+- Read user's uploaded crash-latest.txt — exception was:
+    java.lang.ExceptionInInitializerError
+      at o0.f.c(SourceFile:146)
+      ...
+    Caused by: java.lang.IllegalStateException: TypeToken must be
+    created with a type argument: new TypeToken<...>() {}; When using
+    code shrinkers (ProGuard, R8, ...) make sure that generic
+    signatures are preserved.
+      at com.google.gson.reflect.TypeToken.getTypeTokenTypeArgument(SourceFile:40)
+      at com.google.gson.reflect.TypeToken.<init>(SourceFile:2)
+      at L0.l.<clinit>(SourceFile:2)
+
+- Crash stack trace shows it happens during Compose first composition
+  (ComposeView.Content -> CompositionImpl.composeInitial -> doCompose ->
+  invokeComposable). The obfuscated `L0.l.<clinit>` indicates a
+  static class initializer is throwing.
+
+- Searched codebase for TypeToken usage with Grep — found exactly
+  ONE usage in SteamApiService.kt:
+      val WORKSHOP_ITEM_LIST_TYPE: Type =
+          object : TypeToken<List<WorkshopItem>>() {}.type
+  This is declared in the companion object, which compiles to a
+  static field on SteamApiService$Companion. When MainActivity's
+  setContent renders WepWawetNavHost, it calls
+  `remember { WorkshopRepository(SteamApiService()) }`, which
+  triggers SteamApiService$Companion.<clinit>, which initializes
+  WORKSHOP_ITEM_LIST_TYPE — which throws because R8 stripped the
+  generic Signature attribute from the anonymous TypeToken subclass.
+
+- Searched for `WORKSHOP_ITEM_LIST_TYPE` usage anywhere in the codebase
+  with Grep — confirmed it's declared but NEVER referenced. Dead code.
+
+- Fix applied (commit ba20337, then amended with Type import restored):
+
+  1. Removed the unused `WORKSHOP_ITEM_LIST_TYPE` field and its
+     `import com.google.gson.reflect.TypeToken` import from
+     SteamApiService.kt. This eliminates the crash with zero
+     functional regression — the field was never used.
+
+  2. Strengthened ProGuard rules to preserve generic signatures on
+     ALL TypeToken subclasses (anonymous or named) for future safety:
+       -keep class * extends com.google.gson.reflect.TypeToken
+       -keep class com.google.gson.reflect.TypeToken { *; }
+       -keep class com.google.gson.reflect.TypeToken$* { *; }
+       -keepclasseswithmembers class * {
+           extends com.google.gson.reflect.TypeToken;
+       }
+       -keep,allowobfuscation class * {
+           extends com.google.gson.reflect.TypeToken;
+       }
+       -keepattributes EnclosingMethod, InnerClasses
+
+- After commit ba20337 was pushed, build #3 (run 39865545357)
+  failed at the R8 minification step with:
+    > Task :app:minifyReleaseWithR8 FAILED
+    Missing class com.google.errorprone.annotations.CanIgnoreReturnValue
+    Missing class com.google.errorprone.annotations.CheckReturnValue
+    Missing class com.google.errorprone.annotations.Immutable
+  (referenced from com.google.crypto.tink, transitively pulled in
+  via androidx.security.crypto for EncryptedSharedPreferences).
+  The new ProGuard keep rules for TypeToken caused R8 to keep more
+  classes, which surfaced previously-stripped Tink references to
+  compile-time-only errorprone annotations.
+
+- Fix applied (commit ad86648):
+  Added -dontwarn rules for the missing annotation classes:
+    -dontwarn com.google.errorprone.annotations.**
+    -dontwarn com.google.crypto.tink.**
+  These annotations are compile-time-only and not needed at runtime.
+  This is the Google-recommended fix for Tink + R8 + AGP 8.x.
+
+Stage Summary:
+- Pushed commits ba20337 + ad86648 to GitHub.
+- Build #4 (run 39865900971) SUCCEEDED. APK artifact "wepwawet-apk"
+  is 7.31 MB (up from 6.55 MB because we now keep more classes for
+  TypeToken safety), available at:
+    https://github.com/687meowmeow/WE-backend/actions/runs/39865900971
+- User can install the new APK and should no longer crash on launch.
+- If another crash happens, the CrashHandler from Task 1 will write
+  the report to Downloads/WepWawet/ again — the user can paste
+  crash-latest.txt to identify the next issue.
+
+Next Steps for user:
+1. Download the new APK from the GitHub Actions run page.
+2. Install (uninstall the old APK first if package signature differs).
+3. Launch — should reach the Pairing screen now without crashing.
+4. If still crashing, paste the new crash-latest.txt from
+   Downloads/WepWawet/ so we can iterate.
