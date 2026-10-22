@@ -1,5 +1,6 @@
 package com.wepwawet.ui.screens
 
+import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,7 +13,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -31,17 +34,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.wepwawet.pairing.PairingService
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PairingScreen(
     onBack: () -> Unit,
 ) {
-    var pin by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    var pin by remember { mutableStateOf("1234") }
     var running by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -49,7 +55,12 @@ fun PairingScreen(
             TopAppBar(
                 title = { Text("Pairing") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = {
+                        if (running) {
+                            PairingService.stop(context)
+                        }
+                        onBack()
+                    }) {
                         Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
@@ -71,8 +82,20 @@ fun PairingScreen(
                 textAlign = TextAlign.Center,
             )
             Text(
-                "Open the Wallpaper Engine Android app on this phone. Tap 'Pair a computer', " +
-                    "enter the manual IP 127.0.0.1 and the PIN shown below.",
+                if (running) {
+                    "Servers are running on UDP 7884 + TCP 7889.\n\n" +
+                    "Open the Wallpaper Engine Android app.\n" +
+                    "Either:\n" +
+                    "  1. It should auto-discover 'WepWawet' — tap it\n" +
+                    "  2. Or enter manual IP: 127.0.0.1\n\n" +
+                    "Enter the PIN shown below when prompted."
+                } else {
+                    "Tap 'Start proxy' to begin.\n\n" +
+                    "This starts:\n" +
+                    "  • UDP 7884 discovery broadcast\n" +
+                    "  • TCP 7889 pairing server\n\n" +
+                    "Then open the Wallpaper Engine Android app and pair."
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -81,7 +104,12 @@ fun PairingScreen(
             // PIN display
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (running)
+                        MaterialTheme.colorScheme.primaryContainer
+                    else
+                        MaterialTheme.colorScheme.surfaceVariant
+                ),
             ) {
                 Box(
                     modifier = Modifier
@@ -90,17 +118,40 @@ fun PairingScreen(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = pin ?: "----",
+                        text = if (running) pin else "----",
                         fontSize = 56.sp,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = if (running)
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { running = true; pin = "1234" }) { Text("Start proxy") }
-                OutlinedButton(onClick = { pin = (1000..9999).random().toString() }) {
+                if (!running) {
+                    Button(onClick = {
+                        running = true
+                        PairingService.start(context, pin)
+                    }) {
+                        Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Start proxy")
+                    }
+                } else {
+                    Button(onClick = {
+                        running = false
+                        PairingService.stop(context)
+                    }) {
+                        Icon(Icons.Filled.Stop, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Stop proxy")
+                    }
+                }
+                OutlinedButton(onClick = {
+                    pin = (1000..9999).random().toString()
+                }) {
                     Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
                     Spacer(Modifier.width(8.dp))
                     Text("Refresh PIN")
@@ -109,18 +160,33 @@ fun PairingScreen(
 
             Spacer(Modifier.height(24.dp))
 
-            // Paired devices (stub — would come from PairedDeviceStore)
-            Text(
-                "Paired devices",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        "No devices paired yet. The list will populate here once pairing succeeds.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            // Status info
+            if (running) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                    ),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            "Server Status",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text("• UDP 7884: Broadcasting WallpaperEngine/Ping")
+                        Text("• TCP 7889: Listening for pairing connections")
+                        Text("• RSA-1024 keypair generated")
+                        Text("• AES-256-CBC + RSA/ECB/OAEPPadding")
+                        Text("• PIN: $pin")
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Check the Logs tab for real-time protocol messages.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }

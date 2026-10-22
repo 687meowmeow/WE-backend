@@ -81,7 +81,7 @@
             foregroundServiceType="specialUse" was considered but dataSync is more accurate.
         -->
         <service
-            android:name=".proxy.PairingProxyService"
+            android:name=".pairing.PairingService"
             android:exported="false"
             android:foregroundServiceType="dataSync"
             android:stopWithTask="false" />
