@@ -113,30 +113,41 @@ fun WorkshopBrowserScreen(
 
     // === Auto-start a fresh browse session on first composition ===
     LaunchedEffect(Unit) {
-        WepWawetLogger.workshop("WorkshopBrowserScreen first composition — startBrowse")
-        repo.startBrowse(
-            WorkshopRepository.Filter(
-                query = null,
-                tag = activeType?.let { typeTag(it) },
-                sort = sort,
+        try {
+            WepWawetLogger.workshop("WorkshopBrowserScreen first composition — startBrowse")
+            repo.startBrowse(
+                WorkshopRepository.Filter(
+                    query = null,
+                    tag = activeType?.let { typeTag(it) },
+                    sort = sort,
+                )
             )
-        )
+        } catch (e: Exception) {
+            WepWawetLogger.workshop("startBrowse failed on first composition",
+                "exception" to e.javaClass.name,
+                "message" to (e.message ?: ""))
+        }
     }
 
     // === Re-browse when sort or tag changes (not on query — query is debounced below) ===
     LaunchedEffect(sort, activeType) {
-        WepWawetLogger.workshop("filter/sort changed — restarting browse",
-            "sort" to sort.browseParam,
-            "tag" to (activeType?.let { typeTag(it) } ?: "all"))
-        repo.clearSearch()  // exit search mode if active
-        query = ""           // clear the search bar
-        repo.startBrowse(
-            WorkshopRepository.Filter(
-                query = null,
-                tag = activeType?.let { typeTag(it) },
-                sort = sort,
+        try {
+            WepWawetLogger.workshop("filter/sort changed — restarting browse",
+                "sort" to sort.browseParam,
+                "tag" to (activeType?.let { typeTag(it) } ?: "all"))
+            repo.clearSearch()  // exit search mode if active
+            query = ""           // clear the search bar
+            repo.startBrowse(
+                WorkshopRepository.Filter(
+                    query = null,
+                    tag = activeType?.let { typeTag(it) },
+                    sort = sort,
+                )
             )
-        )
+        } catch (e: Exception) {
+            WepWawetLogger.workshop("re-browse failed",
+                "exception" to e.javaClass.name)
+        }
     }
 
     // === Debounced search: when the user types, after 500ms of quiet, fire startSearch ===
