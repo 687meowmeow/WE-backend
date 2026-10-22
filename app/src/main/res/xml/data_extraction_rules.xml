@@ -11,6 +11,5 @@
         <include domain="file" path="workshop-cache/" />
         <include domain="file" path="mpkg-outbox/" />
         <!-- Steam credentials are NEVER transferred -->
-        <exclude domain="sharedpref" path="steam_credentials.xml" />
     </device-transfer>
 </data-extraction-rules>
