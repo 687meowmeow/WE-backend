@@ -127,6 +127,7 @@ class WorkshopDownloader(
     @Volatile private var appContext: Context? = null  // for clearing stale token on rate limit
     @Volatile private var statusCallback: ((String) -> Unit)? = null
     @Volatile private var isDownloadInProgress = false  // true during DepotDownloader.awaitCompletion — used by onDisconnected to decide whether to auto-reconnect
+    @Volatile private var isReconnectingForFallback = false  // true when our modern-auth fallback called steamClient.connect() — prevents onDisconnected(user_initiated=true) from killing the callback thread
     private val subscriptions = mutableListOf<Closeable>()
 
     private fun updateStatus(msg: String) {
@@ -747,6 +748,15 @@ class WorkshopDownloader(
         WepWawetLogger.proxy("$TAG: connected — authenticating as $username")
         updateStatus("Connected to Steam — authenticating...")
 
+        // === Clear the fallback-reconnect flag — the new connection has been
+        // established, so the previous disconnect (from the connect() call
+        // inside our modern-auth fallback) is no longer relevant. The callback
+        // thread is preserved and will process this onConnected. ===
+        if (isReconnectingForFallback) {
+            isReconnectingForFallback = false
+            WepWawetLogger.proxy("$TAG: isReconnectingForFallback cleared (new connection established)")
+        }
+
         // Don't start a new auth session if one is already in progress (e.g. during TryAnotherCM retry)
         if (authInProgress) {
             WepWawetLogger.proxyWarn("$TAG: auth already in progress, skipping")
@@ -888,24 +898,28 @@ class WorkshopDownloader(
                 // Reconnect — onConnected will see no saved token and start the
                 // modern auth flow (push notification to Steam mobile app).
                 //
-                // === CRITICAL FIX: just call steamClient.connect() — do NOT call
-                // disconnect() first! ===
-                // Previously we did: disconnect(); sleep(2000); connect()
-                // But the disconnect() call triggers onDisconnected(user_initiated=true)
-                // which sets isRunning=false, killing the callback thread. The
-                // subsequent connect()'s onConnected callback never gets processed
-                // because the callback thread is dead. Result: connectAndAuthenticate()
-                // times out (or returns early because isRunning=false), and the user
-                // sees "Steam login failed: Unknown error".
+                // === CRITICAL FIX: set isReconnectingForFallback=true so that
+                // when steamClient.connect() INTERNALLY calls disconnect() (which
+                // it does when already connected), the resulting
+                // onDisconnected(user_initiated=true) callback does NOT set
+                // isRunning=false and kill our callback thread.
                 //
-                // SteamClient.connect() handles re-initialization internally —
-                // if already connected, it disconnects and reconnects atomically
-                // without triggering a user_initiated disconnect callback.
+                // Previously: just call steamClient.connect() — but connect()
+                // internally calls disconnect() first, which triggers
+                // onDisconnected(user_initiated=true) which sets isRunning=false
+                // → kills the callback thread → the new connect()'s
+                // onConnected callback never gets processed → user sees
+                // "Steam login failed: Unknown error".
+                //
+                // The flag is cleared in onConnected (after the new connection
+                // is established) and is one-shot per session.
                 try {
                     updateStatus("Refresh token rejected (${callback.result}) — reconnecting for fresh push-notification login...")
-                    WepWawetLogger.proxy("$TAG: calling steamClient.connect() for fallback (no manual disconnect to preserve callback thread)")
+                    isReconnectingForFallback = true
+                    WepWawetLogger.proxy("$TAG: calling steamClient.connect() for fallback (isReconnectingForFallback=true to preserve callback thread)")
                     steamClient?.connect()
                 } catch (e: Exception) {
+                    isReconnectingForFallback = false
                     WepWawetLogger.proxyError("$TAG: fallback connect() threw",
                         "exception" to e.javaClass.name,
                         "message" to (e.message ?: ""))
@@ -947,20 +961,48 @@ class WorkshopDownloader(
         WepWawetLogger.proxy("$TAG: disconnected",
             "user_initiated" to callback.isUserInitiated,
             "authenticated" to authenticated,
-            "download_in_progress" to isDownloadInProgress)
+            "download_in_progress" to isDownloadInProgress,
+            "is_reconnecting_for_fallback" to isReconnectingForFallback)
+        // === CRITICAL FIX: when our modern-auth fallback called connect()
+        // (which INTERNALLY calls disconnect() first when already connected),
+        // the resulting onDisconnected(user_initiated=true) would normally
+        // set isRunning=false → kill the callback thread → break the
+        // subsequent connect()'s onConnected callback.
+        //
+        // The isReconnectingForFallback flag (set in onLoggedOn before
+        // calling connect()) prevents this: when set, we DON'T set
+        // isRunning=false, just wait for the new onConnected to fire.
+        // Cleared in onConnected.
+        if (isReconnectingForFallback) {
+            WepWawetLogger.proxy("$TAG: disconnect from fallback's connect() — keeping callback thread alive (isReconnectingForFallback=true)")
+            // Don't set isRunning=false; the new connection will fire onConnected
+            // which clears the flag and continues the modern auth flow.
+            // Don't auto-reconnect either — connect() was already called.
+            return
+        }
         // === CRITICAL: do NOT auto-reconnect while a download is in progress. ===
         // The DepotDownloader holds a reference to steamClient and is making API
         // calls through it. If we reconnect (creating a new internal session),
         // the DepotDownloader's state becomes inconsistent with the new connection
         // — its network calls hang forever waiting for chunks that will never
-        // arrive. Instead, let the DepotDownloader fail naturally (its
-        // awaitCompletion will return or throw), and our heartbeat will detect
-        // the stuck state (silent + 0 files) and abort.
+        // arrive.
+        //
+        // Also: if the disconnect is NOT user-initiated during a download
+        // (e.g., the WebSocket "Watchdog: No response for 30 seconds"
+        // disconnect), the connection is already dead — we can't recover
+        // mid-download. Set downloadError immediately so the user sees a
+        // clear "Steam disconnected during download" message instead of
+        // waiting the full 60s stuck-detection window.
         if (isDownloadInProgress) {
-            WepWawetLogger.proxyWarn("$TAG: disconnect DURING download — NOT auto-reconnecting (would interfere with DepotDownloader)")
-            updateStatus("Steam connection dropped during download — letting DepotDownloader handle recovery...")
-            // Don't set isRunning=false here; the awaitCompletion wrapper will
-            // detect the stuck state via the heartbeat and abort.
+            WepWawetLogger.proxyError("$TAG: disconnect DURING download (likely WebSocket watchdog) — aborting immediately",
+                "user_initiated" to callback.isUserInitiated)
+            if (downloadError == null) {
+                downloadError = java.lang.Exception(
+                    "Steam connection dropped during download" +
+                    if (!callback.isUserInitiated) " (WebSocket watchdog — Steam was unresponsive for 30s)" else "" +
+                    ". The DepotDownloader can't recover mid-download — please retry.")
+            }
+            updateStatus("Steam connection dropped during download — aborting (please retry)")
             return
         }
         if (!callback.isUserInitiated && authenticated) {
