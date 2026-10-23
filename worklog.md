@@ -1979,3 +1979,155 @@ The WepWawet APK now builds successfully on GitHub Actions with all the new code
   - Switch the Android MpkgPacker to use the bundled EtcTool binary (need to cross-compile etc2comp for arm64-v8a)
   - OR use a pre-encoded .tex from a server-side / cloud-side conversion service
   - OR fall back to ETC2_RGBA8 (format=5) by writing a pure Kotlin ETC2 encoder (slow but dependency-free)
+
+---
+Task ID: 7
+Agent: main (content download fix + comprehensive logging + brightness fix)
+Task: Fix the issue where user's videos and scenes showed as still images, get the actual Steam Workshop content (not just preview thumbnail), add comprehensive logging at every step, fix brightness issue, push to GitHub, wait for Actions to compile
+
+Work Log:
+- Web-searched how to download actual Steam Workshop content:
+  - ISteamRemoteStorage.GetPublishedFileDetails anonymous endpoint returns EMPTY file_url for paid apps like Wallpaper Engine (431960) — confirmed live with curl
+  - IPublishedFileService.GetDetails with API key + cookies also hides file_url for paid apps
+  - SteamCMD (`workshop_download_item 431960 <id>`) requires Steam login — Linux/Mac/Windows only, no Android port
+  - DepotDownloaderMod (.NET library) can download workshop items without owning the game — used by WallpaperEngineWorkshopDownloader, Steam Workshop Downloader, etc. — but requires .NET runtime
+  - No Android-compatible library exists for downloading actual workshop content directly
+
+- Decision: Since we can't easily download the actual workshop .pkg file on Android, the best path is to:
+  1. Have the user manually copy the .pkg file from their PC's Steam folder
+     (`Steam/steamapps/workshop/content/431960/<id>/scene.pkg`) to their phone
+  2. The WepWawet app picks the .pkg file via the file picker
+  3. We extract assets (.tex for Scene, .mp4 for Video) and repack as .mpkg
+  4. Send via the existing TCP transfer protocol
+
+- Built `PkgReader.kt`:
+  - Parses Wallpaper Engine .pkg files (PKGV0024 magic, length-prefixed string + entry_count + per-entry path/offset/size + data section)
+  - Verified format from `wallpaperui.exe` strings table (PKGV0024 magic at line 58445 of decompiled C)
+  - Returns list of (path, bytes) pairs for each entry
+  - Comprehensive logging at every step: magic read, entry_count, each entry path/offset/size, data section start, each entry extracted with first 16 bytes hex preview
+  - Includes helper methods: detectWallpaperType (parses project.json's "type" field), findVideoFile (.mp4/.webm), findTexFiles (.tex), findPreviewFile (preview.jpg/png)
+
+- Built `WorkshopContentDownloader.kt`:
+  - Tries IPublishedFileService.GetDetails with Steam login cookies + Web API key
+  - Extracts file_url from JSON response (regex-based parse to avoid Gson dep)
+  - If file_url is empty (most common case): returns EmptyFileUrl result, prompting user to use local file picker
+  - If file_url is populated: downloads the .pkg file with progress tracking + 2-second-interval logging
+  - All failure modes return typed Result enum (Success / EmptyFileUrl / AuthRequired / Failure) so UI can show appropriate message
+
+- Rewrote `MpkgPacker.kt` with THREE entry points:
+  1. `packFromPkg(item, pkgFile, outputFile)` — preferred path: extracts real assets from a .pkg file, repacks as .mpkg. Preserves original ETC2_RGBA8 (format=5) .tex files which Android's libscenejni.so handles natively.
+  2. `packSceneWallpaper(item, imageFile, outputFile, maxTextureDim)` — fallback path: encodes JPEG/PNG to RGBA8888 .tex (format=0, uncompressed), packs as Scene .mpkg
+  3. `packVideoWallpaper(item, videoFile, outputFile, previewFile)` — fallback: packs MP4 as Video .mpkg
+
+- BRIGHTNESS FIX in packSceneWallpaper:
+  - Schemecolor: was hardcoded "0.000 0.000 0.000" (black). NOW: computes texture's average RGBA color and uses that (matches real WE .mpkg behavior — 2279314480.mpkg's schemecolor "0.286 0.353 0.553" matches the texture's average purple-blue).
+  - Clearcolor: was "0.000 0.000 0.000" (black). NOW: derived from average color dimmed to 30% (provides subtle ambient matching texture mood — real WE 2279314480.mpkg uses clearcolor "0.700 0.700 0.700" which is gray).
+  - Blending: was "translucent" (can cause additive brightness on some shaders). NOW: "normal" (matches real WE 2279314480.mpkg material).
+  - depthtest: was "disabled". NOW: "enabled" (matches real WE samples — ensures proper occlusion).
+  - depthwrite: was "disabled". NOW: "enabled" (matches real WE samples).
+  - These changes match the schema of the real 2279314480.mpkg the user uploaded (a working WE wallpaper).
+
+- Updated WallpaperDetailScreen.kt:
+  - Added THREE new file picker buttons below the existing "Send to phone" button:
+    1. "Pick local .pkg file (best quality)" — launches file picker for .pkg files
+    2. "Pick local image (Scene wallpaper)" — launches file picker for image/*
+    3. "Pick local video (Video wallpaper)" — launches file picker for video/*
+  - Each picker uses ActivityResultContracts.OpenDocument with persistable URI permission
+  - Three new click handlers: onPickLocalPkgClicked, onPickLocalImageClicked, onPickLocalVideoClicked — each with comprehensive step-by-step logging
+  - Marked the legacy "Send to phone" button as "PREVIEW ONLY" with a clear warning log explaining the limitation
+  - Added `formatBytes()` helper for human-readable file sizes (B/KB/MB/GB)
+  - Added `detectFileType()` helper using magic bytes to identify GIF/JPEG/PNG/MP4/WebP
+
+- Added comprehensive step-by-step logging in EVERY method:
+  - onSendToPhoneClicked: logs "step 1/3", "step 2/3", "step 3/3" with all relevant context
+  - onPickLocalPkgClicked: logs URI, copy operation, .pkg → .mpkg packing, queue operation
+  - onPickLocalImageClicked: logs URI, copy, pack as Scene, queue
+  - onPickLocalVideoClicked: logs URI, copy, pack as Video, queue
+  - MpkgPacker.packFromPkg: logs entry list, type detection, layout, each VFS entry extracted, verification
+  - MpkgPacker.packSceneWallpaper: logs image decode, dimensions, downsample decision, padding, RGBA extraction, average color, .tex build, JSON build, pack layout, verification
+  - MpkgPacker.packVideoWallpaper: logs video load, preview generation, pack layout, verification
+  - PkgReader.read: logs magic read, entry_count, each entry, data section start, each extracted entry with first 16 bytes hex preview
+
+- Fixed Kotlin compilation errors:
+  - `for ((name, blob) in entries)` was ambiguous (Pair vs Triple destructuring) → changed to `for (entry in entries) { val (name, blob) = entry; ... }`
+  - `Bitmap.config.name` was nullable → wrapped with `?.name ?: "null"`
+  - `magicLen` was Long but `ByteArray()` requires Int → added `.toInt()`
+  - `i == 5` comparison where i was Long → changed to `i == 5L`
+  - KDoc comments contained `*/` patterns inside (e.g., `materials/*.json`) which closed the comment block early → changed to `{name}.json`
+
+- Compiled successfully: `./gradlew :app:compileDebugKotlin` → BUILD SUCCESSFUL in 21s (only deprecation warnings, no errors)
+
+- Committed: "Fix wallpaper content: support .pkg files, local image/video pickers, comprehensive logging, brightness fix" → commit 7d81c4b (4 files changed, 1453 insertions, 353 deletions)
+
+- Pushed to origin/main: 5190afb..7d81c4b main -> main
+
+- GitHub Actions workflow triggered: run ID 39899863815
+
+- Polled workflow status. ALL steps completed successfully:
+  - Set up job ✓
+  - Run actions/checkout@v4 ✓
+  - Setup Android SDK (platform-tools, android-35, build-tools 35.0.0) ✓
+  - Setup Java 17 (temurin) ✓
+  - Setup Gradle ✓
+  - Build APK (`./gradlew :app:assembleRelease --no-daemon --stacktrace`) ✓
+  - Locate APK ✓
+  - Upload APK artifact ✓
+
+- Downloaded artifact: `wepwawet-apk` (7,696,506 bytes zip → 8,237,960 bytes APK)
+- Saved to: `/home/z/my-project/download/app-release.apk`
+
+- Verified new code is in the APK by extracting classes.dex and grepping for strings:
+  - `Lcom/wepwawet/pairing/PkgReader;` ✓ (new class present)
+  - `MpkgPacker.packFromPkg type detected` ✓ (new packer method present)
+  - `WorkshopContentDownloader HTTP error` ✓
+  - `WorkshopContentDownloader auth ready` ✓
+  - `pick-local-pkg: packFromPkg failed` ✓
+  - `pick-local-pkg: queued for transfer` ✓
+  - `pick-local-image: packing Scene .mpkg` ✓
+  - `pick-local-image: queued for transfer` ✓
+  - `pick-local-video: packing Video .mpkg` ✓
+  - `pick-local-video: queued for transfer` ✓
+  - `PkgReader.detectWallpaperType done` ✓
+  - `PkgReader failed to extract entry` ✓
+  - `PkgReader implausible entry_count` ✓
+
+Stage Summary:
+
+## BUILD STATUS: ✅ SUCCESS
+
+Workflow URL: https://github.com/687meowmeow/WE-backend/actions/runs/39899863815
+
+## WHAT THE USER CAN NOW DO
+
+1. Download the new APK from GitHub Actions artifacts (`wepwawet-apk`, id 12479035234)
+   OR use the local copy at `/home/z/my-project/download/app-release.apk`
+2. Install on their Android phone (replaces previous APK)
+3. Pair with the WE Android app via the PIN flow
+4. To send REAL wallpaper content:
+   - On their PC, open Steam, subscribe to the WE workshop item, let it download
+   - Find the .pkg file at: `Steam/steamapps/workshop/content/431960/<workshop_id>/scene.pkg` (or similar)
+   - Copy the .pkg file to their Android phone (via USB, cloud, etc.)
+   - In the WepWawet app, browse the workshop, tap the wallpaper detail
+   - Tap "Pick local .pkg file (best quality)" button
+   - Pick the .pkg file from the file picker
+   - The app reads the .pkg, extracts all assets (.tex/.mp4/JSONs), repacks as .mpkg
+   - Transfers to the WE Android app on next heartbeat
+   - The wallpaper should render correctly (real .tex files, real video, etc.)
+
+5. To send a custom image (Scene wallpaper):
+   - Tap "Pick local image (Scene wallpaper)" button
+   - Pick any JPEG/PNG
+   - The app encodes as RGBA8888 .tex, packs as Scene .mpkg, transfers
+   - Brightness should now be correct (using average color as schemecolor, "normal" blending, depthtest enabled)
+
+6. To send a custom video (Video wallpaper):
+   - Tap "Pick local video (Video wallpaper)" button
+   - Pick any MP4
+   - The app packs as Video .mpkg with type:"video", transfers
+   - The WE Android app plays the MP4 via MediaPlayer + MPKGVideoReader
+
+## REMAINING WORK
+
+1. The "Send to phone" button (legacy) still sends the preview thumbnail — this is clearly logged as "PREVIEW ONLY" so users know to use the local file pickers instead.
+2. WorkshopContentDownloader.kt is implemented but not yet wired into the UI — when Steam hides file_url (most common case for paid apps), it returns EmptyFileUrl result. A future UI could surface this with a clear message + offer to use the local .pkg picker.
+3. For users who don't have a PC: a future backend service running SteamCMD could download .pkg files server-side and stream to the Android app.
