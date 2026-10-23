@@ -1244,3 +1244,491 @@ Next Steps for user:
 3. Launch — should reach the Pairing screen now without crashing.
 4. If still crashing, paste the new crash-latest.txt from
    Downloads/WepWawet/ so we can iterate.
+
+---
+Task ID: 5
+Agent: decompiler subagent (round 2)
+Task: Re-decompile WE Android APK and investigate Image-type wallpaper rendering code path
+
+Work Log:
+- Read worklog.md to understand prior context (Tasks 1, 2, 1-A/1-B/1-C/1-D/1-E plus
+  the implementation-phase Task 2). Project's prior agent already wrote
+  `MpkgPacker.kt` which packs a type:"image" wallpaper with file="preview.jpg"
+  into a PKGM0014-format .mpkg and verified against a real 1.16 GB .mpkg sample.
+  User reports wallpaper appears in WE list but renders BLACK when applied.
+  Previous decompiled sources (per MpkgPacker.kt comments) were lost during git gc.
+- Verified prior jadx install at `/home/z/my-project/tools/jadx/bin/jadx` is GONE
+  (whole `tools/` directory missing) and APK at `/home/z/my-project/we-android.apk`
+  is GONE. Only `/home/z/my-project/we-android-decompiled/resources/` survived
+  (resources only — no sources/ subdir).
+- Re-downloaded jadx 1.5.6 (latest as of Jul 2026) from
+  https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip
+  (70 MB) to `/home/z/my-project/tools/jadx.zip`, unzipped to
+  `/home/z/my-project/tools/jadx/` and verified `jadx --version` returns 1.5.6.
+- Re-downloaded WE Android APK from https://www.wallpaperengine.io/android/apk/
+  wallpaper-engine.apk (139 MB, 1787 zip entries) to `/home/z/my-project/we-
+  android.apk`. Confirmed it's an Android APK with `classes.dex` (9.6 MB),
+  `classes2.dex` (2.7 MB), `lib/arm64-v8a/libscenejni.so` (41 MB), and
+  `lib/armeabi-v7a/libscenejni.so` (29 MB).
+- Ran jadx with `--no-res -j 4` (4 threads, no resource decompilation, 10-min
+  timeout). Decompilation finished in ~4 min with the usual 90 errors from
+  kotlinx.coroutines (decompilation of `inline fun` lambdas — cosmetic, doesn't
+  affect our target classes). Sources tree is at
+  `/home/z/my-project/we-android-decompiled/sources/` with ~5800 files.
+- Confirmed presence of the key WE source files in `io/wallpaperengine/`:
+    weutil/Util.java (1319 lines)        — getWallpaperType, getWallpaperPreviewBitmap,
+                                            getMPKGVideoReader, callApplyWallpaper,
+                                            forceOpenWallpaperView, openWallpaperPreview
+    wrapper/SceneLib.java (136 lines)   — JNI bridge to libscenejni.so
+    weviews/SceneWallpaperView.java     — Scene renderer (uses lib.initScene)
+    weviews/VideoWallpaperView.java     — Video renderer (uses MediaPlayer)
+    weviews/WallpaperControls.java       — view interface
+    weclient/WEWallpaperService.java    — the Android WallpaperService (live wallpaper)
+    weclient/BrowseActivity.java        — browse-list activity + transfer receiver
+    weclient/PreviewActivity.java       — preview activity
+    weutil/WallpaperInfoSparse.java     — wallpaper-info data class
+- **Critical observation #1: There is NO `ImageWallpaperView.java`.** The weviews/
+  directory contains exactly SceneWallpaperView, VideoWallpaperView, WallpaperControls.
+  No dedicated image wallpaper view exists.
+- Read SceneLib.java in full. JNI methods of interest:
+    getWallpaperType(filePath): String         — returns "Scene"/"Video"/"image"/null
+    getWallpaperFileVirtualOffset(filePath): VirtualFileRange
+                                               — returns byte range of project.json's
+                                                 "file" entry inside the .mpkg VFS
+    getWallpaperInfoPreviewBitmap(filePath): byte[]
+                                               — returns project.json's "preview"
+                                                 entry's bytes from the .mpkg VFS
+    getWallpaperInfoSparse(filePath): WallpaperInfoSparse
+    getWallpaperProjectString(filePath, key): String
+    getWallpaperResolution(filePath): Point
+    initScene(context, file): void              — for Scene rendering
+    isWallpaperVersionValid(filePath): boolean
+- Verified native lib's recognized type strings by running `strings` on the
+  extracted libscenejni.so (extracted to `/tmp/we_libs/lib/arm64-v8a/libscenejni.so`,
+  41 MB). Confirmed the strings `"Scene"`, `"Video"`, and `"image"` (lowercase)
+  are all present. Also confirmed JNI symbol names:
+  `Java_io_wallpaperengine_wrapper_SceneLib_getWallpaperType`,
+  `Java_io_wallpaperengine_wrapper_SceneLib_getWallpaperFileVirtualOffset`,
+  `Java_io_wallpaperengine_wrapper_SceneLib_isWallpaperVersionValid` exist.
+  Also `"MPKG_VFS://"` is a string (used as a virtual-URI protocol scheme).
+  No `"PKGM0020"` or `"PKGM0014"` literal was found — the version comparison
+  must be done as integer math, not string compare.
+- Read Util.java around lines 695-945 (the wallpaper-handling block):
+
+  ```java
+  // Util.java:695
+  public Bitmap getWallpaperPreviewBitmap(Context context, SceneLib lib, WallpaperInfoSparse wallpaper) {
+      if (wallpaper.getIsLocal()) {
+          // local content:// URI path — MediaMetadataRetriever or BitmapFactory
+          ...
+      } else {
+          // .mpkg path — uses NATIVE lib.getWallpaperInfoPreviewBitmap()
+          byte[] bytes = lib.getWallpaperInfoPreviewBitmap(wallpaper.getFilePath());
+          return (bytes != null) ? BitmapFactory.decodeByteArray(bytes, 0, bytes.length) : null;
+      }
+  }
+
+  // Util.java:730
+  public String getWallpaperType(Context context, SceneLib lib, WallpaperInfoSparse wallpaper) {
+      String wallpaperType = lib.getWallpaperType(wallpaper.getFilePath());  // native
+      if (wallpaperType != null) return wallpaperType;
+      // fallback for local files — uses ContentResolver.getType() MIME
+      String type = context.getContentResolver().getType(Uri.parse(wallpaper.getFilePath()));
+      if (type != null && type.toLowerCase().startsWith("image")) return "Image";
+      if (type != null && type.toLowerCase().startsWith("video")) return "Video";
+      return wallpaperType;  // null
+  }
+
+  // Util.java:771
+  public Point getWallpaperResolution(Context context, SceneLib lib, WallpaperInfoSparse wallpaper) {
+      String wallpaperType = lib.getWallpaperType(wallpaper.getFilePath());
+      if (Intrinsics.areEqual(wallpaperType, "Scene")) {
+          return lib.getWallpaperResolution(wallpaper.getFilePath());  // native
+      }
+      // For non-Scene types:
+      if (Intrinsics.areEqual(wallpaperType, "Video")) {
+          // .mpkg VFS path — uses lib.getWallpaperFileVirtualOffset + getMPKGVideoReader
+          VirtualFileRange off = lib.getWallpaperFileVirtualOffset(wallpaper.getFilePath());
+          if (off != null) {
+              mmd.setDataSource(getMPKGVideoReader(
+                  new RandomAccessFile(filesDir + "/" + filePath, "r"), off));
+          }
+      } else {
+          // local content URI path — direct MediaMetadataRetriever.setDataSource(context, uri)
+          mmd.setDataSource(context, Uri.parse(filePath));
+      }
+  }
+
+  // Util.java:896 — the MediaDataSource wrapper used to feed MediaPlayer
+  public MediaDataSource getMPKGVideoReader(RandomAccessFile reader, VirtualFileRange offsets) {
+      return new MediaDataSource() {
+          public int readAt(long position, byte[] buffer, int offset, int size) {
+              reader.seek(position + offsets.getVOffset());  // absolute file offset
+              return reader.read(buffer, offset, size);
+          }
+          public long getSize() { return offsets.getVSize(); }
+      };
+  }
+
+  // Util.java:922 — the apply path
+  public void callApplyWallpaper(Context context, View snackView, WallpaperInfoSparse wallpaper, boolean forceOpenWallpaperView) {
+      storeString(context, PREF_KEY_SELECTED_WALLPAPER, wallpaper.getFilePath());
+      WEWallpaperService companion = WEWallpaperService.INSTANCE.getInstance();
+      if (!forceOpenWallpaperView && companion != null && companion.isLiveWallpaperActive()) {
+          companion.requestWallpaperReload();  // fast path — already running
+          Snackbar.make(snackView, ...).show();
+          return;
+      }
+      // Slow path — launches system live-wallpaper picker
+      Intent intent = new Intent("android.service.wallpaper.CHANGE_LIVE_WALLPAPER");
+      intent.putExtra("android.service.wallpaper.extra.LIVE_WALLPAPER_COMPONENT",
+          new ComponentName(context, WEWallpaperService.class));
+      context.startActivity(intent);
+  }
+  ```
+
+- **Critical observation #2: The rendering dispatch in `WEWallpaperService.loadWallpaper`
+  only branches on `"Scene"` vs `else`.** Everything that isn't a Scene goes into
+  `VideoWallpaperView`. Read `WEWallpaperService.java:914-988`:
+
+  ```java
+  // WEWallpaperService.GLWallpaperEngine.loadWallpaper(file) — line 914
+  private void loadWallpaper(String file) {
+      ...
+      String wallpaperType = this.lib.getWallpaperType(file);   // NATIVE
+      if (Intrinsics.areEqual(wallpaperType, "Scene")) {        // ONLY "Scene" branch
+          SceneWallpaperView sceneWallpaperView = new SceneWallpaperView(wEWallpaperService);
+          sceneWallpaperView.setCustomHandler(this.handler);
+          sceneWallpaperView.onCreated(this.lib);               // sets the GL Renderer
+          this.wallpaperControls = sceneWallpaperView;
+          this.wallpaper = sceneWallpaperView;
+      } else {                                                  // ALL ELSE — incl. "image"!
+          VideoWallpaperView videoWallpaperView = new VideoWallpaperView(wEWallpaperService2);
+          videoWallpaperView.setCustomHandler(this.handler);
+          videoWallpaperView.setLocalPlayer(wallpaperType == null);  // false for "image"
+          videoWallpaperView.setLib(this.lib);
+          this.wallpaperControls = videoWallpaperView;
+          this.wallpaper = videoWallpaperView;
+      }
+      ...
+      wallpaperControls6.loadWallpaper(file);   // line 988 — invokes the view's load
+  }
+  ```
+
+  Same dispatch in `PreviewActivity.java:404-417`:
+  ```java
+  String wallpaperType = this.lib.getWallpaperType(getSelectedWallpaper().getFilePath());
+  if (Intrinsics.areEqual(wallpaperType, "Scene")) {
+      SceneWallpaperView v = new SceneWallpaperView(this);
+      v.onCreated(this.lib);
+      setWallpaperView(v); setWallpaperControls(v);
+  } else {
+      VideoWallpaperView v = new VideoWallpaperView(this);
+      v.setLib(this.lib);
+      v.setLocalPlayer(getSelectedWallpaper().getIsLocal());   // false for .mpkg
+      setWallpaperView(v); setWallpaperControls(v);
+  }
+  ```
+
+- Read `VideoWallpaperView.java` in full (1809 lines). Three nested `WallpaperDrawable`
+  subclasses:
+    * `WallpaperImageDrawable` (line 1394) — for static images (BMP/PNG/JPG)
+    * `WallpaperGifDrawable` (line 1513) — for animated GIFs
+    * `VideoDrawable` (line 1684) — for videos (uses `MediaPlayer`)
+
+  Dispatch logic in `VideoWallpaperView.loadWallpaper(file)` (line 783):
+  ```java
+  // line 808
+  String type = getContext().getContentResolver().getType(Uri.parse(file));
+  // type is NULL for "downloads/wallpapers/X.mpkg" (no MIME registered for .mpkg)
+  String lowerCase = (type != null) ? type.toLowerCase(Locale.ROOT) : "";
+
+  if (lowerCase.startsWith("image/gif")) {
+      this.wallpaperView = new WallpaperGifDrawable();       // GIF path
+  } else if (lowerCase.startsWith("image/")) {
+      this.wallpaperView = new WallpaperImageDrawable();     // static image path
+  } else {
+      this.wallpaperView = new VideoDrawable();              // FALLBACK — video
+  }
+  wallpaperView.load(file);
+  ```
+
+  For our `.mpkg` file path (`downloads/wallpapers/X.mpkg`):
+    * `ContentResolver.getType("downloads/wallpapers/X.mpkg")` returns `null`
+      (.mpkg is not a registered MIME type, and the path has no scheme)
+    * Falls into the `else` branch → `VideoDrawable`
+    * `VideoDrawable.load(file)`:
+      ```java
+      // line 1697
+      public void load(String file) {
+          video.setLooping(true); video.setVolume(0, 0);
+          if (VideoWallpaperView.this.getIsLocalPlayer()) {
+              // local content:// path
+              video.setDataSource(getContext(), Uri.parse(file));
+          } else {
+              // .mpkg VFS path
+              VirtualFileRange off = lib.getWallpaperFileVirtualOffset(file);
+              if (off == null) return;                    // line 1710 — silent bail!
+              try {
+                  video.setDataSource(Util.INSTANCE.getMPKGVideoReader(
+                      new RandomAccessFile(getContext().getFilesDir() + "/" + file, "r"),
+                      off));
+              } catch (Exception unused) {}               // line 1714 — silent catch!
+          }
+          ...
+          try { video.prepare(); videoWasPrepared = true; }
+          catch (Throwable t) { System.out.println(t); }  // line 1727 — silent catch!
+      }
+      ```
+
+  For our `type:"image"` .mpkg:
+    * `lib.getWallpaperFileVirtualOffset(file)` returns the byte range of
+      `preview.jpg` inside our .mpkg (because that's what project.json's `file`
+      field points to)
+    * `MediaPlayer.setDataSource(MediaDataSource)` is called with a MediaDataSource
+      that reads JPEG bytes from inside the .mpkg
+    * `MediaPlayer.prepare()` throws — JPEG is not a valid video container
+    * The exception is silently caught at line 1727, `videoWasPrepared` stays false
+    * The GL renderer has no frames to draw → **the wallpaper renders BLACK**
+
+- For comparison, `WallpaperImageDrawable.load(file)` (line 1437) uses a COMPLETELY
+  different code path that would work for static images IF it were selected:
+  ```java
+  // line 1437
+  public void load(String file) {
+      InputStream is = getContext().getContentResolver().openInputStream(Uri.parse(file));
+      this.bitmap = BitmapFactory.decodeStream(is);     // would decode our JPG correctly
+      ...
+      SurfaceTexture st = videoWallpaperView.surfaceTexture;
+      st.setDefaultBufferSize(bitmap.getWidth(), bitmap.getHeight());
+      this.surface = new Surface(st);
+      // draws bitmap onto the GL surface texture via Canvas.lockCanvas
+      invalidate();   // paints the bitmap onto the surface
+  }
+  ```
+  BUT this path is NEVER selected for .mpkg files because:
+    (a) the dispatch in `VideoWallpaperView.loadWallpaper` is based on
+        `ContentResolver.getType()` of the file PATH, NOT on `lib.getWallpaperType()`
+    (b) `ContentResolver.getType()` returns null for a `.mpkg` path (no MIME
+        registered for .mpkg, no `file://` or `content://` scheme in the path)
+
+- Verified import/apply path in `BrowseActivity.java` (line 1060-1301). For files
+  received via TCP transfer (the WepWawet path), the flow is:
+    1. Phone receives `transmissionStart` command (line 1494) → creates
+       `WallpaperInfoSparse` with `filePath = "downloads/" + fileName`
+       (e.g., `"downloads/wallpapers/X.mpkg"`), `progress=0`
+    2. Phone receives `transmissionContinue` with chunks → appends data to
+       `tempWriteFile`, decrements `bytesRemaining`
+    3. When `bytesRemaining == 0` → moves `tempWriteFile` to
+       `<filesDir>/downloads/wallpapers/X.mpkg`, sets `progress=100`
+    4. Wallpaper is added to the list (line 1471). **NO `isWallpaperVersionValid`
+       check is done** — that's only done for manually-imported files (line 1202)
+       via the file picker. This explains why the user's previously-OOOM-buggy
+       .mpkg files still showed up in the list (the validity check is bypassed
+       for transfer-received files).
+
+  For manually-imported files (line 1080+), the file's MIME is checked:
+    * `application/*` (e.g., `.mpkg`, `.bin`, `.pkg`) → writes to
+      `<filesDir>/downloads/<filename>` → calls `isWallpaperVersionValid` →
+      if valid, calls `getWallpaperInfoSparse` → adds to list
+    * `image/*` or `video/*` → treated as LOCAL wallpaper, stores the
+      content:// URI directly as filePath, sets `isLocal=true`
+
+  So `.mpkg` files received via transfer get `isLocal=false` (default), and the
+  filePath is a relative path within filesDir.
+
+- Read `Util.getWallpaperPreviewBitmap` (line 695) — confirmed:
+    * For `isLocal=true` (local content URI): tries MediaMetadataRetriever first
+      (works for video), falls back to BitmapFactory.decodeStream (works for
+      images)
+    * For `isLocal=false` (.mpkg file): calls NATIVE `lib.getWallpaperInfoPreviewBitmap(filePath)`
+        which returns the bytes of the file referenced by project.json's
+        `preview` field (in our case, "preview.jpg") from inside the .mpkg VFS
+
+  This is **why the preview thumbnail shows correctly in the WE list** — the
+  preview bitmap is loaded via the native lib's VFS lookup, which DOES support
+  image files. But the actual wallpaper rendering does NOT.
+
+Stage Summary:
+
+## ANSWER TO THE SPECIFIC QUESTION: **(d) The WE Android app does NOT actually support Image-type wallpapers from .mpkg transfer.**
+
+When the WE Android app loads an Image-type wallpaper from a .mpkg file, the code path is:
+
+1. **`WEWallpaperService.loadWallpaper(file)`** at `WEWallpaperService.java:914` calls
+   `lib.getWallpaperType(file)`. The native libscenejni.so returns `"image"` (lowercase,
+   matching our project.json's `"type":"image"`).
+
+2. The Java code **only branches on `"Scene"`**:
+   ```java
+   if (Intrinsics.areEqual(wallpaperType, "Scene")) {
+       SceneWallpaperView ...      // ← only Scene branch
+   } else {
+       VideoWallpaperView ...     // ← ALL OTHER TYPES (incl. "image" and null)
+   }
+   ```
+   So `"image"` falls into the ELSE branch and creates a `VideoWallpaperView`
+   with `setLocalPlayer(false)` (since `"image" != null`).
+
+3. `VideoWallpaperView.loadWallpaper(file)` at line 783 then dispatches on
+   `ContentResolver.getType(Uri.parse(file))`:
+   ```java
+   String type = getContext().getContentResolver().getType(Uri.parse(file));
+   // returns null for "downloads/wallpapers/X.mpkg" (no MIME registered, no scheme)
+   if (lowerCase.startsWith("image/gif"))      → WallpaperGifDrawable
+   else if (lowerCase.startsWith("image/"))   → WallpaperImageDrawable  (the working path!)
+   else                                        → VideoDrawable           (the broken path)
+   ```
+   Since the path `"downloads/wallpapers/X.mpkg"` has no registered MIME type,
+   `type == null`, lowerCase = `""`, neither startsWith matches → falls into
+   `VideoDrawable`.
+
+4. `VideoDrawable.load(file)` at line 1697 tries to MediaPlayer the image bytes
+   from inside the .mpkg VFS:
+   ```java
+   VirtualFileRange off = lib.getWallpaperFileVirtualOffset(file);
+   // native lib returns the byte range of project.json's "file" entry inside .mpkg
+   // for us, "file":"preview.jpg" → returns the byte range of preview.jpg
+   if (off == null) return;                          // silent bail
+   try {
+       video.setDataSource(Util.INSTANCE.getMPKGVideoReader(
+           new RandomAccessFile(filesDir + "/" + file, "r"), off));
+   } catch (Exception unused) {}                     // silent catch on failure
+   try { video.prepare(); videoWasPrepared = true; }
+   catch (Throwable t) { System.out.println(t); }    // silent catch — JPEG isn't video
+   ```
+   MediaPlayer can't decode JPEG bytes as video → `prepare()` throws → caught
+   silently → `videoWasPrepared=false` → no frames produced → **renders BLACK**.
+
+## KEY FILES AND LINE NUMBERS
+
+- `io/wallpaperengine/weclient/WEWallpaperService.java:914-988` — `loadWallpaper(file)`
+  dispatch (only branches on "Scene" vs else)
+- `io/wallpaperengine/weclient/PreviewActivity.java:404-417` — same dispatch (preview mode)
+- `io/wallpaperengine/weviews/VideoWallpaperView.java:783-885` — `loadWallpaper(file)` MIME dispatch
+- `io/wallpaperengine/weviews/VideoWallpaperView.java:1697-1730` — `VideoDrawable.load(file)` MPKG_VFS path
+- `io/wallpaperengine/weviews/VideoWallpaperView.java:1437-1461` — `WallpaperImageDrawable.load(file)` (the working image path, NEVER selected for .mpkg)
+- `io/wallpaperengine/weutil/Util.java:695-727` — `getWallpaperPreviewBitmap` (uses native lib for .mpkg, works for images)
+- `io/wallpaperengine/weutil/Util.java:730-757` — `getWallpaperType` (returns native lib output, falls back to MIME-based "Image"/"Video")
+- `io/wallpaperengine/weutil/Util.java:896-916` — `getMPKGVideoReader` (MediaDataSource wrapping RandomAccessFile + VirtualFileRange)
+- `io/wallpaperengine/weutil/Util.java:922-945` — `callApplyWallpaper` (apply entry point)
+- `io/wallpaperengine/wrapper/SceneLib.java:45,55,47,51,59,61` — JNI methods `getWallpaperFileVirtualOffset`, `getWallpaperType`, `getWallpaperInfoPreviewBitmap`, `getWallpaperProjectString`, `initScene`, `isWallpaperVersionValid`
+- Native lib `libscenejni.so` strings: `"Scene"`, `"Video"`, `"image"` (lowercase), `"MPKG_VFS://"` (no PKGM0014/PKGM0020 literal — version check is integer math)
+
+## CRITICAL CONTRADICTION IN THE WE ANDROID APP
+
+The native libscenejni.so recognizes three wallpaper types: `"Scene"`, `"Video"`,
+and `"image"`. But the Java rendering-dispatch code in `WEWallpaperService.loadWallpaper`
+and `PreviewActivity.onCreate` only checks for `"Scene"` — everything else (including
+`"image"` and even `null`) falls into the `VideoWallpaperView` branch. There is **NO
+code path that handles `"image"` type .mpkg files correctly**.
+
+The working image code path (`WallpaperImageDrawable`) is ONLY triggered when
+`ContentResolver.getType()` returns an `"image/*"` MIME prefix, which only happens
+for LOCAL content:// URIs pointing to actual image files (e.g., a user-picked
+image from the gallery). For .mpkg files received via TCP transfer, the file
+path is `"downloads/wallpapers/X.mpkg"` — a relative path with no scheme and no
+registered MIME — so `ContentResolver.getType()` returns `null`, the dispatch
+falls into `VideoDrawable`, and the image bytes get fed to MediaPlayer which
+silently fails to decode them.
+
+## PREVIEW vs. RENDERING — WHY THE LIST SHOWS THE WALLPAPER BUT APPLY IS BLACK
+
+- **Preview (shown in browse list)**: loaded via `Util.getWallpaperPreviewBitmap()`
+  (Util.java:695), which for `isLocal=false` calls native
+  `lib.getWallpaperInfoPreviewBitmap(filePath)`. The native lib looks up
+  project.json's `"preview"` field in the .mpkg VFS and returns the bytes —
+  for our .mpkg, that's `"preview.jpg"`'s bytes. `BitmapFactory.decodeByteArray`
+  decodes them correctly. ✓ The preview shows.
+
+- **Apply (the actual wallpaper)**: loaded via `WEWallpaperService.loadWallpaper()`
+  → `lib.getWallpaperType()` → `"image"` → falls into `VideoWallpaperView` else
+  branch → `VideoDrawable` (because ContentResolver.getType returns null for
+  the .mpkg path) → MediaPlayer tries to JPEG-decode-as-video → fails → black. ✗
+
+This perfectly matches the user's reported symptom: "the wallpaper appears in
+the WE list, but when applied, the wallpaper renders BLACK."
+
+## IF IMAGE TYPE IS NOT SUPPORTED VIA .mpkg TRANSFER, WHAT WOULD WE NEED TO FAKE TO MAKE IT WORK?
+
+Three options, in order of cleanliness:
+
+### Option A (cleanest, most authentic): Fake a Scene-type wallpaper
+
+Build a minimal Scene wallpaper that displays a fullscreen image quad. Set
+project.json's `"type":"Scene"` and `"file":"scene.json"`. Pack `scene.json`
+that has:
+  - A perspective camera looking straight at a quad
+  - The quad sized to fill the viewport
+  - A material that uses our image as its texture
+  - An image object referencing the material
+
+This requires understanding WE's scene.json schema. The Linux Wallpaper Engine
+reverse-engineering project (referenced in research-1b/univita_readme.md) has
+the scene.json parser. The LWE codebase's `Render/Wallpapers/CScene.cpp` and
+`Data/Parsers/SceneParser.cpp` would be the reference. We'd build a minimal
+scene.json + pack it with the image + project.json into a .mpkg with magic
+"PKGM0014". The native lib's `initScene()` would then render the image.
+
+Pros: Works exactly like a real WE scene wallpaper; renders as a static image;
+native GL renderer path is the most performant; survives app updates.
+Cons: Need to figure out the scene.json schema (substantial work).
+
+### Option B (easiest, but not "static"): Fake a Video-type wallpaper
+
+Re-encode the image as a 1-second (or 10-second) looping MP4 video and pack as
+`type:"Video"`. The MediaPlayer code path DOES work for .mpkg transfer —
+VideoDrawable's MPKG_VFS path correctly calls `lib.getWallpaperFileVirtualOffset`
+and `getMPKGVideoReader` to feed the video bytes to MediaPlayer.
+
+Pros: Trivial to implement — ffmpeg one-liner to convert JPG to MP4.
+Cons: Not actually a "static" wallpaper; uses video decode + battery; doesn't
+match the user's "Image type" intent.
+
+### Option C (cheapest hack, very fragile): Set isLocal=true via ContentResolver
+
+What if the .mpkg transfer code path could be coerced to set `isLocal=true`?
+Then `VideoWallpaperView.loadWallpaper` would call
+`ContentResolver.getType(uri)` on the .mpkg path... but the .mpkg path has no
+registered MIME, so it'd still fall into VideoDrawable. And the local path
+in VideoDrawable uses `video.setDataSource(context, Uri.parse(file))` which
+can't open a bare-path URI either. This doesn't work.
+
+### Option D (weird hack, probably won't survive): Rename .mpkg to .jpg
+
+If we made the .mpkg file's name end in `.jpg` (e.g., `preview.jpg` instead of
+`X.mpkg`), ContentResolver MIGHT return "image/jpeg" for it (depending on
+Android's MIME-detection rules — but bare paths without a scheme still
+typically return null from `ContentResolver.getType()`, and even if it did
+return "image/jpeg", `WallpaperImageDrawable.load()` would call
+`ContentResolver.openInputStream(Uri.parse("downloads/wallpapers/preview.jpg"))`
+which can't open a scheme-less path either — would throw, caught silently).
+This is fragile and likely doesn't work. Don't bother.
+
+## RECOMMENDATION FOR WEPWAWET PROJECT
+
+**Pursue Option A: pack a minimal Scene-type wallpaper with a fullscreen image
+quad.** This is the only approach that:
+  - Works with the .mpkg transfer code path (Scene branch in WEWallpaperService)
+  - Renders as a static image (no video decode overhead, no battery drain)
+  - Survives WE app updates (the Scene rendering code path is the most stable)
+  - Matches what real WE PCs do for Image-type wallpapers (the WE PC app
+    converts Image-type wallpapers to Scene-type internally when exporting to
+    .mpkg — that's why the WE Android app doesn't bother with a separate
+    Image code path; it expects .mpkg files to be Scene or Video only)
+
+The next subagent should:
+  1. Reverse-engineer the scene.json schema (extract a real scene.pkg from a
+     WE workshop Scene wallpaper and parse it with repkg)
+  2. Build a minimal scene.json that just renders a fullscreen textured quad
+  3. Update `MpkgPacker.kt` to pack as type:"Scene" with scene.json + image
+     instead of type:"image" with the bare image file
+  4. Test on the user's device
+
+## FILES PRODUCED
+
+- `/home/z/my-project/we-android-decompiled/sources/` — full jadx decompiled source tree (~5800 files, the we-android.apk decompiled with jadx 1.5.6 with `--no-res -j 4`)
+- `/home/z/my-project/we-android.apk` — re-downloaded WE Android APK (139 MB)
+- `/home/z/my-project/tools/jadx/` — re-downloaded jadx 1.5.6 distribution
+- `/tmp/we_libs/lib/arm64-v8a/libscenejni.so` — extracted native lib (for `strings` analysis)
+
