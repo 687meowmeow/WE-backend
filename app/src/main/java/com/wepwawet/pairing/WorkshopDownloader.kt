@@ -57,6 +57,9 @@ class WorkshopDownloader(
                 "has_guard" to !guardCode.isNullOrBlank())
 
             val downloader = WorkshopDownloader(username, password, guardCode)
+            downloader.statusCallback = { msg ->
+                WepWawetLogger.proxy("$TAG.testLogin: $msg")
+            }
             // Try to connect and authenticate
             val connected = downloader.connectAndAuthenticate(context)
             val result = if (connected) {
@@ -82,7 +85,13 @@ class WorkshopDownloader(
     @Volatile private var cmRetries = 0
     @Volatile private var authInProgress = false
     @Volatile private var isRetrying = false  // true during TryAnotherCM retry
+    @Volatile private var statusCallback: ((String) -> Unit)? = null
     private val subscriptions = mutableListOf<Closeable>()
+
+    private fun updateStatus(msg: String) {
+        WepWawetLogger.proxy("$TAG: $msg")
+        statusCallback?.invoke(msg)
+    }
 
     fun isAuthenticated(): Boolean = authenticated
 
@@ -113,8 +122,11 @@ class WorkshopDownloader(
         }
 
         override fun acceptDeviceConfirmation(): CompletableFuture<Boolean> {
-            WepWawetLogger.proxy("$TAG: device confirmation — auto-accepting")
-            return CompletableFuture.completedFuture(true)
+            WepWawetLogger.proxy("$TAG: device confirmation — REJECTING to force 2FA code flow")
+            // Return false to force Steam to use the 2FA code (getDeviceCode) flow
+            // instead of sending a push notification. The user's 2FA code is
+            // provided automatically by getDeviceCode() from Settings.
+            return CompletableFuture.completedFuture(false)
         }
     }
 
@@ -125,10 +137,11 @@ class WorkshopDownloader(
         onProgress: (Float) -> Unit,
         onStatusUpdate: (String) -> Unit,
     ): File? = withContext(Dispatchers.IO) {
+        this@WorkshopDownloader.statusCallback = onStatusUpdate
         WepWawetLogger.proxy("$TAG START", "workshop_id" to workshopId, "username" to username,
             "has_guard_code" to !guardCode.isNullOrBlank())
         try {
-            onStatusUpdate("Connecting to Steam...")
+            updateStatus("Connecting to Steam...")
             if (!connectAndAuthenticate(context)) {
                 val err = downloadError?.message ?: "Unknown error"
                 onStatusUpdate("Steam login failed: $err")
@@ -279,6 +292,7 @@ class WorkshopDownloader(
 
     private fun onConnected(callback: ConnectedCallback, context: Context) {
         WepWawetLogger.proxy("$TAG: connected — authenticating as $username")
+        updateStatus("Connected to Steam — authenticating...")
 
         // Don't start a new auth session if one is already in progress (e.g. during TryAnotherCM retry)
         if (authInProgress) {
@@ -322,9 +336,11 @@ class WorkshopDownloader(
             Thread {
                 try {
                     WepWawetLogger.proxy("$TAG: waiting for auth session...")
+                    updateStatus("Waiting for Steam auth session...")
                     val authSession = authSessionFuture.get()
 
                     WepWawetLogger.proxy("$TAG: polling auth session (may request 2FA)...")
+                    updateStatus("Authenticating with Steam (using 2FA code if needed)...")
                     val result = authSession.pollingWaitForResult().get()
 
                     WepWawetLogger.proxy("$TAG: auth SUCCESS",
@@ -391,6 +407,7 @@ class WorkshopDownloader(
         authenticated = true
         authInProgress = false
         WepWawetLogger.proxy("$TAG: logged on to Steam ✓")
+        updateStatus("Logged in to Steam ✓ — fetching licenses...")
     }
 
     private fun onLoggedOff(callback: LoggedOffCallback) {
