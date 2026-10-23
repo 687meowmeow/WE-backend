@@ -2874,3 +2874,75 @@ Stage Summary:
       completed (and we'll see what X was — could be OK or an error)
   (e) We see a "callback thread exception" — confirms the callback
       thread is dying (which would explain why await() never resumes)
+
+---
+Task ID: detect-unsupported-filetype-bug
+Agent: main
+Task: Apply diagnostic findings — abort download when library detects unsupported file type
+
+Work Log:
+- User uploaded logs (wepwawet-logs-20261023-173752.txt) from 0.1.6-alpha
+- The previous diagnostic fixes (debug=true + JavaSteamLogBridge +
+  CallbackMsg base subscription) WORKED PERFECTLY — the library finally
+  revealed the actual problem in its own logs:
+
+  [17:36:46.021] JavaSteam: DepotDownloader msg=Downloading PUB File for 431960
+  [17:36:46.508] JavaSteam: Steam3Session msg=requestUGCDetails(431960, 3823357259) result: OK
+  [17:36:46.508] ERROR: JavaSteam ERROR: DepotDownloader msg=Published file 3823357259 has unsupported file type First. Skipping file
+
+- ROOT CAUSE CONFIRMED:
+  1. The RPC to Steam SUCCEEDS (result: OK) — Steam DID respond with file details
+  2. Steam returned fileType=0 (k_EWorkshopFileTypeFirst = 0 = sentinel/placeholder)
+     for workshop item 3823357259 (Talia Yang / Cyberpunk Edgerunners 2)
+  3. JavaSteam's DepotDownloader.processPublishedFile checks if fileType is in
+     SupportedWorkshopFileTypes — it's NOT (type 0 is the sentinel, not a real
+     download type)
+  4. The library logs "unsupported file type First. Skipping file" and SKIPS
+     the file
+  5. BUG: the library never completes the completionFuture when an item is
+     skipped → awaitCompletion hangs forever waiting for a completion that
+     never comes
+  6. Our heartbeat's stuck-detection eventually aborts at 60s, but the user
+     waits the full 60s for an obvious library bug
+
+- THE FIX (commit ba54108): enhance the JavaSteamLogBridge to detect this
+  specific library bug pattern and abort the download immediately
+
+  1. JavaSteamLogBridge now has an `abortCallback: ((String) -> Unit)?` field
+  2. The active WorkshopDownloader sets this callback before calling
+     awaitCompletion (and clears it after)
+  3. The bridge's onError() checks for two known bug patterns:
+     a. "unsupported file type" / "Skipping file" (from DepotDownloader class)
+     b. "Unable to locate manifest ID" (also from DepotDownloader — fires when
+        both fileUrl AND hcontentFile are empty for a workshop item)
+  4. When detected, the bridge invokes the abortCallback with a clear,
+     user-friendly reason string
+  5. The abortCallback sets downloadError, which the awaitCompletion wrapper
+     detects and breaks out of the wait loop
+
+- Result: instead of waiting 60 seconds for the stuck-detection, the
+  download aborts within ~1 second of the library's error log, with a
+  clear message explaining the known library bug.
+
+- Bumped version to 0.1.7-alpha (versionCode 8)
+- Committed as ba54108, pushed, CI build 40036596361 SUCCEEDED
+- Final APK: /home/z/my-project/download/wepwawet-0.1.7-alpha-release.apk (16 MB)
+
+Stage Summary:
+- This doesn't fix the underlying library bug (we can't — it's a maven
+  dependency from in.dragonbra:javasteam-depotdownloader:1.8.0) but it
+  turns a silent 60-second hang into an immediate, informative error.
+- The user can now:
+  a. See the actual reason the download failed (Steam returned fileType=0
+     for this specific workshop item)
+  b. Try a different wallpaper — the bug is specific to items where Steam
+     doesn't return a real file type
+  c. Report this upstream to the JavaSteam maintainers at
+     https://github.com/Longi94/JavaSteam/issues
+- The deeper fix would be to either:
+  a. Fork the library and patch SupportedWorkshopFileTypes to include type 0
+     (treating it as a Community type by default)
+  b. OR bypass the library entirely and use reflection to call
+     steam3.getPublishedFileDetails() ourselves, extract the fileUrl, and
+     download via HTTP (this requires a Steam Web API key for paid apps
+     like Wallpaper Engine — the anonymous endpoint hides file_url)
