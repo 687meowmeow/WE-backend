@@ -80,6 +80,8 @@ class WorkshopDownloader(
     @Volatile private var downloadError: Exception? = null
     @Volatile private var authenticated = false
     @Volatile private var cmRetries = 0
+    @Volatile private var authInProgress = false
+    @Volatile private var isRetrying = false  // true during TryAnotherCM retry
     private val subscriptions = mutableListOf<Closeable>()
 
     fun isAuthenticated(): Boolean = authenticated
@@ -278,6 +280,14 @@ class WorkshopDownloader(
     private fun onConnected(callback: ConnectedCallback, context: Context) {
         WepWawetLogger.proxy("$TAG: connected — authenticating as $username")
 
+        // Don't start a new auth session if one is already in progress (e.g. during TryAnotherCM retry)
+        if (authInProgress) {
+            WepWawetLogger.proxyWarn("$TAG: auth already in progress, skipping")
+            return
+        }
+        authInProgress = true
+        isRetrying = false  // clear retry flag on new connection
+
         // Step 1: Try saved refresh token first (no 2FA needed)
         val savedToken = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             .getString(KEY_REFRESH_TOKEN, null)
@@ -334,10 +344,17 @@ class WorkshopDownloader(
                     details.loginID = 149
                     steamUser!!.logOn(details)
                 } catch (e: Exception) {
-                    WepWawetLogger.proxyError("$TAG: auth polling failed",
-                        "exception" to e.javaClass.name,
-                        "message" to (e.message ?: ""))
-                    downloadError = e
+                    // Don't fail if we're retrying (TryAnotherCM causes CancellationException)
+                    if (isRetrying) {
+                        WepWawetLogger.proxyWarn("$TAG: auth polling cancelled during retry (expected)",
+                            "exception" to e.javaClass.name)
+                    } else {
+                        WepWawetLogger.proxyError("$TAG: auth polling failed",
+                            "exception" to e.javaClass.name,
+                            "message" to (e.message ?: ""))
+                        downloadError = e
+                    }
+                    authInProgress = false
                 }
             }.start()
         } catch (e: Exception) {
@@ -350,17 +367,29 @@ class WorkshopDownloader(
     private fun onLoggedOn(callback: LoggedOnCallback) {
         if (callback.result != EResult.OK) {
             WepWawetLogger.proxyError("$TAG: logon failed", "result" to callback.result)
-            if (callback.result == EResult.TryAnotherCM && cmRetries < 3) {
+            if (callback.result == EResult.TryAnotherCM && cmRetries < 5) {
                 cmRetries++
+                isRetrying = true
+                authInProgress = false
                 WepWawetLogger.proxy("$TAG: TryAnotherCM — retry #$cmRetries with different CM server...")
-                try { Thread.sleep(2000); steamClient?.connect() } catch (_: Exception) {}
+                try { Thread.sleep(3000); steamClient?.connect() } catch (_: Exception) {}
                 return
             }
-            downloadError = java.lang.Exception("Steam logon failed: ${callback.result}")
+            // Provide user-friendly error messages
+            val friendlyError = when (callback.result) {
+                EResult.InvalidPassword -> "Invalid password (or 2FA code needed/expired)"
+                EResult.AccountLogonDenied -> "Steam Guard email code required"
+                EResult.TwoFactorCodeMismatch -> "Steam Guard 2FA code is wrong or expired"
+                EResult.AccountDisabled -> "Steam account is disabled"
+                EResult.RateLimitExceeded -> "Rate limit exceeded — wait 30 minutes"
+                else -> "Steam logon failed: ${callback.result}"
+            }
+            downloadError = java.lang.Exception(friendlyError)
             isRunning = false
             return
         }
         authenticated = true
+        authInProgress = false
         WepWawetLogger.proxy("$TAG: logged on to Steam ✓")
     }
 

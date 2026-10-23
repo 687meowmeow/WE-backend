@@ -100,6 +100,7 @@ fun WallpaperDetailScreen(
     var isDownloading by remember { mutableStateOf(false) }
     var downloadedFile by remember { mutableStateOf<File?>(null) }
     var isSending by remember { mutableStateOf(false) }
+    var sendProgress by remember { mutableStateOf(0f) }  // progress for send-to-phone Steam download
     var statusMessage by remember { mutableStateOf<String?>(null) }
 
     // Track whether the user has Steam credentials set up (for JavaSteam direct download)
@@ -285,7 +286,7 @@ fun WallpaperDetailScreen(
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         LinearProgressIndicator(
-                            progress = { downloadProgress },
+                            progress = { sendProgress },
                             modifier = Modifier.fillMaxWidth(),
                         )
                         Text(
@@ -302,9 +303,11 @@ fun WallpaperDetailScreen(
                 Button(
                     onClick = {
                         if (!isSending) {
+                            sendProgress = 0f
                             onSendToPhoneClicked(context, current, scope,
-                                { isSending = true; statusMessage = it },
-                                { isSending = false; statusMessage = it })
+                                { isSending = true; statusMessage = it; sendProgress = 0f },
+                                { isSending = false; statusMessage = it },
+                                { progress -> sendProgress = progress })
                         }
                     },
                     enabled = !isSending,
@@ -419,6 +422,7 @@ private fun onSendToPhoneClicked(
     scope: kotlinx.coroutines.CoroutineScope,
     onStart: (String) -> Unit,
     onEnd: (String) -> Unit,
+    onProgress: (Float) -> Unit,
 ) {
     WepWawetLogger.workshop("send-to-phone tapped",
         "id" to item.id,
@@ -450,7 +454,7 @@ private fun onSendToPhoneClicked(
     scope.launch {
         try {
             // Reset progress
-            downloadProgress = 0f
+            onProgress(0f)
 
             // === Step 1: Download the actual .pkg file via JavaSteam (direct on-device) ===
             WepWawetLogger.workshop("send-to-phone: step 1/4 downloading .pkg via JavaSteam",
@@ -467,7 +471,7 @@ private fun onSendToPhoneClicked(
                     workshopId = item.id,
                     outputFile = pkgFile,
                     onProgress = { pct ->
-                        downloadProgress = pct * 0.8f  // download is 80% of total progress
+                        onProgress(pct * 0.8f)
                     },
                     onStatusUpdate = { status ->
                         WepWawetLogger.workshop("send-to-phone: JavaSteam status",
@@ -506,6 +510,7 @@ private fun onSendToPhoneClicked(
             WepWawetLogger.workshop("send-to-phone: step 3/4 packing .pkg → .mpkg",
                 "pkg_file" to downloadedPkg.name,
                 "pkg_size" to downloadedPkg.length())
+            onProgress(0.85f)
             val mpkgFile = java.io.File(context.cacheDir, "${item.id}_$sendId.mpkg")
             val mpkgSize = withContext(Dispatchers.IO) {
                 com.wepwawet.pairing.MpkgPacker.packFromPkg(
@@ -530,8 +535,10 @@ private fun onSendToPhoneClicked(
             WepWawetLogger.workshop("send-to-phone: step 4/4 queueing for transfer",
                 "file" to mpkgFile.name,
                 "size" to mpkgFile.length())
+            onProgress(0.95f)
             val deviceName = PairingService.pairedDeviceName ?: "phone"
             PairingService.queueWallpaper(mpkgFile, item.title)
+            onProgress(1f)
             WepWawetLogger.workshop("send-to-phone: QUEUED",
                 "file" to mpkgFile.name,
                 "size" to mpkgFile.length(),
