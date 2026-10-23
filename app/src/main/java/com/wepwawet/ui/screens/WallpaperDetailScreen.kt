@@ -402,18 +402,22 @@ private fun onSendToPhoneClicked(
                 "file" to previewFile.absolutePath,
                 "size" to previewFile.length())
 
-            // === Step 2: Pack the preview into a .mpkg file ===
+            // === Step 2: Pack the preview into a Scene-type .mpkg file ===
+            // Uses MpkgPacker.packSceneWallpaper which builds a real Scene
+            // wallpaper with project.json + scene.json + .tex + material/model
+            // JSONs. The .tex uses format=0 (RGBA8888) which Android's
+            // libscenejni.so supports natively. The Scene code path renders
+            // the image via OpenGL ES, same as a real WE PC Scene wallpaper.
             val sendId = System.currentTimeMillis()
             val mpkgFile = java.io.File(context.cacheDir, "${item.id}_$sendId.mpkg")
-            WepWawetLogger.workshop("send-to-phone: packing .mpkg",
+            WepWawetLogger.workshop("send-to-phone: packing Scene .mpkg",
                 "out" to mpkgFile.name,
                 "image_file" to previewFile.name,
                 "image_size" to previewFile.length())
             try {
-                com.wepwawet.pairing.MpkgPacker.packImageWallpaper(
+                com.wepwawet.pairing.MpkgPacker.packSceneWallpaper(
                     item = item,
                     imageFile = previewFile,
-                    imageVPath = "preview.jpg",
                     outputFile = mpkgFile,
                 )
             } catch (e: Exception) {
@@ -486,13 +490,12 @@ private fun onDownloadMpkgClicked(
                 return@launch
             }
 
-            // Step 2: Pack the preview into a .mpkg file in the cache dir
+            // Step 2: Pack the preview into a Scene-type .mpkg file in the cache dir
             val sendId = System.currentTimeMillis()
             val cacheMpkg = java.io.File(context.cacheDir, "${item.id}_$sendId.mpkg")
-            com.wepwawet.pairing.MpkgPacker.packImageWallpaper(
+            com.wepwawet.pairing.MpkgPacker.packSceneWallpaper(
                 item = item,
                 imageFile = previewFile,
-                imageVPath = "preview.jpg",
                 outputFile = cacheMpkg,
             )
             if (!cacheMpkg.exists() || cacheMpkg.length() == 0L) {

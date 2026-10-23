@@ -1,0 +1,80 @@
+{
+	"camera" : 
+	{
+		"center" : "0.000 0.000 -1.000",
+		"eye" : "0.000 0.000 0.000",
+		"up" : "0.000 1.000 0.000"
+	},
+	"general" : 
+	{
+		"ambientcolor" : "0.300 0.300 0.300",
+		"bloom" : false,
+		"bloomstrength" : 2.0,
+		"bloomthreshold" : 0.64999997615814209,
+		"camerafade" : true,
+		"cameraparallax" : true,
+		"cameraparallaxamount" : 0.62000000476837158,
+		"cameraparallaxdelay" : 0.10000000149011612,
+		"cameraparallaxmouseinfluence" : 1.0,
+		"camerapreview" : true,
+		"camerashake" : false,
+		"camerashakeamplitude" : 0.5,
+		"camerashakeroughness" : 1.0,
+		"camerashakespeed" : 3.0,
+		"clearcolor" : "0.700 0.700 0.700",
+		"clearenabled" : true,
+		"farz" : 10000.0,
+		"fov" : 50.0,
+		"nearz" : 0.0099999997764825821,
+		"orthogonalprojection" : 
+		{
+			"height" : 1440,
+			"width" : 947
+		},
+		"skylightcolor" : "0.300 0.300 0.300",
+		"zoom" : 1.0
+	},
+	"objects" : 
+	[
+		{
+			"alignment" : "center",
+			"alpha" : 1.0,
+			"angles" : "0.000 0.000 0.000",
+			"color" : "1.000 1.000 1.000",
+			"colorBlendMode" : 0,
+			"copybackground" : true,
+			"effects" : 
+			[
+				{
+					"file" : "effects/xray/effect.json",
+					"id" : 17,
+					"name" : "",
+					"passes" : 
+					[
+						{
+							"constantshadervalues" : 
+							{
+								"size" : 0.69999999999999996
+							},
+							"id" : 4,
+							"textures" : [ null, "hagikora180727-19", "particle/halo_6" ]
+						}
+					],
+					"visible" : true
+				}
+			],
+			"id" : 13,
+			"image" : "models/69721567_p0.json",
+			"ledsource" : false,
+			"locktransforms" : true,
+			"name" : "69721567_p0",
+			"origin" : "473.500 720.000 0.000",
+			"parallaxDepth" : "0.000 1.000",
+			"perspective" : false,
+			"scale" : "1.000 1.000 1.000",
+			"size" : "947.000 1440.000",
+			"solid" : true,
+			"visible" : true
+		}
+	]
+}
