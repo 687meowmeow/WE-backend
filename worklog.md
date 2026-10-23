@@ -1909,3 +1909,73 @@ For Video wallpapers, the user can:
 3. **Video wallpaper UI integration**: Currently the Python `make_video_mpkg.py` produces .mpkg files but the Android UI doesn't have a "pick a video" button. Adding a video picker would be a small UI addition.
 4. **MPKG_VFS path for video**: Need to verify the WE Android's VideoWallpaperView.VideoDrawable correctly plays our .mp4 from inside the .mpkg VFS (the code path is `lib.getWallpaperFileVirtualOffset(file)` → `MPKGVideoReader` → `MediaPlayer.setDataSource`).
 
+
+---
+Task ID: 6
+Agent: main (push + workflow verification)
+Task: Push local commits to GitHub origin and verify the GitHub Actions build workflow compiles successfully with the new MpkgPacker.kt (packSceneWallpaper + packVideoWallpaper methods)
+
+Work Log:
+- Inspected git state: found 4 unpushed local commits (5190afb, fd36e6a, d28663d, 882b482) on top of origin/main (8333d4a). These commits contain my new MpkgPacker.kt methods (packSceneWallpaper, packVideoWallpaper) and WallpaperDetailScreen.kt updates.
+- Pushed to origin/main using the user's PAT: `git push https://ghp_...@github.com/687meowmeow/WE-backend.git main` → 8333d4a..5190afb main -> main.
+- Workflow auto-triggered: GitHub Actions "Build WepWawet APK" run ID 39896160114.
+- Polled workflow status every 60s. Found:
+  - Job 1 (Check for duplicate tag run): completed successfully (skip=false).
+  - Job 2 (Build APK): in_progress for ~1 minute during the `./gradlew :app:assembleRelease` step, then completed successfully.
+  - Job 3 (Publish GitHub Release): skipped (not a tag push).
+- All steps in Build APK job completed successfully:
+  - Set up job ✓
+  - Run actions/checkout@v4 ✓
+  - Setup Android SDK (platform-tools, android-35, build-tools 35.0.0) ✓
+  - Setup Java 17 (temurin) ✓
+  - Setup Gradle ✓
+  - Build APK (`./gradlew :app:assembleRelease --no-daemon --stacktrace`) ✓
+  - Locate APK ✓
+  - Upload APK artifact ✓
+- Downloaded the build artifact: `wepwawet-apk.zip` (7,669,854 bytes).
+- Extracted `app-release.apk` (8,221,572 bytes) to `/home/z/my-project/download/app-release.apk`.
+- Verified the APK contains our new code by inspecting classes.dex with `strings`:
+  - `MpkgPacker.packSceneWallpaper` ✓
+  - `MpkgPacker.packVideoWallpaper` ✓
+  - `TEXV0005` ✓
+  - `TEXB0004` ✓
+  - `packSceneWallpaper$default` ✓ (Kotlin default args bridge method)
+  - `MpkgPacker VFS entry`, `MpkgPacker layout`, `MpkgPacker verified` ✓ (all log strings present)
+- Verified APK structure: contains arm64-v8a, armeabi-v7a, x86, x86_64 native libs; classes.dex (18.7MB) + classes2.dex (4.2MB); AndroidManifest.xml; res; assets; META-INF.
+
+Stage Summary:
+
+## BUILD STATUS: ✅ SUCCESS
+
+The WepWawet APK now builds successfully on GitHub Actions with all the new code:
+- `MpkgPacker.packSceneWallpaper` — builds a Scene-type .mpkg on-device
+- `MpkgPacker.packVideoWallpaper` — builds a Video-type .mpkg on-device
+- The WallpaperDetailScreen.kt calls `packSceneWallpaper` for the "Send to phone" button
+- The .tex file format constants (TEXV0005, TEXI0001, TEXB0004) are baked into the binary
+- All transfer protocol code (RSA, AES, little-endian length prefixes, heartbeat handling) compiles cleanly
+
+## ARTIFACT LOCATION
+
+- GitHub Actions artifact: `wepwawet-apk` (id: 12477036625), retained for 30 days
+- Local copy: `/home/z/my-project/download/app-release.apk` (8.2MB)
+
+## WHAT THE USER CAN DO NOW
+
+1. Download the APK from GitHub Actions artifacts (or use the local copy)
+2. Install on their Android phone (Snapdragon 8 Gen 2+ target)
+3. Pair with the WE Android app via the PIN flow
+4. Browse the Steam Workshop
+5. Tap "Send to phone" on any wallpaper — the WepWawet app will:
+   - Download the preview.jpg from Steam CDN
+   - Build a Scene-type .mpkg in-memory (with a real .tex using RGBA8888 format=0)
+   - Queue it for transfer via PairingService.queueWallpaper
+   - Transfer on the next heartbeat via the WE pairing protocol (AES-encrypted, 1MB chunks)
+6. The wallpaper should appear in the WE Android app's list AND render correctly (Scene code path, not the broken Video path that gave black screens for image-type)
+
+## NEXT STEPS FOR THE USER
+
+- Test the APK on a real device with a paired WE Android app
+- If RGBA8888 .tex doesn't render on Android (format=0 unsupported on libscenejni.so mobile build), the fallback is:
+  - Switch the Android MpkgPacker to use the bundled EtcTool binary (need to cross-compile etc2comp for arm64-v8a)
+  - OR use a pre-encoded .tex from a server-side / cloud-side conversion service
+  - OR fall back to ETC2_RGBA8 (format=5) by writing a pure Kotlin ETC2 encoder (slow but dependency-free)
