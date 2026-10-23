@@ -2785,3 +2785,92 @@ Stage Summary:
       IMMEDIATELY with a clear error message — at which point we
       can implement a workaround (e.g., wait 30+ seconds between
       testLogin and download to let the watchdog timer expire)
+
+---
+Task ID: enable-debug-and-callback-tracing
+Agent: main
+Task: Diagnose why DepotDownloader's await on getPublishedFileDetails hangs forever
+
+Work Log:
+- User uploaded logs (wepwawet-logs-20261023-171148.txt) showing:
+  * Login ✓ (no AccessDenied, no watchdog, refresh token valid)
+  * Connection ✓ (steam_connected=true throughout)
+  * DepotDownloader fires onItemAdded + onDownloadStarted callbacks ✓
+  * BUT: 60s of silence, 0 chunks, 0 files, 0 progress
+  * stuck-detection aborted cleanly at 60s ✓
+
+- Fetched actual DepotDownloader source from GitHub:
+  https://github.com/Longi94/JavaSteam/blob/master/javasteam-depotdownloader/src/main/kotlin/in/dragonbra/javasteam/depotdownloader/DepotDownloader.kt
+
+- ROOT CAUSE FOUND: in the DepotDownloader init block:
+    init {
+        if (debug) {
+            logger = LogManager.getLogger(DepotDownloader::class.java)
+        }
+        steam3 = Steam3Session(steamClient, debug)
+        logger?.debug("DepotDownloader launched with ${licenses.size} for account")
+        ...
+    }
+
+  We were passing debug=FALSE — which means the library's `logger` field
+  is NULL, so ALL internal debug logs are suppressed. That's why we
+  saw NO JavaSteam library logs after the initial connection — the
+  library simply wasn't logging anything because we explicitly
+  disabled its logger.
+
+  Similarly, Steam3Session.getPublishedFileDetails only logs
+  "requestUGCDetails(...) result: X" if logger != null:
+
+    val details = steamPublishedFile!!.getDetails(pubFileRequest).await()
+    logger?.debug("requestUGCDetails($appId, $pubFile) result: ${details.result}")
+
+  So we never see whether the RPC was sent, whether a response arrived,
+  or what the result was. With debug=false, we're flying blind on the
+  library's internal state.
+
+- THREE FIXES:
+
+  1. Set debug=true in DepotDownloader constructor
+     - This enables the library's internal Logger
+     - Our JavaSteamLogBridge (added previously) forwards these logs
+       to WepWawetLogger
+     - We'll now see "DepotDownloader launched with X for account",
+       "requestUGCDetails result: X", and any errors thrown
+
+  2. Subscribe to base CallbackMsg class to log ALL callbacks
+     - The callback manager dispatches callbacks to subscribers by class
+     - Subscribing to CallbackMsg::class.java catches ALL derived classes
+       including ServiceMethodResponse (the RPC response from
+       steamPublishedFile.getDetails)
+     - This will show us whether the RPC response is arriving via the
+       callback queue at all — if it's NOT, we know the RPC was never
+       sent OR Steam isn't responding
+     - Logged as: "WorkshopDownloader: callback dispatched class=X job_id=Y"
+
+  3. Call runWaitAllCallbacks(0) after runWaitCallbacks(1000L)
+     - runWaitCallbacks dispatches ONE callback per call (waits up to
+       timeout, dispatches, returns)
+     - runWaitAllCallbacks dispatches ALL pending callbacks immediately
+     - This ensures bursts of callbacks all get processed
+
+- Bumped version to 0.1.6-alpha (versionCode 7)
+- Committed as 7a2a0e8, pushed, CI build 40033663588 SUCCEEDED
+- Final APK: /home/z/my-project/download/wepwawet-0.1.6-alpha-release.apk (16 MB)
+
+Stage Summary:
+- Three diagnostic fixes that should finally let us pinpoint where the
+  download hangs:
+  a. Library debug logs visible (via debug=true + JavaSteamLogBridge)
+  b. ALL callback dispatches visible (via CallbackMsg subscription)
+  c. Callback queue drained fully each iteration
+- Next test should produce one of these scenarios:
+  (a) We see "DepotDownloader launched with X for account" — confirms
+      Steam3Session was initialized correctly
+  (b) We see "callback dispatched class=ServiceMethodResponse" — confirms
+      Steam sent back the RPC response (and we'll see the result)
+  (c) We DON'T see ServiceMethodResponse dispatched — confirms the RPC
+      was sent but Steam never responded (or the response was lost)
+  (d) We see "requestUGCDetails result: X" — confirms the await()
+      completed (and we'll see what X was — could be OK or an error)
+  (e) We see a "callback thread exception" — confirms the callback
+      thread is dying (which would explain why await() never resumes)
