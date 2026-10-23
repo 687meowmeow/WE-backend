@@ -2454,3 +2454,63 @@ Built a self-hosted backend in backend/ that:
 - The backend stores Steam credentials in MEMORY ONLY (read from env vars on
   startup). The password is NEVER logged or persisted to disk
 - For production, put the backend behind a reverse proxy (nginx, Caddy) with HTTPS
+
+---
+Task ID: latest
+Agent: main
+Task: Fix workshop download silent failure — no progress bar, no file in Downloads, only 6 MB but stuck. Add more logging.
+
+Work Log:
+- Read user's log file wepwawet-logs-20261023-125626.txt and identified root cause
+- Diagnosed issue: User is running OLD build (git_sha=2f47393) which lacks:
+  * Heartbeat thread (no periodic status logs)
+  * onChunkCompleted listener (no chunk-level progress)
+  * Timeout wrapper around awaitCompletion() (could hang forever)
+  * Uses proxyDebug for status/file-complete (filtered out at INFO level — invisible)
+- Verified current code on disk (HEAD = 21546aa) already has all these fixes
+- Added EVEN MORE verbose logging to WorkshopDownloader.kt:
+  * Log when listener is registered
+  * Log when installDir is created (mkdirs return, isDirectory, canWrite, parent_exists)
+  * Log when DepotDownloader is constructed + its class
+  * Log when adding PubFileItem (with install_dir, licenses_count, steam_connected)
+  * Log when finishAdding is called + after completion
+  * Heartbeat every 3s (was 5s) — now includes steam_connected, dir_file_count,
+    dir_total_bytes, dir_largest_file
+  * Heartbeat wrapped in try/catch so a single exception doesn't kill the thread
+  * NEW file-watcher thread every 2s — logs every NEW file written to installDir
+    (catches cases where depotdownloader writes files but doesn't fire callbacks)
+  * Log when calling awaitCompletion (with timeout, thread name, downloader class)
+  * Log when awaitCompletion thread ENTERS, RETURNS NORMALLY, or THREW
+  * After download: full install dir snapshot before closing downloader
+  * Log when listener removed
+  * Log invalid workshop ID (not a long) instead of silent return null
+- Added more logging to WorkshopDownloadJob.kt:
+  * Log coroutine STARTED (with thread name)
+  * Log every 10% progress increment
+  * Log status updates as they pass through
+  * Log downloadWorkshopPkg RETURNED with result_null/exists/size/path
+  * Log packing .pkg → .mpkg with input/output paths + sizes
+  * Log pack done (output size + exists)
+  * Log empty mpkg output (warn level)
+  * Log reading mpkg bytes (with expected size)
+  * Log read mpkg bytes done (bytes_read)
+  * Log writing to Downloads (filename, bytes, target_dir)
+  * Log PublicDownloadsWriter return (uri_null, uri)
+- Bumped versionCode 1→2, versionName 0.1.0-alpha→0.1.1-alpha so user
+  can verify they have the new build
+- Reduced gradle JVM heap (4g → 1500m) and MetaspaceSize (→ 256m) so the
+  APK build fits in available RAM (1.9 GB free)
+- Disabled gradle.parallel to avoid OOM during dexing
+- Built APK successfully: 30M debug APK at
+  /home/z/my-project/download/wepwawet-0.1.1-alpha-debug.apk
+
+Stage Summary:
+- New debug APK built with extensive new logging
+- Heartbeat interval reduced 5s→3s, file-watcher added at 2s interval
+- All listener callbacks now log at INFO level (was DEBUG, filtered out)
+- awaitCompletion now has logging at ENTRY, NORMAL RETURN, and THROW points
+- Final install dir snapshot before close helps debug "no .pkg found" cases
+- User needs to UNINSTALL the existing release APK before installing this
+  debug APK (different signing keys — debug vs release)
+- For a release APK with the proper signing key, the user would need to
+  commit these changes and let CI build it

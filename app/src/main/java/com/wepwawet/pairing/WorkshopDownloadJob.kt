@@ -123,20 +123,42 @@ object WorkshopDownloadJob {
             "pkg_cache_path" to pkgFile.absolutePath)
 
         job = WepWawetApplication.appScope.launchSafely {
+            WepWawetLogger.workshop("WorkshopDownloadJob: coroutine STARTED",
+                "id" to item.id,
+                "thread" to Thread.currentThread().name)
             val downloadedPkg = downloader.downloadWorkshopPkg(
                 context = appContext,
                 workshopId = item.id,
                 outputFile = pkgFile,
                 onProgress = { pct ->
+                    val coerced = pct.coerceIn(0f, 1f)
                     _state.update { s -> s.copy(
-                        progress = pct.coerceIn(0f, 1f),
+                        progress = coerced,
                         hasChunkProgress = true,
                     ) }
+                    // Log every 10% increment so we can see progress in logs
+                    // (not every callback, which would be very spammy for 6MB
+                    // files arriving in many small chunks).
+                    val pctInt = (coerced * 100).toInt()
+                    if (pctInt % 10 == 0) {
+                        WepWawetLogger.workshop("WorkshopDownloadJob: progress",
+                            "pct" to pctInt,
+                            "raw" to pct)
+                    }
                 },
                 onStatusUpdate = { status ->
                     _state.update { s -> s.copy(status = status) }
+                    WepWawetLogger.workshop("WorkshopDownloadJob: status update",
+                        "status" to status.take(150))
                 },
             )
+
+            WepWawetLogger.workshop("WorkshopDownloadJob: downloadWorkshopPkg RETURNED",
+                "id" to item.id,
+                "result_null" to (downloadedPkg == null),
+                "result_exists" to (downloadedPkg?.exists() ?: false),
+                "result_size" to (downloadedPkg?.length() ?: -1L),
+                "output_path" to (downloadedPkg?.absolutePath ?: "null"))
 
             if (downloadedPkg == null || !downloadedPkg.exists() || downloadedPkg.length() == 0L) {
                 val err = "Failed to download .pkg via Steam (see logs)"
@@ -153,6 +175,10 @@ object WorkshopDownloadJob {
 
             _state.update { s -> s.copy(status = "Packing .pkg → .mpkg…", progress = 0.85f) }
             val cacheMpkg = File(appContext.cacheDir, "${item.id}_${sendId}_debug.mpkg")
+            WepWawetLogger.workshop("WorkshopDownloadJob: packing .pkg → .mpkg",
+                "pkg_input" to downloadedPkg.absolutePath,
+                "pkg_input_size" to downloadedPkg.length(),
+                "mpkg_output" to cacheMpkg.absolutePath)
             val mpkgSize = runCatching {
                 com.wepwawet.pairing.MpkgPacker.packFromPkg(
                     item = item,
@@ -173,8 +199,16 @@ object WorkshopDownloadJob {
                 return@launchSafely
             }
 
+            WepWawetLogger.workshop("WorkshopDownloadJob: pack done",
+                "mpkg_output_size" to mpkgSize,
+                "mpkg_output_exists" to cacheMpkg.exists())
+
             if (mpkgSize == 0L || !cacheMpkg.exists()) {
                 val err = "Failed to pack .pkg → .mpkg (empty output)"
+                WepWawetLogger.workshopWarn("WorkshopDownloadJob: empty mpkg output",
+                    "size" to mpkgSize,
+                    "exists" to cacheMpkg.exists(),
+                    "pkg_input_size" to downloadedPkg.length())
                 _state.update { s -> s.copy(
                     isRunning = false,
                     status = err,
@@ -186,8 +220,13 @@ object WorkshopDownloadJob {
             }
 
             _state.update { s -> s.copy(status = "Saving to Downloads…", progress = 0.95f) }
+            WepWawetLogger.workshop("WorkshopDownloadJob: reading mpkg bytes",
+                "file" to cacheMpkg.absolutePath,
+                "expected_size" to mpkgSize)
             val bytes = runCatching { cacheMpkg.readBytes() }.getOrElse { e ->
                 val err = "Failed to read packed .mpkg: ${e.message}"
+                WepWawetLogger.workshopWarn("WorkshopDownloadJob: read failed",
+                    "exception" to e.javaClass.name, "message" to (e.message ?: ""))
                 _state.update { s -> s.copy(
                     isRunning = false,
                     status = err,
@@ -197,10 +236,19 @@ object WorkshopDownloadJob {
                 runCatching { downloadedPkg.delete(); cacheMpkg.delete() }
                 return@launchSafely
             }
+            WepWawetLogger.workshop("WorkshopDownloadJob: read mpkg bytes done",
+                "bytes_read" to bytes.size)
 
             val downloadsName = "${item.id}_debug.mpkg"
+            WepWawetLogger.workshop("WorkshopDownloadJob: writing to Downloads",
+                "filename" to downloadsName,
+                "bytes" to bytes.size,
+                "target_dir" to "Download/WepWawet")
             val uri = com.wepwawet.log.PublicDownloadsWriter.writeBytes(
                 appContext, downloadsName, bytes)
+            WepWawetLogger.workshop("WorkshopDownloadJob: PublicDownloadsWriter returned",
+                "uri_null" to (uri == null),
+                "uri" to (uri?.toString() ?: "null"))
             runCatching { downloadedPkg.delete() }
             runCatching { cacheMpkg.delete() }
 

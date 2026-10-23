@@ -17,8 +17,8 @@ android {
         applicationId = "com.wepwawet"
         minSdk = 26  // Android 8.0 — matches Winlator v11.2 requirement
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-alpha"
+        versionCode = 2
+        versionName = "0.1.1-alpha"
         // Docker image (35.0.0) — AGP 8.7.0 defaults to 34.0.0 which isn't
         // installed, and the builder user can't install it (no write access
         // to /opt/android-sdk/).

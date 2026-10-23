@@ -158,12 +158,23 @@ class WorkshopDownloader(
 
             onStatusUpdate("Downloading workshop item via Steam protocol...")
             val installDir = File(context.cacheDir, "workshop_downloads/$workshopId")
-            installDir.mkdirs()
+            val mkdirsOk = installDir.mkdirs()
             WepWawetLogger.proxy("$TAG: install dir prepared",
                 "path" to installDir.absolutePath,
-                "exists" to installDir.exists())
+                "exists" to installDir.exists(),
+                "mkdirs_returned" to mkdirsOk,
+                "is_directory" to installDir.isDirectory,
+                "can_write" to installDir.canWrite(),
+                "cache_dir" to context.cacheDir.absolutePath,
+                "parent_exists" to (installDir.parentFile?.exists() ?: false))
 
+            WepWawetLogger.proxy("$TAG: constructing DepotDownloader",
+                "steam_client_connected" to (steamClient?.isConnected ?: false),
+                "licenses_count" to licenseList.size,
+                "install_dir" to installDir.absolutePath)
             val downloader = DepotDownloader(steamClient!!, licenseList, false, false, 8, 4, 8, false, null)
+            WepWawetLogger.proxy("$TAG: DepotDownloader constructed",
+                "downloader_class" to downloader.javaClass.name)
 
             // Heartbeat state — updated by the listener, read by the heartbeat thread.
             // Use Atomic* so cross-thread visibility is guaranteed (Kotlin local vars
@@ -264,50 +275,144 @@ class WorkshopDownloader(
             }
 
             downloader.addListener(listener)
+            WepWawetLogger.proxy("$TAG: listener registered",
+                "listener_class" to listener.javaClass.name,
+                "downloader_class" to downloader.javaClass.name)
 
-            val pubFileId = workshopId.toLongOrNull() ?: return@withContext null
+            val pubFileId = workshopId.toLongOrNull() ?: run {
+                WepWawetLogger.proxyError("$TAG: invalid workshop id (not a long)",
+                    "input" to workshopId)
+                return@withContext null
+            }
             val pubItem = PubFileItem(APP_ID_WE, pubFileId)
 
             WepWawetLogger.proxy("$TAG: adding PubFileItem",
-                "app_id" to APP_ID_WE, "pub_file_id" to pubFileId)
+                "app_id" to APP_ID_WE,
+                "pub_file_id" to pubFileId,
+                "install_dir" to installDir.absolutePath,
+                "install_dir_exists" to installDir.exists(),
+                "install_dir_writable" to installDir.canWrite(),
+                "licenses_count" to licenseList.size,
+                "steam_client_connected" to (steamClient?.isConnected ?: false),
+                "steam_client_class" to (steamClient?.javaClass?.name ?: "null"))
             downloader.add(pubItem)
+            WepWawetLogger.proxy("$TAG: PubFileItem added — calling finishAdding")
             downloader.finishAdding()
             WepWawetLogger.proxy("$TAG: items queued, finishAdding done")
 
             onStatusUpdate("Downloading... this may take a few minutes for large wallpapers")
 
-            // === Heartbeat thread: log download state every 5s so the user can
-            //     see whether the download is actually progressing or stuck. ===
+            // === Heartbeat thread: log download state every 3s (was 5s) so the
+            //     user can see whether the download is actually progressing or stuck. ===
             val heartbeatThread = Thread({
                 var tick = 0
                 while (true) {
-                    try { Thread.sleep(5000) } catch (_: InterruptedException) { return@Thread }
+                    try { Thread.sleep(3000) } catch (_: InterruptedException) { return@Thread }
                     tick++
-                    val now = System.currentTimeMillis()
-                    val elapsedSec = (now - downloadStartMs) / 1000
-                    val silentSec = (now - lastActivityMs.get()) / 1000
-                    val status = lastStatus.get() ?: "(no status yet)"
-                    WepWawetLogger.proxy("$TAG: heartbeat #$tick",
-                        "elapsed_s" to elapsedSec,
-                        "silent_s" to silentSec,
-                        "last_status" to status.take(80),
-                        "last_pct" to lastProgressPct.get(),
-                        "files_done" to filesCompleted.get(),
-                        "chunks_done" to chunksCompleted.get(),
-                        "depots_done" to depotsCompleted.get(),
-                        "chunk_bytes" to lastChunkBytes.get())
-                    // Update UI status with elapsed time so the user sees movement
-                    // even when no chunk callback has fired yet.
-                    if (silentSec > 10) {
-                        onStatusUpdate("$status (${elapsedSec}s elapsed, ${silentSec}s since last activity)")
-                    } else {
-                        onStatusUpdate("$status (${elapsedSec}s elapsed)")
+                    try {
+                        val now = System.currentTimeMillis()
+                        val elapsedSec = (now - downloadStartMs) / 1000
+                        val silentSec = (now - lastActivityMs.get()) / 1000
+                        val status = lastStatus.get() ?: "(no status yet)"
+                        // Check steam client state for diagnostics
+                        val steamConnected = steamClient?.isConnected ?: false
+                        // Scan install dir for current file count and total bytes
+                        var fileCount = 0
+                        var totalBytes = 0L
+                        var largestFile = ""
+                        var largestSize = 0L
+                        try {
+                            installDir.walkTopDown().forEach { f ->
+                                if (f.isFile) {
+                                    fileCount++
+                                    totalBytes += f.length()
+                                    if (f.length() > largestSize) {
+                                        largestSize = f.length()
+                                        largestFile = f.name
+                                    }
+                                }
+                            }
+                        } catch (_: Exception) {}
+                        WepWawetLogger.proxy("$TAG: heartbeat #$tick",
+                            "elapsed_s" to elapsedSec,
+                            "silent_s" to silentSec,
+                            "last_status" to status.take(80),
+                            "last_pct" to lastProgressPct.get(),
+                            "files_done" to filesCompleted.get(),
+                            "chunks_done" to chunksCompleted.get(),
+                            "depots_done" to depotsCompleted.get(),
+                            "chunk_bytes" to lastChunkBytes.get(),
+                            "steam_connected" to steamConnected,
+                            "dir_file_count" to fileCount,
+                            "dir_total_bytes" to totalBytes,
+                            "dir_largest_file" to largestFile.take(60),
+                            "dir_largest_size" to largestSize)
+                        // Update UI status with elapsed time so the user sees movement
+                        // even when no chunk callback has fired yet.
+                        if (silentSec > 5) {
+                            onStatusUpdate("$status (${elapsedSec}s elapsed, ${silentSec}s since last activity, $fileCount files in cache, ${formatBytes(totalBytes)} total)")
+                        } else {
+                            onStatusUpdate("$status (${elapsedSec}s elapsed, $fileCount files in cache, ${formatBytes(totalBytes)} total)")
+                        }
+                    } catch (he: Throwable) {
+                        // Never let the heartbeat thread die silently — that
+                        // would hide the fact that the download is stuck.
+                        WepWawetLogger.proxyError("$TAG: heartbeat exception",
+                            "exception" to he.javaClass.name,
+                            "message" to (he.message ?: ""))
                     }
                 }
             }, "JavaSteam-Heartbeat").apply {
                 isDaemon = true
                 start()
             }
+            WepWawetLogger.proxy("$TAG: heartbeat thread started",
+                "interval_ms" to 3000)
+
+            // === File-watcher thread: scans installDir every 2s for NEW files
+            //     and logs them. This catches cases where the depotdownloader
+            //     writes files but doesn't fire onFileCompleted (e.g. for very
+            //     small workshop items that arrive in a single chunk). ===
+            val seenFiles = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+            val fileWatcherThread = Thread({
+                var tick = 0
+                while (true) {
+                    try { Thread.sleep(2000) } catch (_: InterruptedException) { return@Thread }
+                    try {
+                        tick++
+                        val currentFiles = mutableListOf<File>()
+                        try {
+                            installDir.walkTopDown().forEach { f ->
+                                if (f.isFile) currentFiles.add(f)
+                            }
+                        } catch (_: Exception) {}
+                        for (f in currentFiles) {
+                            val key = f.absolutePath
+                            if (seenFiles.add(key)) {
+                                WepWawetLogger.proxy("$TAG: file-watcher NEW file",
+                                    "tick" to tick,
+                                    "file" to f.name.take(120),
+                                    "size" to f.length(),
+                                    "path" to f.absolutePath.take(200),
+                                    "parent" to f.parentFile?.name)
+                            } else {
+                                // Existing file — log if it grew significantly (>=10%)
+                                // Useful to see chunks being appended
+                            }
+                        }
+                    } catch (fe: Throwable) {
+                        WepWawetLogger.proxyError("$TAG: file-watcher exception",
+                            "exception" to fe.javaClass.name,
+                            "message" to (fe.message ?: ""))
+                    }
+                }
+            }, "JavaSteam-FileWatcher").apply {
+                isDaemon = true
+                start()
+            }
+            WepWawetLogger.proxy("$TAG: file-watcher thread started",
+                "interval_ms" to 2000,
+                "install_dir" to installDir.absolutePath)
 
             // === Run awaitCompletion with a 10-minute hard timeout. ===
             // Previously this could hang forever if Steam stopped sending
@@ -316,11 +421,22 @@ class WorkshopDownloader(
             val completionTimeoutMs = 10L * 60 * 1000  // 10 minutes
             val completionStart = System.currentTimeMillis()
             var completionException: Exception? = null
+            WepWawetLogger.proxy("$TAG: calling awaitCompletion (with ${completionTimeoutMs / 1000}s timeout)",
+                "thread" to Thread.currentThread().name,
+                "downloader_class" to downloader.javaClass.name)
             try {
                 val completionJob = Thread {
+                    WepWawetLogger.proxy("$TAG: awaitCompletion thread ENTERED",
+                        "thread" to Thread.currentThread().name)
                     try {
                         runBlocking { downloader.awaitCompletion() }
+                        WepWawetLogger.proxy("$TAG: awaitCompletion thread RETURNED NORMALLY",
+                            "thread" to Thread.currentThread().name)
                     } catch (e: Exception) {
+                        WepWawetLogger.proxyError("$TAG: awaitCompletion thread THREW",
+                            "thread" to Thread.currentThread().name,
+                            "exception" to e.javaClass.name,
+                            "message" to (e.message ?: ""))
                         completionException = e
                     }
                 }.apply { isDaemon = true; name = "JavaSteam-DepotCompletion"; start() }
@@ -370,10 +486,32 @@ class WorkshopDownloader(
                 }
             }
 
-            // Stop the heartbeat thread
+            // Stop the heartbeat + file-watcher threads
             heartbeatThread.interrupt()
+            fileWatcherThread.interrupt()
+            WepWawetLogger.proxy("$TAG: heartbeat + file-watcher threads interrupted")
+
+            // Final scan: list every file in installDir so we know what's there
+            // before we close the downloader. This is critical for debugging
+            // cases where the .pkg lookup fails — we'll have a snapshot of
+            // exactly what files exist on disk at this point.
+            try {
+                val allFiles = installDir.walkTopDown().toList()
+                val fileSummary = allFiles.map { f ->
+                    val type = if (f.isDirectory) "[D]" else "[F ${f.length()}B]"
+                    "$type ${f.absolutePath.replace(installDir.absolutePath, "<root>")}"
+                }
+                WepWawetLogger.proxy("$TAG: FINAL install dir snapshot",
+                    "dir" to installDir.absolutePath,
+                    "total_entries" to allFiles.size,
+                    "listing" to fileSummary.joinToString("\n  ").take(2000))
+            } catch (e: Exception) {
+                WepWawetLogger.proxyWarn("$TAG: failed to list install dir for final snapshot",
+                    "exception" to e.javaClass.name)
+            }
 
             downloader.removeListener(listener)
+            WepWawetLogger.proxy("$TAG: listener removed")
             try { downloader.close() } catch (_: Exception) {}
             WepWawetLogger.proxy("$TAG: downloader closed",
                 "files_done" to filesCompleted.get(),
