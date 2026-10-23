@@ -26,6 +26,23 @@ object SteamCredentialsStore {
             .putString(KEY_USERNAME, username)
             .putString(KEY_PASSWORD, password)
             .apply()
+        // Clear any saved refresh token when the user re-enters credentials.
+        // Why: Steam made a backend change in 2025 where refresh tokens for the
+        // SteamClient platform are now "authenticated" — meaning previously-valid
+        // tokens can suddenly start returning AccessDenied. When the user re-enters
+        // their credentials, they almost certainly want a FRESH login (push
+        // notification), not a stale-token attempt that will fail.
+        // The refresh token is stored in a separate SharedPreferences file
+        // ("wepwawet_steam_token") by WorkshopDownloader, so we clear that too.
+        val tokenPrefs = context.getSharedPreferences("wepwawet_steam_token", Context.MODE_PRIVATE)
+        val hadToken = tokenPrefs.getString("refresh_token", null) != null
+        val hadAccountName = tokenPrefs.getString("account_name", null) != null
+        if (hadToken || hadAccountName) {
+            tokenPrefs.edit().clear().apply()
+            WepWawetLogger.proxy("SteamCredentialsStore: cleared stale refresh token (user re-saved credentials)",
+                "had_token" to hadToken,
+                "had_account_name" to hadAccountName)
+        }
         WepWawetLogger.proxy("SteamCredentialsStore: credentials saved",
             "username" to username)
     }

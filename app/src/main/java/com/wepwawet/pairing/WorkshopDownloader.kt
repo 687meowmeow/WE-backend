@@ -88,6 +88,7 @@ class WorkshopDownloader(
     @Volatile private var isRetrying = false  // true during TryAnotherCM retry
     @Volatile private var usedRefreshToken = false  // true if we tried refresh token login
     @Volatile private var hasValidToken = false  // true after auth session succeeds (token saved)
+    @Volatile private var hasTriedModernAuthFallback = false  // true if we already fell back to modern auth once (prevents infinite loop)
     @Volatile private var appContext: Context? = null  // for clearing stale token on rate limit
     @Volatile private var statusCallback: ((String) -> Unit)? = null
     private val subscriptions = mutableListOf<Closeable>()
@@ -740,19 +741,33 @@ class WorkshopDownloader(
                 try { Thread.sleep(3000); steamClient?.connect() } catch (_: Exception) {}
                 return
             }
-            // If refresh token failed (e.g. InvalidPassword due to expired token),
-            // fall back to the modern auth flow (push notification)
-            if (usedRefreshToken && callback.result == EResult.InvalidPassword) {
-                WepWawetLogger.proxy("$TAG: refresh token invalid — falling back to modern auth (push notification)")
+            // If refresh token failed for any token-related reason (Steam backend
+            // changes mean refresh tokens for SteamClient platform are now
+            // authenticated — so tokens that previously worked can suddenly start
+            // returning AccessDenied, Expired, Revoked, etc.), fall back to the
+            // modern auth flow (push notification). This is one-shot — if modern
+            // auth ALSO fails, we don't loop. (hasTriedModernAuthFallback guards.)
+            val isTokenRelatedFailure = callback.result == EResult.InvalidPassword ||
+                callback.result == EResult.AccessDenied ||
+                callback.result == EResult.Expired ||
+                callback.result == EResult.Revoked ||
+                callback.result == EResult.LogonSessionReplaced ||
+                callback.result == EResult.AlreadyLoggedInElsewhere ||
+                callback.result == EResult.PasswordRequiredToKickSession
+            if (usedRefreshToken && isTokenRelatedFailure && !hasTriedModernAuthFallback) {
+                hasTriedModernAuthFallback = true
+                WepWawetLogger.proxy("$TAG: refresh token rejected (result=${callback.result}) — falling back to modern auth (push notification)",
+                    "result" to callback.result)
                 usedRefreshToken = false
                 authInProgress = false
-                // Clear the stale refresh token
+                // Clear the stale refresh token so we don't try it again next time
                 appContext?.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
                     ?.edit()?.remove(KEY_REFRESH_TOKEN)?.remove(KEY_ACCOUNT_NAME)?.apply()
-                WepWawetLogger.proxy("$TAG: stale refresh token cleared")
-                // Reconnect — onConnected will start modern auth flow
+                WepWawetLogger.proxy("$TAG: stale refresh token cleared (was rejected with ${callback.result})")
+                // Reconnect — onConnected will see no saved token and start the
+                // modern auth flow (push notification to Steam mobile app)
                 try {
-                    updateStatus("Refresh token expired — reconnecting for fresh login...")
+                    updateStatus("Refresh token rejected (${callback.result}) — reconnecting for fresh push-notification login...")
                     steamClient?.disconnect()
                     Thread.sleep(2000)
                     steamClient?.connect()
