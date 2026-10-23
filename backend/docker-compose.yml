@@ -1,0 +1,40 @@
+# WepWawet Workshop Content Backend
+#
+# Quick start:
+#   1. Set your Steam credentials below (STEAM_USERNAME, STEAM_PASSWORD)
+#   2. Run: docker compose up -d
+#   3. The backend will be at http://localhost:8080
+#   4. In the WepWawet Android app, go to Settings → Backend URL → http://<your-server-ip>:8080
+#
+# For paid apps like Wallpaper Engine, you MUST use a Steam account that owns
+# the game. Anonymous login only works for free-to-play games.
+
+services:
+  wepwawet-backend:
+    build: .
+    # Or use the pre-built image:
+    # image: wepwawet/backend:latest
+    ports:
+      - "8080:8080"
+    environment:
+      # === Steam credentials ===
+      # For anonymous login (free games only): leave as "anonymous" / ""
+      # For Wallpaper Engine (paid): use your real Steam account
+      - STEAM_USERNAME=anonymous
+      - STEAM_PASSWORD=
+      # Steam Guard 2FA code (if your account has 2FA enabled):
+      # - STEAM_GUARD_CODE=12345
+      # === Backend config ===
+      - DEFAULT_APP_ID=431960
+      - MAX_CONCURRENT_TASKS=2
+      - DOWNLOAD_TIMEOUT=1800
+    volumes:
+      # Persist SteamCMD cache (so it doesn't re-download SteamCMD every time)
+      - steamcmd_cache:/home/steam/steamcmd
+      # Persist workshop downloads (so re-downloading is faster)
+      - workshop_data:/home/steam/steamapps/workshop/content
+    restart: unless-stopped
+
+volumes:
+  steamcmd_cache:
+  workshop_data:

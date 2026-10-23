@@ -102,11 +102,11 @@ fun WallpaperDetailScreen(
     var isSending by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
 
-    // Track whether the user has GGNetwork credentials set up
-    var hasGgntwCredentials by remember { mutableStateOf(com.wepwawet.pairing.GgntwApiClient.hasCredentials(context)) }
+    // Track whether the user has Backend URL set up
+    var hasBackendUrl by remember { mutableStateOf(com.wepwawet.pairing.WorkshopBackendClient.hasBackendUrl(context)) }
     // Re-check credentials whenever this screen is resumed (user might have just set them)
     LaunchedEffect(itemId) {
-        hasGgntwCredentials = com.wepwawet.pairing.GgntwApiClient.hasCredentials(context)
+        hasBackendUrl = com.wepwawet.pairing.WorkshopBackendClient.hasBackendUrl(context)
     }
 
     LaunchedEffect(itemId) {
@@ -298,7 +298,7 @@ fun WallpaperDetailScreen(
                 }
             }
 
-            // === Send to phone button — downloads ACTUAL .pkg content via GGNetwork ===
+            // === Send to phone button — downloads ACTUAL .pkg content via backend ===
             item {
                 Button(
                     onClick = {
@@ -316,15 +316,15 @@ fun WallpaperDetailScreen(
                     Text(
                         if (isSending) "Sending…"
                         else if (!isPaired) "Send to phone (pair first)"
-                        else if (!hasGgntwCredentials) "Send to phone (set up GGNetwork first)"
-                        else "Send to phone (real .pkg via GGNetwork)"
+                        else if (!hasBackendUrl) "Send to phone (set up backend first)"
+                        else "Send to phone (real .pkg via backend)"
                     )
                 }
             }
 
             // === Helper hint ===
             item {
-                if (!hasGgntwCredentials) {
+                if (!hasBackendUrl) {
                     Surface(
                         color = MaterialTheme.colorScheme.secondaryContainer,
                         shape = RoundedCornerShape(8.dp),
@@ -332,13 +332,13 @@ fun WallpaperDetailScreen(
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Text(
-                                "GGNetwork credentials required",
+                                "Backend URL required",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer,
                             )
                             Text(
                                 "To download the actual workshop content (not just the preview), " +
-                                "create a free account at ggntw.com and enter your email + password " +
+                                "create a free account at your backend server and enter your email + password " +
                                 "in the Settings screen.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -426,7 +426,7 @@ private fun onSendToPhoneClicked(
         "title" to item.title.take(80),
         "tags" to item.tags.joinToString(","),
         "type" to item.type.displayName,
-        "has_ggntw" to com.wepwawet.pairing.GgntwApiClient.hasCredentials(context))
+        "has_backend" to com.wepwawet.pairing.WorkshopBackendClient.hasBackendUrl(context))
 
     if (!PairingService.isPaired()) {
         val msg = "Not paired — open the Pairing tab first."
@@ -435,44 +435,42 @@ private fun onSendToPhoneClicked(
         return
     }
 
-    if (!com.wepwawet.pairing.GgntwApiClient.hasCredentials(context)) {
-        val msg = "GGNetwork credentials not set. Open Settings → GGNetwork to enter your email + password (free account at ggntw.com)."
-        WepWawetLogger.workshopWarn("send-to-phone: no GGNetwork credentials", "id" to item.id)
+    if (!com.wepwawet.pairing.WorkshopBackendClient.hasBackendUrl(context)) {
+        val msg = "Backend URL not set. Open Settings → Open Settings → Backend URL to set up your self-hosted workshop content backend."
+        WepWawetLogger.workshopWarn("send-to-phone: no Backend URL", "id" to item.id)
         onEnd(msg)
         return
     }
 
-    onStart("Downloading real .pkg via GGNetwork (this may take 1-2 minutes)…")
+    onStart("Downloading real .pkg via backend (this may take 1-2 minutes)…")
     scope.launch {
         try {
-            // === Step 1: Download the actual .pkg file via GGNetwork ===
-            val workshopUrl = "https://steamcommunity.com/sharedfiles/filedetails/?id=${item.id}"
-            WepWawetLogger.workshop("send-to-phone: step 1/4 requesting .pkg download from GGNetwork",
-                "workshop_url" to workshopUrl,
+            // === Step 1: Download the actual .pkg file via the self-hosted backend ===
+            WepWawetLogger.workshop("send-to-phone: step 1/4 requesting .pkg download from backend",
                 "workshop_id" to item.id)
 
             val sendId = System.currentTimeMillis()
             val pkgFile = java.io.File(context.cacheDir, "${item.id}_$sendId.pkg")
-            val ggntwClient = com.wepwawet.pairing.GgntwApiClient()
+            val backendClient = com.wepwawet.pairing.WorkshopBackendClient()
             val downloadedPkg = withContext(Dispatchers.IO) {
-                ggntwClient.downloadWorkshopPkg(
+                backendClient.downloadWorkshopPkg(
                     context = context,
-                    workshopUrl = workshopUrl,
+                    workshopId = item.id,
                     outputFile = pkgFile,
                     onProgress = { /* progress; logged internally */ },
                     onStatusUpdate = { status ->
-                        WepWawetLogger.workshop("send-to-phone: GGNetwork status update",
+                        WepWawetLogger.workshop("send-to-phone: backend status update",
                             "status" to status)
                     },
                 )
             }
 
             if (downloadedPkg == null || !downloadedPkg.exists() || downloadedPkg.length() == 0L) {
-                WepWawetLogger.workshopWarn("send-to-phone: step 1/4 GGNetwork download failed",
+                WepWawetLogger.workshopWarn("send-to-phone: step 1/4 backend download failed",
                     "pkg_file" to pkgFile.absolutePath,
                     "exists" to pkgFile.exists(),
                     "size" to pkgFile.length())
-                onEnd("Failed to download .pkg via GGNetwork (see logs)")
+                onEnd("Failed to download .pkg via backend (see logs)")
                 return@launch
             }
             WepWawetLogger.workshop("send-to-phone: step 1/4 .pkg downloaded",
@@ -486,10 +484,10 @@ private fun onSendToPhoneClicked(
                 "file_type" to fileType,
                 "file_name" to downloadedPkg.name)
             if (fileType != "PKGV0024") {
-                WepWawetLogger.workshopWarn("send-to-phone: step 2/4 unexpected file type from GGNetwork",
+                WepWawetLogger.workshopWarn("send-to-phone: step 2/4 unexpected file type from backend",
                     "expected" to "PKGV0024",
                     "got" to fileType)
-                onEnd("GGNetwork returned unexpected file type: $fileType (expected PKGV0024 .pkg)")
+                onEnd("backend returned unexpected file type: $fileType (expected PKGV0024 .pkg)")
                 return@launch
             }
 
