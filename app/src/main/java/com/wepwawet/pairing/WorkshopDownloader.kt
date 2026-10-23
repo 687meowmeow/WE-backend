@@ -44,9 +44,27 @@ import `in`.dragonbra.javasteam.util.log.LogManager
  * impossible to diagnose why a download hangs at "Download started".
  *
  * Installed once globally (since JavaSteam's LogManager is a singleton).
+ *
+ * CRITICAL: this bridge also watches for known library bugs and aborts
+ * the download immediately when one is detected. The biggest known bug
+ * is the "unsupported file type" / "Skipping file" path — when the
+ * library can't handle a workshop item's fileType, it logs the error
+ * and SKIPS the file but never completes the `completionFuture`, so
+ * `awaitCompletion` hangs forever waiting for a completion that never
+ * comes. The heartbeat's stuck-detection would abort after 60s, but
+ * that's a long wait for the user — instead, we detect the library's
+ * error log and set downloadError immediately so the awaitCompletion
+ * wrapper breaks out within ~1 second.
  */
 private object JavaSteamLogBridge : LogListener {
     private val installed = AtomicBoolean(false)
+    /**
+     * Set by the active WorkshopDownloader instance so the bridge can
+     * abort its download when a known library bug is detected.
+     * Single-threaded download assumption — only one active download at a time.
+     */
+    @Volatile var abortCallback: ((String) -> Unit)? = null
+
     fun installIfNeeded() {
         if (installed.compareAndSet(false, true)) {
             LogManager.addListener(this)
@@ -55,15 +73,56 @@ private object JavaSteamLogBridge : LogListener {
     }
     override fun onLog(clazz: Class<*>, message: String?, throwable: Throwable?) {
         // JavaSteam uses onLog for INFO-level messages
+        val msg = message ?: ""
         WepWawetLogger.proxy("JavaSteam: ${clazz.simpleName}",
-            "msg" to (message?.take(200) ?: ""),
+            "msg" to msg.take(200),
             "level" to "INFO",
             "throwable" to (throwable?.javaClass?.name))
+        // Detect known INFO-level messages that indicate progress
+        // (none currently — INFO messages are mostly about connection state)
     }
     override fun onError(clazz: Class<*>, message: String?, throwable: Throwable?) {
+        val msg = message ?: ""
         WepWawetLogger.proxyError("JavaSteam ERROR: ${clazz.simpleName}",
-            "msg" to (message?.take(200) ?: ""),
+            "msg" to msg.take(200),
             "exception" to (throwable?.javaClass?.name ?: "null"))
+        // === Detect known library bugs that cause silent download hangs ===
+        // BUG 1: "Published file X has unsupported file type Y. Skipping file"
+        //   - Library logs this when fileType isn't in SupportedWorkshopFileTypes
+        //   - Steam returns fileType=0 (k_EWorkshopFileTypeFirst) for some items
+        //   - Library SKIPS the file but never completes completionFuture
+        //   - awaitCompletion hangs forever waiting
+        // Fix: set downloadError immediately so the awaitCompletion wrapper
+        //      breaks out and surfaces the error to the user.
+        if ((msg.contains("unsupported file type") || msg.contains("Skipping file")) &&
+            clazz.simpleName == "DepotDownloader") {
+            val reason = if (msg.contains("unsupported file type")) {
+                "Steam returned an unsupported file type for this workshop item. " +
+                "This is a known JavaSteam library bug — the library skips the file " +
+                "but never completes the awaitCompletion future, causing an infinite hang. " +
+                "Library log: $msg"
+            } else {
+                "JavaSteam library skipped a file during download (likely unsupported " +
+                "file type). This is a known library bug — see $msg"
+            }
+            WepWawetLogger.proxyError("JavaSteamLogBridge: detected library skip — aborting download",
+                "reason" to reason.take(300))
+            abortCallback?.invoke(reason)
+        }
+        // BUG 2: "Unable to locate manifest ID for published file X"
+        //   - Library logs this when the workshop item's fileUrl is empty AND
+        //     hcontentFile is 0 (the item has no download source)
+        //   - Same root cause — the library never completes completionFuture
+        if (msg.contains("Unable to locate manifest ID") &&
+            clazz.simpleName == "DepotDownloader") {
+            val reason = "JavaSteam library can't find a download source for this workshop " +
+                "item (no fileUrl AND no hcontentFile). This is a known library bug — " +
+                "the library logs the error but never completes awaitCompletion. " +
+                "Library log: $msg"
+            WepWawetLogger.proxyError("JavaSteamLogBridge: detected no-download-source — aborting download",
+                "reason" to reason.take(300))
+            abortCallback?.invoke(reason)
+        }
     }
 }
 
@@ -503,6 +562,24 @@ class WorkshopDownloader(
             // onDisconnected). Cleared in the finally block after awaitCompletion returns.
             isDownloadInProgress = true
 
+            // === Register the abort callback so the JavaSteamLogBridge can abort
+            // this download when it detects a known library bug (e.g., "unsupported
+            // file type. Skipping file" — the library logs the error but never
+            // completes the completionFuture, causing awaitCompletion to hang
+            // forever). Without this, the user waits 60s for the stuck-detection
+            // to fire — with it, the download aborts within ~1 second of the
+            // library's error log, with a clear "known library bug" message.
+            // Cleared in the finally block below. ===
+            JavaSteamLogBridge.abortCallback = { reason ->
+                if (downloadError == null) {
+                    WepWawetLogger.proxyError("$TAG: abort triggered by JavaSteamLogBridge",
+                        "reason" to reason.take(300))
+                    downloadError = java.lang.Exception(reason)
+                    updateStatus("Download aborted: known library bug detected — see logs")
+                }
+            }
+            WepWawetLogger.proxy("$TAG: registered abort callback with JavaSteamLogBridge")
+
             // === Run awaitCompletion with a 10-minute hard timeout. ===
             // Previously this could hang forever if Steam stopped sending
             // chunks but didn't disconnect — the user would see "Download
@@ -605,6 +682,11 @@ class WorkshopDownloader(
             // === Clear the download-in-progress flag — onDisconnected can
             // auto-reconnect again now that the DepotDownloader is done. ===
             isDownloadInProgress = false
+            // === Clear the abort callback so the bridge doesn't keep a stale
+            // reference to this WorkshopDownloader instance (would cause
+            // memory leak + incorrect aborts on the next download). ===
+            JavaSteamLogBridge.abortCallback = null
+            WepWawetLogger.proxy("$TAG: cleared abort callback from JavaSteamLogBridge")
             WepWawetLogger.proxy("$TAG: downloader closed",
                 "files_done" to filesCompleted.get(),
                 "chunks_done" to chunksCompleted.get(),
