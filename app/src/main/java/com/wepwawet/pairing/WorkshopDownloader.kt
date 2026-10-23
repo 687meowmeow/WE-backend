@@ -159,37 +159,107 @@ class WorkshopDownloader(
             onStatusUpdate("Downloading workshop item via Steam protocol...")
             val installDir = File(context.cacheDir, "workshop_downloads/$workshopId")
             installDir.mkdirs()
+            WepWawetLogger.proxy("$TAG: install dir prepared",
+                "path" to installDir.absolutePath,
+                "exists" to installDir.exists())
 
             val downloader = DepotDownloader(steamClient!!, licenseList, false, false, 8, 4, 8, false, null)
 
+            // Heartbeat state — updated by the listener, read by the heartbeat thread.
+            // Use Atomic* so cross-thread visibility is guaranteed (Kotlin local vars
+            // captured by closures are boxed in Ref objects, but writes from one
+            // thread aren't guaranteed visible to another thread without a
+            // happens-before edge — Atomic* gives us that).
+            val lastStatus = java.util.concurrent.atomic.AtomicReference("(no status yet)")
+            val lastProgressPct = java.util.concurrent.atomic.AtomicInteger(-1)
+            val lastChunkBytes = java.util.concurrent.atomic.AtomicLong(0L)
+            val filesCompleted = java.util.concurrent.atomic.AtomicInteger(0)
+            val depotsCompleted = java.util.concurrent.atomic.AtomicInteger(0)
+            val chunksCompleted = java.util.concurrent.atomic.AtomicInteger(0)
+            val lastActivityMs = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+            val downloadStartMs = System.currentTimeMillis()
+
             val listener = object : IDownloadListener {
                 override fun onItemAdded(item: DownloadItem) {
-                    WepWawetLogger.proxy("$TAG: item added", "app_id" to item.appId)
+                    lastActivityMs.set(System.currentTimeMillis())
+                    WepWawetLogger.proxy("$TAG: item added",
+                        "app_id" to item.appId,
+                        "install_dir" to item.installDirectory)
                 }
                 override fun onDownloadStarted(item: DownloadItem) {
-                    WepWawetLogger.proxy("$TAG: download started", "app_id" to item.appId)
-                    onStatusUpdate("Download started...")
+                    lastActivityMs.set(System.currentTimeMillis())
+                    lastStatus.set("Download started")
+                    WepWawetLogger.proxy("$TAG: download started",
+                        "app_id" to item.appId)
+                    onStatusUpdate("Download started — fetching chunks from Steam CDN...")
                 }
                 override fun onDownloadCompleted(item: DownloadItem) {
-                    WepWawetLogger.proxy("$TAG: download completed", "app_id" to item.appId)
+                    lastActivityMs.set(System.currentTimeMillis())
+                    WepWawetLogger.proxy("$TAG: download completed",
+                        "app_id" to item.appId,
+                        "elapsed_ms" to (System.currentTimeMillis() - downloadStartMs))
                     onProgress(1f)
+                    onStatusUpdate("Download completed — finalizing...")
                 }
                 override fun onDownloadFailed(item: DownloadItem, error: Throwable) {
-                    WepWawetLogger.proxyError("$TAG: download failed", "message" to (error.message ?: ""))
+                    lastActivityMs.set(System.currentTimeMillis())
+                    WepWawetLogger.proxyError("$TAG: download failed",
+                        "app_id" to item.appId,
+                        "exception" to error.javaClass.name,
+                        "message" to (error.message ?: ""))
                     downloadError = java.lang.Exception(error.message ?: "download failed", error)
                 }
                 override fun onStatusUpdate(message: String) {
-                    WepWawetLogger.proxyDebug("$TAG: status", "msg" to message.take(200))
+                    lastActivityMs.set(System.currentTimeMillis())
+                    lastStatus.set(message)
+                    // IMPORTANT: was proxyDebug (filtered out by min level = INFO).
+                    // Now logged at INFO so the user can see what's happening.
+                    WepWawetLogger.proxy("$TAG: depot status",
+                        "msg" to message.take(200))
                     onStatusUpdate(message)
                 }
                 override fun onFileCompleted(depotId: Int, fileName: String, depotPercentComplete: Float) {
+                    lastActivityMs.set(System.currentTimeMillis())
                     val pct = (depotPercentComplete * 100).toInt()
-                    WepWawetLogger.proxyDebug("$TAG: file", "depot" to depotId, "pct" to pct)
+                    val done = filesCompleted.incrementAndGet()
+                    WepWawetLogger.proxy("$TAG: file complete",
+                        "depot" to depotId,
+                        "file" to fileName.take(120),
+                        "depot_pct" to pct,
+                        "files_done" to done,
+                        "elapsed_ms" to (System.currentTimeMillis() - downloadStartMs))
+                    lastProgressPct.set(pct)
                     onProgress(depotPercentComplete)
-                    onStatusUpdate("Downloading... $pct%")
+                    onStatusUpdate("Downloading… $pct% (file #$done: ${fileName.take(40)})")
+                }
+                override fun onChunkCompleted(depotId: Int, depotPercentComplete: Float, compressedBytes: Long, uncompressedBytes: Long) {
+                    lastActivityMs.set(System.currentTimeMillis())
+                    val done = chunksCompleted.incrementAndGet()
+                    val pct = (depotPercentComplete * 100).toInt()
+                    lastProgressPct.set(pct)
+                    lastChunkBytes.addAndGet(compressedBytes)
+                    // Log every chunk — this is the only true progress signal.
+                    WepWawetLogger.proxy("$TAG: chunk complete",
+                        "depot" to depotId,
+                        "chunk#" to done,
+                        "depot_pct" to pct,
+                        "compressed" to compressedBytes,
+                        "uncompressed" to uncompressedBytes,
+                        "elapsed_ms" to (System.currentTimeMillis() - downloadStartMs))
+                    onProgress(depotPercentComplete)
+                    onStatusUpdate("Downloading… $pct% ($done chunks, ${formatBytes(lastChunkBytes.get())} so far)")
                 }
                 override fun onDepotCompleted(depotId: Int, compressedBytes: Long, uncompressedBytes: Long) {
-                    WepWawetLogger.proxy("$TAG: depot done", "depot" to depotId, "uncompressed" to uncompressedBytes)
+                    lastActivityMs.set(System.currentTimeMillis())
+                    val done = depotsCompleted.incrementAndGet()
+                    lastChunkBytes.addAndGet(compressedBytes)
+                    WepWawetLogger.proxy("$TAG: depot done",
+                        "depot" to depotId,
+                        "compressed" to compressedBytes,
+                        "uncompressed" to uncompressedBytes,
+                        "depots_done" to done,
+                        "elapsed_ms" to (System.currentTimeMillis() - downloadStartMs))
+                    onStatusUpdate("Depot $depotId done: ${formatBytes(uncompressedBytes)} (depot #$done)")
                 }
             }
 
@@ -198,14 +268,119 @@ class WorkshopDownloader(
             val pubFileId = workshopId.toLongOrNull() ?: return@withContext null
             val pubItem = PubFileItem(APP_ID_WE, pubFileId)
 
-            WepWawetLogger.proxy("$TAG: adding PubFileItem", "app_id" to APP_ID_WE, "pub_file_id" to pubFileId)
+            WepWawetLogger.proxy("$TAG: adding PubFileItem",
+                "app_id" to APP_ID_WE, "pub_file_id" to pubFileId)
             downloader.add(pubItem)
             downloader.finishAdding()
+            WepWawetLogger.proxy("$TAG: items queued, finishAdding done")
 
             onStatusUpdate("Downloading... this may take a few minutes for large wallpapers")
-            runCatching { runBlocking { downloader.awaitCompletion() } }
+
+            // === Heartbeat thread: log download state every 5s so the user can
+            //     see whether the download is actually progressing or stuck. ===
+            val heartbeatThread = Thread({
+                var tick = 0
+                while (true) {
+                    try { Thread.sleep(5000) } catch (_: InterruptedException) { return@Thread }
+                    tick++
+                    val now = System.currentTimeMillis()
+                    val elapsedSec = (now - downloadStartMs) / 1000
+                    val silentSec = (now - lastActivityMs.get()) / 1000
+                    val status = lastStatus.get() ?: "(no status yet)"
+                    WepWawetLogger.proxy("$TAG: heartbeat #$tick",
+                        "elapsed_s" to elapsedSec,
+                        "silent_s" to silentSec,
+                        "last_status" to status.take(80),
+                        "last_pct" to lastProgressPct.get(),
+                        "files_done" to filesCompleted.get(),
+                        "chunks_done" to chunksCompleted.get(),
+                        "depots_done" to depotsCompleted.get(),
+                        "chunk_bytes" to lastChunkBytes.get())
+                    // Update UI status with elapsed time so the user sees movement
+                    // even when no chunk callback has fired yet.
+                    if (silentSec > 10) {
+                        onStatusUpdate("$status (${elapsedSec}s elapsed, ${silentSec}s since last activity)")
+                    } else {
+                        onStatusUpdate("$status (${elapsedSec}s elapsed)")
+                    }
+                }
+            }, "JavaSteam-Heartbeat").apply {
+                isDaemon = true
+                start()
+            }
+
+            // === Run awaitCompletion with a 10-minute hard timeout. ===
+            // Previously this could hang forever if Steam stopped sending
+            // chunks but didn't disconnect — the user would see "Download
+            // started..." for hours with no further updates.
+            val completionTimeoutMs = 10L * 60 * 1000  // 10 minutes
+            val completionStart = System.currentTimeMillis()
+            var completionException: Exception? = null
+            try {
+                val completionJob = Thread {
+                    try {
+                        runBlocking { downloader.awaitCompletion() }
+                    } catch (e: Exception) {
+                        completionException = e
+                    }
+                }.apply { isDaemon = true; name = "JavaSteam-DepotCompletion"; start() }
+
+                // Wait for either completion or timeout
+                while (completionJob.isAlive &&
+                       System.currentTimeMillis() - completionStart < completionTimeoutMs) {
+                    if (downloadError != null) {
+                        WepWawetLogger.proxyWarn("$TAG: download error detected — breaking wait",
+                            "error" to (downloadError?.message ?: ""))
+                        break
+                    }
+                    try { Thread.sleep(500) } catch (_: InterruptedException) { break }
+                }
+                if (completionJob.isAlive) {
+                    val elapsedSec = (System.currentTimeMillis() - completionStart) / 1000
+                    val statusAtTimeout = lastStatus.get() ?: "(no status yet)"
+                    WepWawetLogger.proxyError("$TAG: awaitCompletion TIMED OUT",
+                        "timeout_s" to (completionTimeoutMs / 1000),
+                        "elapsed_s" to elapsedSec,
+                        "last_status" to statusAtTimeout,
+                        "files_done" to filesCompleted.get(),
+                        "chunks_done" to chunksCompleted.get(),
+                        "depots_done" to depotsCompleted.get())
+                    // Interrupt the completion thread (best-effort)
+                    completionJob.interrupt()
+                    downloadError = java.lang.Exception("Download timed out after ${elapsedSec}s — Steam CDN may be slow or stuck. Last status: $statusAtTimeout")
+                } else if (completionException != null) {
+                    WepWawetLogger.proxyWarn("$TAG: awaitCompletion threw",
+                        "exception" to (completionException?.javaClass?.name ?: ""),
+                        "message" to (completionException?.message ?: ""))
+                    if (downloadError == null) {
+                        downloadError = completionException
+                    }
+                } else {
+                    WepWawetLogger.proxy("$TAG: awaitCompletion returned normally",
+                        "elapsed_ms" to (System.currentTimeMillis() - completionStart),
+                        "files_done" to filesCompleted.get(),
+                        "chunks_done" to chunksCompleted.get(),
+                        "depots_done" to depotsCompleted.get())
+                }
+            } catch (e: Exception) {
+                WepWawetLogger.proxyWarn("$TAG: awaitCompletion wrapper exception",
+                    "exception" to e.javaClass.name, "message" to (e.message ?: ""))
+                if (downloadError == null) {
+                    downloadError = e
+                }
+            }
+
+            // Stop the heartbeat thread
+            heartbeatThread.interrupt()
+
             downloader.removeListener(listener)
             try { downloader.close() } catch (_: Exception) {}
+            WepWawetLogger.proxy("$TAG: downloader closed",
+                "files_done" to filesCompleted.get(),
+                "chunks_done" to chunksCompleted.get(),
+                "depots_done" to depotsCompleted.get(),
+                "chunk_bytes" to lastChunkBytes.get(),
+                "total_elapsed_ms" to (System.currentTimeMillis() - downloadStartMs))
 
             if (downloadError != null) {
                 onStatusUpdate("Download failed: ${downloadError!!.message}")
@@ -213,16 +388,32 @@ class WorkshopDownloader(
             }
 
             onStatusUpdate("Locating downloaded .pkg file...")
+            WepWawetLogger.proxy("$TAG: scanning install dir for .pkg",
+                "dir" to installDir.absolutePath)
             val pkgFile = findPkgFile(installDir)
             if (pkgFile == null || !pkgFile.exists()) {
-                WepWawetLogger.proxyWarn("$TAG: no .pkg found", "dir" to installDir.absolutePath)
-                onStatusUpdate("No .pkg file found after download")
+                // List directory contents so we can see what *was* downloaded
+                val listing = installDir.walkTopDown().toList().take(20).joinToString("\n  ") { f ->
+                    "${if (f.isDirectory) "[DIR] " else ""}${f.name} (${f.length()} B)"
+                }
+                WepWawetLogger.proxyWarn("$TAG: no .pkg found",
+                    "dir" to installDir.absolutePath,
+                    "dir_listing" to listing)
+                onStatusUpdate("No .pkg file found after download (see logs for directory listing)")
                 return@withContext null
             }
-            WepWawetLogger.proxy("$TAG: .pkg found", "file" to pkgFile.absolutePath, "size" to pkgFile.length())
+            WepWawetLogger.proxy("$TAG: .pkg found",
+                "file" to pkgFile.absolutePath,
+                "size" to pkgFile.length(),
+                "files_done" to filesCompleted.get(),
+                "chunks_done" to chunksCompleted.get(),
+                "depots_done" to depotsCompleted.get())
 
             pkgFile.copyTo(outputFile, overwrite = true)
-            WepWawetLogger.proxy("$TAG COMPLETE", "output" to outputFile.name, "size" to outputFile.length())
+            WepWawetLogger.proxy("$TAG COMPLETE",
+                "output" to outputFile.name,
+                "size" to outputFile.length(),
+                "total_elapsed_ms" to (System.currentTimeMillis() - downloadStartMs))
             onStatusUpdate("Downloaded ${formatBytes(outputFile.length())} .pkg")
             try { installDir.deleteRecursively() } catch (_: Exception) {}
             outputFile

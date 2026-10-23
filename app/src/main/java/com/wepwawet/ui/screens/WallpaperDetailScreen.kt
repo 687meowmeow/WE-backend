@@ -39,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -102,6 +103,19 @@ fun WallpaperDetailScreen(
     var isSending by remember { mutableStateOf(false) }
     var sendProgress by remember { mutableStateOf(0f) }  // progress for send-to-phone Steam download
     var statusMessage by remember { mutableStateOf<String?>(null) }
+
+    // === Workshop download state — observed from a singleton so the download
+    //     survives the user navigating away from this screen. The previous
+    //     implementation used rememberCoroutineScope() which was cancelled when
+    //     the composable left composition, killing the download mid-flight. ===
+    val downloadState by com.wepwawet.pairing.WorkshopDownloadJob.state.collectAsState()
+    // True if THIS screen's item is the one currently being downloaded.
+    val isThisItemDownloading = downloadState.isRunning &&
+        downloadState.workshopId == itemId
+    // True if we've gotten at least one chunk-level progress callback. If false,
+    // show an indeterminate progress bar (determinate bar would sit at 0% and
+    // look broken for small downloads that arrive in a single chunk).
+    val hasChunkProgress = downloadState.hasChunkProgress
 
     // Track whether the user has Steam credentials set up (for JavaSteam direct download)
     var hasSteamCredentials by remember { mutableStateOf(com.wepwawet.pairing.SteamCredentialsStore.hasCredentials(context)) }
@@ -264,33 +278,71 @@ fun WallpaperDetailScreen(
             }
 
             // === Status message (download/send feedback) ===
+            // Shows EITHER:
+            //   - the legacy send-to-phone `statusMessage` (set via scope.launch)
+            //   - the singleton download job's status (from WorkshopDownloadJob)
+            // Prefer the singleton message when this screen's item is the active
+            // download — otherwise fall back to the legacy statusMessage.
             item {
-                statusMessage?.let {
+                val msg = if (isThisItemDownloading || downloadState.workshopId == itemId) {
+                    downloadState.status.ifBlank { statusMessage }
+                } else {
+                    statusMessage
+                }
+                val resultMsg = if (!isThisItemDownloading && downloadState.workshopId == itemId) {
+                    downloadState.resultMessage ?: downloadState.errorMessage
+                } else null
+                val text = resultMsg ?: msg
+                if (!text.isNullOrBlank()) {
                     Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        color = if (downloadState.errorMessage != null && downloadState.workshopId == itemId)
+                            MaterialTheme.colorScheme.errorContainer
+                        else MaterialTheme.colorScheme.secondaryContainer,
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
-                            it,
+                            text,
                             modifier = Modifier.padding(12.dp),
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            color = if (downloadState.errorMessage != null && downloadState.workshopId == itemId)
+                                MaterialTheme.colorScheme.onErrorContainer
+                            else MaterialTheme.colorScheme.onSecondaryContainer,
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
                 }
             }
 
-            // === Progress bar (shows during download + transfer) ===
-            if (isSending) {
+            // === Progress bar ===
+            // Shows during:
+            //   - legacy send-to-phone flow (`isSending`)
+            //   - singleton download job for THIS item (uses indeterminate bar when
+            //     no chunk-level progress callbacks have fired yet — for small
+            //     downloads that arrive in a single chunk, the determinate bar
+            //     would otherwise sit at 0% the whole time and look broken).
+            if (isSending || isThisItemDownloading) {
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        LinearProgressIndicator(
-                            progress = { sendProgress },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        val progress = when {
+                            isThisItemDownloading -> downloadState.progress
+                            else -> sendProgress
+                        }
+                        // Show indeterminate bar when we're past the connect/auth
+                        // phase but still haven't seen any chunk progress (typical
+                        // for small workshop items that arrive in a single chunk).
+                        if (isThisItemDownloading && !hasChunkProgress && downloadState.progress < 1f) {
+                            LinearProgressIndicator(
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                progress = { progress },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                         Text(
-                            statusMessage ?: "Working...",
+                            if (isThisItemDownloading) downloadState.status
+                            else statusMessage ?: "Working...",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -302,7 +354,7 @@ fun WallpaperDetailScreen(
             item {
                 Button(
                     onClick = {
-                        if (!isSending) {
+                        if (!isSending && !downloadState.isRunning) {
                             sendProgress = 0f
                             onSendToPhoneClicked(context, current, scope,
                                 { isSending = true; statusMessage = it; sendProgress = 0f },
@@ -310,7 +362,7 @@ fun WallpaperDetailScreen(
                                 { progress -> sendProgress = progress })
                         }
                     },
-                    enabled = !isSending,
+                    enabled = !isSending && !downloadState.isRunning,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Filled.Send, contentDescription = null)
@@ -351,24 +403,29 @@ fun WallpaperDetailScreen(
                 }
             }
 
-            // === Debug: Save .mpkg to Downloads — now downloads REAL .pkg via JavaSteam ===
+            // === Debug: Save .mpkg to Downloads — now runs via WorkshopDownloadJob
+            //     (singleton, app-scoped) so the download survives the user
+            //     navigating away from this screen. ===
             item {
                 OutlinedButton(
                     onClick = {
-                        if (!isSending) {
-                            sendProgress = 0f
-                            onDownloadMpkgClicked(context, current, scope,
-                                { isSending = true; statusMessage = it; sendProgress = 0f },
-                                { isSending = false; statusMessage = it },
-                                { progress -> sendProgress = progress })
+                        if (!isSending && !downloadState.isRunning) {
+                            com.wepwawet.pairing.WorkshopDownloadJob.launchDebugDownload(context, current)
                         }
                     },
-                    enabled = !isSending,
+                    enabled = !isSending && !downloadState.isRunning,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Filled.Download, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Save .mpkg to Downloads (debug)")
+                    Text(
+                        when {
+                            isThisItemDownloading -> "Downloading…"
+                            downloadState.workshopId == itemId && downloadState.resultMessage != null -> "Saved ✓ (tap again to re-download)"
+                            downloadState.workshopId == itemId && downloadState.errorMessage != null -> "Retry download"
+                            else -> "Save .mpkg to Downloads (debug)"
+                        }
+                    )
                 }
             }
 

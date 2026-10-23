@@ -12,6 +12,9 @@ import android.util.Log
 import androidx.work.Configuration
 import com.wepwawet.log.CrashHandler
 import com.wepwawet.log.WepWawetLogger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import java.io.File
 
 /**
@@ -104,6 +107,13 @@ class WepWawetApplication : Application(), Configuration.Provider {
         runCatching {
             appendToBootBreadcrumb("onCreate complete\n")
         }
+
+        // Initialize the application-scoped coroutine supervisor. This survives
+        // Activity/Fragment/Composable destruction — used by WorkshopDownloadJob
+        // so that downloads continue even if the user navigates away from the
+        // detail screen while a download is in flight.
+        appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        WepWawetLogger.appInfo("appScope initialized")
     }
 
     /**
@@ -245,5 +255,14 @@ class WepWawetApplication : Application(), Configuration.Provider {
         private const val TAG = "WepWawet-App"
         const val CHANNEL_PROXY = "wepwawet.proxy"
         const val CHANNEL_WINE = "wepwawet.wine"
+
+        /**
+         * App-scoped CoroutineScope. Initialized in onCreate. Use for
+         * background work that must outlive any Activity/Composable
+         * (e.g. WorkshopDownloadJob launches downloads here so the user
+         * can navigate away without cancelling the download).
+         */
+        lateinit var appScope: CoroutineScope
+            private set
     }
 }
