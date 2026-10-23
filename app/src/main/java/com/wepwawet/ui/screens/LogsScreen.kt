@@ -5,19 +5,23 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -27,9 +31,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableBooleanStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -38,17 +47,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wepwawet.log.LogEntry
+import com.wepwawet.log.PublicDownloadsWriter
 import com.wepwawet.log.WepWawetLogger
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.format.DateTimeFormatter
 import java.time.ZoneId
+import java.time.ZonedDateTime
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LogsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val events = remember { mutableStateListOf<LogEntry>() }
     val tick = remember { mutableIntStateOf(0) }
+    var isDownloading by remember { mutableBooleanStateOf(false) }
+    var downloadStatus by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -81,6 +98,77 @@ fun LogsScreen(onBack: () -> Unit) {
         Toast.makeText(context, "Copied ${events.size} log entries", Toast.LENGTH_SHORT).show()
     }
 
+    /**
+     * Download the full log buffer to the public Downloads/WepWawet/
+     * directory as a timestamped .txt file. Uses MediaStore on Android 10+
+     * (no permission needed). The file appears in the user's Downloads
+     * folder immediately — they can attach it to bug reports or share it.
+     */
+    fun downloadLogs() {
+        if (isDownloading) return
+        isDownloading = true
+        downloadStatus = "Writing ${events.size} log entries to Downloads/WepWawet/…"
+        val snapshot = events.toList()
+        val timestamp = ZonedDateTime.now().format(
+            DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
+        )
+        val fileName = "wepwawet-logs-$timestamp.txt"
+        // Build the log text on a background thread — for thousands of entries
+        // this could be slow on the UI thread.
+        scope.launch(Dispatchers.IO) {
+            try {
+                val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")
+                    .withZone(ZoneId.systemDefault())
+                val sb = StringBuilder(snapshot.size * 200)  // ~200 bytes per entry estimate
+                sb.append("=== WepWawet log dump ===\n")
+                sb.append("Generated: ").append(ZonedDateTime.now()).append("\n")
+                sb.append("Entries: ").append(snapshot.size).append("\n")
+                sb.append("\n")
+                for (entry in snapshot) {  // snapshot is in oldest-first order
+                    sb.append("[${formatter.format(entry.timestamp)}] ")
+                    sb.append("[${entry.domain.tag}] ${entry.level.name}: ${entry.message}")
+                    if (entry.context.isNotEmpty()) {
+                        sb.append(" ")
+                        sb.append(entry.context.entries.joinToString(" ") { "${it.key}=${it.value ?: "null"}" })
+                    }
+                    if (entry.exceptionStackTrace != null) {
+                        sb.append("\n")
+                        sb.append(entry.exceptionStackTrace)
+                    }
+                    sb.append("\n")
+                }
+                val text = sb.toString()
+                val uri = PublicDownloadsWriter.writeText(context, fileName, text)
+                withContext(Dispatchers.Main) {
+                    if (uri != null) {
+                        downloadStatus = "Saved ${snapshot.size} entries to Downloads/WepWawet/$fileName"
+                        Toast.makeText(context,
+                            "Saved to Downloads/WepWawet/$fileName",
+                            Toast.LENGTH_LONG).show()
+                        WepWawetLogger.appInfo("LogsScreen.downloadLogs success",
+                            "file" to fileName,
+                            "bytes" to text.length,
+                            "entries" to snapshot.size)
+                    } else {
+                        downloadStatus = "Failed to write log file (see logcat)"
+                        Toast.makeText(context, "Failed to write log file", Toast.LENGTH_LONG).show()
+                    }
+                    isDownloading = false
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    downloadStatus = "Error: ${e.message}"
+                    Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                    WepWawetLogger.appError("LogsScreen.downloadLogs failed",
+                        "exception" to e.javaClass.name,
+                        "message" to (e.message ?: ""),
+                        exception = e)
+                    isDownloading = false
+                }
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -91,6 +179,20 @@ fun LogsScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
+                    // Download logs to Downloads/WepWawet/
+                    IconButton(
+                        onClick = { downloadLogs() },
+                        enabled = !isDownloading && events.isNotEmpty(),
+                    ) {
+                        if (isDownloading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.padding(8.dp).size(20.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Icon(Icons.Filled.Download, contentDescription = "Download logs")
+                        }
+                    }
                     IconButton(onClick = { copyLogs() }) {
                         Icon(Icons.Filled.ContentCopy, contentDescription = "Copy logs")
                     }
@@ -104,31 +206,47 @@ fun LogsScreen(onBack: () -> Unit) {
             )
         }
     ) { padding ->
-        if (events.isEmpty()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .padding(16.dp),
-                horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(
-                    "No logs yet. Start the pairing proxy from the Pairing tab to see protocol messages.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                )
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // Status message after downloadLogs (fades away after 5s)
+            downloadStatus?.let { status ->
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    ),
+                ) {
+                    Text(
+                        status,
+                        modifier = Modifier.padding(12.dp),
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                LaunchedEffect(status) {
+                    delay(5000)
+                    downloadStatus = null
+                }
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                items(events.reversed(), key = { it.seq }) { entry ->
-                    LogEntryRow(entry)
+            if (events.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = androidx.compose.ui.Alignment.Center,
+                ) {
+                    Text(
+                        "No logs yet. Start the pairing proxy from the Pairing tab to see protocol messages.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.padding(24.dp),
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize().padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    items(events.reversed(), key = { it.seq }) { entry ->
+                        LogEntryRow(entry)
+                    }
                 }
             }
         }

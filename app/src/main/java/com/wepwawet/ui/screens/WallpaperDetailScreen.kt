@@ -32,6 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -313,6 +314,29 @@ fun WallpaperDetailScreen(
                 }
             }
 
+            // === Debug: Save .mpkg to Downloads for inspection ===
+            // Lets the user (and us) inspect the actual .mpkg file we generate
+            // via `xxd`, `binwalk`, `strings`, etc. If WE rejects the .mpkg,
+            // comparing our output to a real .mpkg from a Windows PC will
+            // reveal exactly which bytes are wrong.
+            item {
+                OutlinedButton(
+                    onClick = {
+                        if (!isSending) {
+                            onDownloadMpkgClicked(context, current, scope,
+                                { isSending = true; statusMessage = it },
+                                { isSending = false; statusMessage = it })
+                        }
+                    },
+                    enabled = !isSending,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Filled.Download, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Save .mpkg to Downloads (debug)")
+                }
+            }
+
             // === Bottom spacer ===
             item { Spacer(Modifier.height(48.dp)) }
         }
@@ -379,10 +403,6 @@ private fun onSendToPhoneClicked(
                 "size" to previewFile.length())
 
             // === Step 2: Pack the preview into a .mpkg file ===
-            // Use a unique filename per send so multiple rapid taps don't
-            // overwrite each other in the cache dir (each queue entry holds
-            // a File reference, not the bytes — overwriting the file mid-
-            // transfer would corrupt the .mpkg).
             val sendId = System.currentTimeMillis()
             val mpkgFile = java.io.File(context.cacheDir, "${item.id}_$sendId.mpkg")
             WepWawetLogger.workshop("send-to-phone: packing .mpkg",
@@ -416,9 +436,6 @@ private fun onSendToPhoneClicked(
                 "size" to mpkgFile.length())
 
             // === Step 3: Queue for transfer ===
-            // The transfer happens on the next heartbeat from the phone
-            // (typically every 3 seconds). The WePairingServer.commandLoop
-            // polls pendingWallpapers and calls transferWallpaper.
             val deviceName = PairingService.pairedDeviceName ?: "phone"
             PairingService.queueWallpaper(mpkgFile, item.title)
             WepWawetLogger.workshop("send-to-phone: queued",
@@ -429,6 +446,76 @@ private fun onSendToPhoneClicked(
             onEnd("Queued for transfer to $deviceName. Transfer starts on next heartbeat (~3s).")
         } catch (e: Exception) {
             WepWawetLogger.workshopWarn("send-to-phone: unhandled exception",
+                "exception" to e.javaClass.name,
+                "message" to (e.message ?: ""))
+            onEnd("Error: ${e.message}")
+        }
+    }
+}
+
+/**
+ * Debug download-.mpkg click handler. Generates the same .mpkg that
+ * onSendToPhoneClicked would queue for transfer, but instead saves it
+ * directly to the user's Downloads/WepWawet/ folder so they can inspect
+ * the binary with `xxd`, `binwalk`, `strings`, etc.
+ *
+ * This is critical for debugging: if WE rejects the .mpkg, comparing our
+ * output to a real .mpkg from a Windows PC will reveal exactly which bytes
+ * are wrong (wrong magic, wrong project.json schema, missing fields, etc.).
+ *
+ * @param onStart called when the operation begins (with a status message)
+ * @param onEnd called when the operation ends (with a final status message)
+ */
+private fun onDownloadMpkgClicked(
+    context: Context,
+    item: WorkshopItemTyped,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onStart: (String) -> Unit,
+    onEnd: (String) -> Unit,
+) {
+    WepWawetLogger.workshop("download-mpkg (debug) tapped",
+        "id" to item.id,
+        "title" to item.title.take(80))
+    onStart("Preparing .mpkg for download…")
+    scope.launch {
+        try {
+            // Step 1: Download the preview image
+            val previewFile = downloadWallpaper(context, item) { }
+            if (previewFile == null || !previewFile.exists()) {
+                onEnd("Failed to download preview image.")
+                return@launch
+            }
+
+            // Step 2: Pack the preview into a .mpkg file in the cache dir
+            val sendId = System.currentTimeMillis()
+            val cacheMpkg = java.io.File(context.cacheDir, "${item.id}_$sendId.mpkg")
+            com.wepwawet.pairing.MpkgPacker.packImageWallpaper(
+                item = item,
+                imageFile = previewFile,
+                imageVPath = "preview.jpg",
+                outputFile = cacheMpkg,
+            )
+            if (!cacheMpkg.exists() || cacheMpkg.length() == 0L) {
+                onEnd("Failed to create .mpkg file")
+                return@launch
+            }
+
+            // Step 3: Copy the .mpkg to the public Downloads/WepWawet/ folder
+            val bytes = cacheMpkg.readBytes()
+            val downloadsName = "${item.id}_debug.mpkg"
+            val uri = com.wepwawet.log.PublicDownloadsWriter.writeBytes(
+                context, downloadsName, bytes)
+            if (uri != null) {
+                WepWawetLogger.workshop("download-mpkg: saved to Downloads",
+                    "file" to downloadsName,
+                    "size" to bytes.size,
+                    "uri" to uri.toString())
+                onEnd("Saved ${bytes.size} bytes to Downloads/WepWawet/$downloadsName")
+            } else {
+                onEnd("Failed to write .mpkg to Downloads (see logs)")
+            }
+        } catch (e: Exception) {
+            WepWawetLogger.workshopWarn("download-mpkg: failed",
                 "exception" to e.javaClass.name,
                 "message" to (e.message ?: ""))
             onEnd("Error: ${e.message}")
