@@ -48,6 +48,18 @@ android {
                 keyPassword = keyPass
             }
         }
+        // Stable debug keystore committed to the repo so all builds (local + CI)
+        // are signed with the SAME key. Without this, each CI runner generates a
+        // fresh debug keystore, so users would have to uninstall before each
+        // upgrade — losing Steam credentials + refresh tokens.
+        // The keystore is committed at app/debug.keystore with the standard
+        // Android debug password "android" (well-known, not a secret).
+        create("stableDebug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {
@@ -55,12 +67,12 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Use release signing if keystore is set; otherwise debug-sign
+            // Use release signing if keystore is set; otherwise stable debug
             // (debug-signed APK is fine for sideloading — just not for Play Store)
             signingConfig = if (System.getenv("WEPWAWET_KEYSTORE_PATH") != null) {
                 signingConfigs.findByName("release")
             } else {
-                signingConfigs.findByName("debug")
+                signingConfigs.findByName("stableDebug")
             }
             // Native libs are extracted at install time so they can be loaded directly
             // (Winlator requires this for the Box64 binary that's exec'd)
@@ -69,6 +81,8 @@ android {
             isDebuggable = true
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            // Use the stable debug keystore so CI + local builds match
+            signingConfig = signingConfigs.findByName("stableDebug")
             // Multi-APK not needed for debug builds
         }
     }
