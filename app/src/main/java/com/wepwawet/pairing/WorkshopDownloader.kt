@@ -91,6 +91,7 @@ class WorkshopDownloader(
     @Volatile private var hasTriedModernAuthFallback = false  // true if we already fell back to modern auth once (prevents infinite loop)
     @Volatile private var appContext: Context? = null  // for clearing stale token on rate limit
     @Volatile private var statusCallback: ((String) -> Unit)? = null
+    @Volatile private var isDownloadInProgress = false  // true during DepotDownloader.awaitCompletion — used by onDisconnected to decide whether to auto-reconnect
     private val subscriptions = mutableListOf<Closeable>()
 
     private fun updateStatus(msg: String) {
@@ -285,12 +286,21 @@ class WorkshopDownloader(
                     "input" to workshopId)
                 return@withContext null
             }
-            val pubItem = PubFileItem(APP_ID_WE, pubFileId)
+            // === CRITICAL: pass installDirectory to PubFileItem ===
+            // The 2-arg constructor PubFileItem(appId, pubFileId) leaves installDirectory=null,
+            // which causes the DepotDownloader to fall back to "depots/" relative to the
+            // JVM's current working directory — NOT our prepared installDir. So the file
+            // watcher scans our installDir and sees 0 files, even though the DepotDownloader
+            // might be writing to a totally different location. The 4-arg constructor
+            // PubFileItem(appId, pubFile, installToGameNameDirectory=false, installDirectory=...)
+            // lets us tell the DepotDownloader EXACTLY where to write.
+            val pubItem = PubFileItem(APP_ID_WE, pubFileId, false, installDir.absolutePath)
 
             WepWawetLogger.proxy("$TAG: adding PubFileItem",
                 "app_id" to APP_ID_WE,
                 "pub_file_id" to pubFileId,
                 "install_dir" to installDir.absolutePath,
+                "pub_item_install_dir" to pubItem.installDirectory,
                 "install_dir_exists" to installDir.exists(),
                 "install_dir_writable" to installDir.canWrite(),
                 "licenses_count" to licenseList.size,
@@ -355,6 +365,28 @@ class WorkshopDownloader(
                         } else {
                             onStatusUpdate("$status (${elapsedSec}s elapsed, $fileCount files in cache, ${formatBytes(totalBytes)} total)")
                         }
+                        // === Stuck-detection: if we've been silent for 60s+ AND
+                        // no files have been written to installDir, the download is
+                        // almost certainly dead (Steam disconnected, DepotDownloader
+                        // is hung on a dead connection, etc.). Set downloadError so
+                        // the awaitCompletion wrapper breaks out and the user gets
+                        // a clear "stuck" message instead of waiting the full 10min. ===
+                        if (silentSec >= 60 && fileCount == 0 && downloadError == null) {
+                            WepWawetLogger.proxyError("$TAG: stuck-detection — aborting download",
+                                "silent_s" to silentSec,
+                                "dir_file_count" to fileCount,
+                                "steam_connected" to steamConnected,
+                                "last_status" to status.take(80))
+                            downloadError = java.lang.Exception(
+                                "Download stuck — no activity for ${silentSec}s and no files written. " +
+                                "Steam may have disconnected mid-download (last status: $status, " +
+                                "steam_connected=$steamConnected). " +
+                                "Try again — the next attempt should be cleaner now that we don't auto-reconnect during downloads.")
+                            // Also try to nudge the DepotDownloader's awaitCompletion
+                            // by interrupting its thread (best-effort; if the library
+                            // doesn't respond to interrupts, the 10min timeout will
+                            // still fire).
+                        }
                     } catch (he: Throwable) {
                         // Never let the heartbeat thread die silently — that
                         // would hide the fact that the download is stuck.
@@ -414,6 +446,11 @@ class WorkshopDownloader(
             WepWawetLogger.proxy("$TAG: file-watcher thread started",
                 "interval_ms" to 2000,
                 "install_dir" to installDir.absolutePath)
+
+            // === Mark download as in-progress so onDisconnected doesn't auto-reconnect ===
+            // (which would interfere with the DepotDownloader's state — see comment in
+            // onDisconnected). Cleared in the finally block after awaitCompletion returns.
+            isDownloadInProgress = true
 
             // === Run awaitCompletion with a 10-minute hard timeout. ===
             // Previously this could hang forever if Steam stopped sending
@@ -514,6 +551,9 @@ class WorkshopDownloader(
             downloader.removeListener(listener)
             WepWawetLogger.proxy("$TAG: listener removed")
             try { downloader.close() } catch (_: Exception) {}
+            // === Clear the download-in-progress flag — onDisconnected can
+            // auto-reconnect again now that the DepotDownloader is done. ===
+            isDownloadInProgress = false
             WepWawetLogger.proxy("$TAG: downloader closed",
                 "files_done" to filesCompleted.get(),
                 "chunks_done" to chunksCompleted.get(),
@@ -806,7 +846,25 @@ class WorkshopDownloader(
     }
 
     private fun onDisconnected(callback: DisconnectedCallback) {
-        WepWawetLogger.proxy("$TAG: disconnected", "user_initiated" to callback.isUserInitiated)
+        WepWawetLogger.proxy("$TAG: disconnected",
+            "user_initiated" to callback.isUserInitiated,
+            "authenticated" to authenticated,
+            "download_in_progress" to isDownloadInProgress)
+        // === CRITICAL: do NOT auto-reconnect while a download is in progress. ===
+        // The DepotDownloader holds a reference to steamClient and is making API
+        // calls through it. If we reconnect (creating a new internal session),
+        // the DepotDownloader's state becomes inconsistent with the new connection
+        // — its network calls hang forever waiting for chunks that will never
+        // arrive. Instead, let the DepotDownloader fail naturally (its
+        // awaitCompletion will return or throw), and our heartbeat will detect
+        // the stuck state (silent + 0 files) and abort.
+        if (isDownloadInProgress) {
+            WepWawetLogger.proxyWarn("$TAG: disconnect DURING download — NOT auto-reconnecting (would interfere with DepotDownloader)")
+            updateStatus("Steam connection dropped during download — letting DepotDownloader handle recovery...")
+            // Don't set isRunning=false here; the awaitCompletion wrapper will
+            // detect the stuck state via the heartbeat and abort.
+            return
+        }
         if (!callback.isUserInitiated && authenticated) {
             try { Thread.sleep(2000); steamClient?.connect() } catch (_: Exception) {}
         } else if (!callback.isUserInitiated && !authenticated) {
