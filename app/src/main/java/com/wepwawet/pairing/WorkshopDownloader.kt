@@ -87,6 +87,8 @@ class WorkshopDownloader(
     @Volatile private var authInProgress = false
     @Volatile private var isRetrying = false  // true during TryAnotherCM retry
     @Volatile private var usedRefreshToken = false  // true if we tried refresh token login
+    @Volatile private var hasValidToken = false  // true after auth session succeeds (token saved)
+    @Volatile private var appContext: Context? = null  // for clearing stale token on rate limit
     @Volatile private var statusCallback: ((String) -> Unit)? = null
     private val subscriptions = mutableListOf<Closeable>()
 
@@ -247,6 +249,7 @@ class WorkshopDownloader(
             .writeTimeout(60, TimeUnit.SECONDS)
             .build()
 
+        appContext = context
         steamClient = SteamClient(SteamConfiguration.create { it.withHttpClient(httpClient) })
         callbackManager = CallbackManager(steamClient!!)
         steamUser = steamClient!!.getHandler(SteamUser::class.java)
@@ -305,6 +308,11 @@ class WorkshopDownloader(
         val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         val savedToken = prefs.getString(KEY_REFRESH_TOKEN, null)
         val savedAccountName = prefs.getString(KEY_ACCOUNT_NAME, null)
+        WepWawetLogger.proxy("$TAG: checking for saved refresh token",
+            "has_token" to !savedToken.isNullOrBlank(),
+            "has_account_name" to !savedAccountName.isNullOrBlank(),
+            "token_length" to (savedToken?.length ?: 0),
+            "account_name" to (savedAccountName ?: "null"))
         if (!savedToken.isNullOrBlank() && !savedAccountName.isNullOrBlank()) {
             WepWawetLogger.proxy("$TAG: trying saved refresh token",
                 "account_name" to savedAccountName,
@@ -358,6 +366,7 @@ class WorkshopDownloader(
                             .putString(KEY_REFRESH_TOKEN, result.refreshToken)
                             .putString(KEY_ACCOUNT_NAME, result.accountName)
                             .apply()
+                        hasValidToken = true
                         WepWawetLogger.proxy("$TAG: refresh token + account name saved ✓ (survives app updates)",
                             "account_name" to result.accountName)
                     }
@@ -391,12 +400,14 @@ class WorkshopDownloader(
     private fun onLoggedOn(callback: LoggedOnCallback) {
         if (callback.result != EResult.OK) {
             WepWawetLogger.proxyError("$TAG: logon failed", "result" to callback.result,
-                "used_refresh_token" to usedRefreshToken)
+                "used_refresh_token" to usedRefreshToken,
+                "has_valid_token" to hasValidToken)
             if (callback.result == EResult.TryAnotherCM && cmRetries < 5) {
                 cmRetries++
                 isRetrying = true
                 authInProgress = false
                 WepWawetLogger.proxy("$TAG: TryAnotherCM — retry #$cmRetries with different CM server...")
+                updateStatus("Switching to different Steam server (retry $cmRetries)...")
                 try { Thread.sleep(3000); steamClient?.connect() } catch (_: Exception) {}
                 return
             }
@@ -407,11 +418,10 @@ class WorkshopDownloader(
                 usedRefreshToken = false
                 authInProgress = false
                 // Clear the stale refresh token
-                val prefs = android.content.Context::class.java.let { _ ->
-                    // Can't access context here, but we'll clear it next time we save
-                }
-                // Start modern auth flow by calling onConnected's step 2
-                // We need to re-enter the auth flow — disconnect and reconnect
+                appContext?.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                    ?.edit()?.remove(KEY_REFRESH_TOKEN)?.remove(KEY_ACCOUNT_NAME)?.apply()
+                WepWawetLogger.proxy("$TAG: stale refresh token cleared")
+                // Reconnect — onConnected will start modern auth flow
                 try {
                     updateStatus("Refresh token expired — reconnecting for fresh login...")
                     steamClient?.disconnect()
@@ -420,16 +430,22 @@ class WorkshopDownloader(
                 } catch (_: Exception) {}
                 return
             }
+            // Clear stale token on RateLimitExceeded
+            if (callback.result == EResult.RateLimitExceeded) {
+                appContext?.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                    ?.edit()?.remove(KEY_REFRESH_TOKEN)?.remove(KEY_ACCOUNT_NAME)?.apply()
+            }
             // Provide user-friendly error messages
             val friendlyError = when (callback.result) {
                 EResult.InvalidPassword -> "Invalid password (or 2FA code needed/expired)"
                 EResult.AccountLogonDenied -> "Steam Guard email code required"
                 EResult.TwoFactorCodeMismatch -> "Steam Guard 2FA code is wrong or expired"
                 EResult.AccountDisabled -> "Steam account is disabled"
-                EResult.RateLimitExceeded -> "Rate limit exceeded — wait 30 minutes"
+                EResult.RateLimitExceeded -> "Steam rate limit exceeded — wait 30 minutes and try again"
                 else -> "Steam logon failed: ${callback.result}"
             }
             downloadError = java.lang.Exception(friendlyError)
+            updateStatus("Login failed: $friendlyError")
             isRunning = false
             return
         }

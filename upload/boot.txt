@@ -1,10 +1,10 @@
 === WepWawet boot ===
-Time: 2026-10-23T16:19:15.865Z
+Time: 2026-10-23T17:09:37.667Z
 Device: OnePlus CPH2749 (OP611FL1)
 Android: 16 (SDK 36)
 ABI: arm64-v8a
 App version: 0.1.0-alpha (1)
-Git sha: c7295c3
-Build time: 2026-10-23T16:14:05Z
+Git sha: 2bb15a7
+Build time: 2026-10-23T17:00:18Z
 --- onCreate starting ---
 onCreate complete

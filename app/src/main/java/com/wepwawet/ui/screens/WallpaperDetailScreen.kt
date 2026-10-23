@@ -351,18 +351,16 @@ fun WallpaperDetailScreen(
                 }
             }
 
-            // === Debug: Save .mpkg to Downloads for inspection ===
-            // Lets the user (and us) inspect the actual .mpkg file we generate
-            // via `xxd`, `binwalk`, `strings`, etc. If WE rejects the .mpkg,
-            // comparing our output to a real .mpkg from a Windows PC will
-            // reveal exactly which bytes are wrong.
+            // === Debug: Save .mpkg to Downloads — now downloads REAL .pkg via JavaSteam ===
             item {
                 OutlinedButton(
                     onClick = {
                         if (!isSending) {
+                            sendProgress = 0f
                             onDownloadMpkgClicked(context, current, scope,
-                                { isSending = true; statusMessage = it },
-                                { isSending = false; statusMessage = it })
+                                { isSending = true; statusMessage = it; sendProgress = 0f },
+                                { isSending = false; statusMessage = it },
+                                { progress -> sendProgress = progress })
                         }
                     },
                     enabled = !isSending,
@@ -640,6 +638,7 @@ private fun onDownloadMpkgClicked(
     scope: kotlinx.coroutines.CoroutineScope,
     onStart: (String) -> Unit,
     onEnd: (String) -> Unit,
+    onProgress: (Float) -> Unit,
 ) {
     WepWawetLogger.workshop("download-mpkg (debug) tapped",
         "id" to item.id,
@@ -664,7 +663,7 @@ private fun onDownloadMpkgClicked(
                     context = context,
                     workshopId = item.id,
                     outputFile = pkgFile,
-                    onProgress = { },
+                    onProgress = { pct -> onProgress(pct * 0.8f) },
                     onStatusUpdate = { status ->
                         WepWawetLogger.workshop("download-mpkg: JavaSteam status", "status" to status)
                     },
