@@ -62,13 +62,13 @@
 }
 
 # JavaSteam (SteamKit2 Java port) — keep all classes
--keep class `in`.dragonbra.javasteam.** { *; }
--dontwarn `in`.dragonbra.javasteam.**
+-keep class in.dragonbra.javasteam.** { *; }
+-dontwarn in.dragonbra.javasteam.**
 -keep class kotlinx.coroutines.** { *; }
 -dontwarn kotlinx.coroutines.**
 -keep class org.bouncycastle.** { *; }
 -dontwarn org.bouncycastle.**
 -keep class io.ktor.** { *; }
 -dontwarn io.ktor.**
--keep class `in`.dragonbra.javasteam.depotdownloader.** { *; }
--dontwarn `in`.dragonbra.javasteam.depotdownloader.**
+-keep class in.dragonbra.javasteam.depotdownloader.** { *; }
+-dontwarn in.dragonbra.javasteam.depotdownloader.**
