@@ -22,9 +22,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Upload
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.VideoCall
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -105,81 +102,11 @@ fun WallpaperDetailScreen(
     var isSending by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
 
-    // File picker state — for picking local .pkg, image, or video files
-    var pickedPkgUri by remember { mutableStateOf<android.net.Uri?>(null) }
-    var pickedImageUri by remember { mutableStateOf<android.net.Uri?>(null) }
-    var pickedVideoUri by remember { mutableStateOf<android.net.Uri?>(null) }
-
-    // File picker launchers — uses ActivityResultContracts.OpenDocument for
-    // arbitrary MIME types, with persistent permission so we can read the file
-    // asynchronously after the picker returns.
-    val pkgPicker = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            WepWawetLogger.workshop("File picker: .pkg picked",
-                "uri" to uri.toString(),
-                "host" to uri.host,
-                "path" to uri.path)
-            try {
-                context.contentResolver.takePersistableUriPermission(
-                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (_: SecurityException) {
-                // Some providers don't allow persistable permission
-                WepWawetLogger.workshopDebug("File picker: persistable permission denied — using one-shot")
-            }
-            pickedPkgUri = uri
-            // Trigger the actual send flow
-            item?.let {
-                onPickLocalPkgClicked(context, it, scope, uri,
-                    { isSending = true; statusMessage = it },
-                    { isSending = false; statusMessage = it })
-            }
-        } else {
-            WepWawetLogger.workshopWarn("File picker: no .pkg selected")
-        }
-    }
-
-    val imagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            WepWawetLogger.workshop("File picker: image picked",
-                "uri" to uri.toString())
-            try {
-                context.contentResolver.takePersistableUriPermission(
-                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (_: SecurityException) {}
-            pickedImageUri = uri
-            item?.let {
-                onPickLocalImageClicked(context, it, scope, uri,
-                    { isSending = true; statusMessage = it },
-                    { isSending = false; statusMessage = it })
-            }
-        } else {
-            WepWawetLogger.workshopWarn("File picker: no image selected")
-        }
-    }
-
-    val videoPicker = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            WepWawetLogger.workshop("File picker: video picked",
-                "uri" to uri.toString())
-            try {
-                context.contentResolver.takePersistableUriPermission(
-                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (_: SecurityException) {}
-            pickedVideoUri = uri
-            item?.let {
-                onPickLocalVideoClicked(context, it, scope, uri,
-                    { isSending = true; statusMessage = it },
-                    { isSending = false; statusMessage = it })
-            }
-        } else {
-            WepWawetLogger.workshopWarn("File picker: no video selected")
-        }
+    // Track whether the user has GGNetwork credentials set up
+    var hasGgntwCredentials by remember { mutableStateOf(com.wepwawet.pairing.GgntwApiClient.hasCredentials(context)) }
+    // Re-check credentials whenever this screen is resumed (user might have just set them)
+    LaunchedEffect(itemId) {
+        hasGgntwCredentials = com.wepwawet.pairing.GgntwApiClient.hasCredentials(context)
     }
 
     LaunchedEffect(itemId) {
@@ -371,7 +298,7 @@ fun WallpaperDetailScreen(
                 }
             }
 
-            // === Send to phone button (downloads content) ===
+            // === Send to phone button — downloads ACTUAL .pkg content via GGNetwork ===
             item {
                 Button(
                     onClick = {
@@ -389,59 +316,35 @@ fun WallpaperDetailScreen(
                     Text(
                         if (isSending) "Sending…"
                         else if (!isPaired) "Send to phone (pair first)"
-                        else "Send to phone (download .pkg from Steam)"
+                        else if (!hasGgntwCredentials) "Send to phone (set up GGNetwork first)"
+                        else "Send to phone (real .pkg via GGNetwork)"
                     )
                 }
             }
 
-            // === Pick local .pkg file (best quality — real WE content) ===
+            // === Helper hint ===
             item {
-                OutlinedButton(
-                    onClick = {
-                        if (!isSending) {
-                            pkgPicker.launch(arrayOf("application/octet-stream", "application/x-pkg", "*/*"))
+                if (!hasGgntwCredentials) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                "GGNetwork credentials required",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                            Text(
+                                "To download the actual workshop content (not just the preview), " +
+                                "create a free account at ggntw.com and enter your email + password " +
+                                "in the Settings screen.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
                         }
-                    },
-                    enabled = !isSending,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(Icons.Filled.Upload, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Pick local .pkg file (best quality)")
-                }
-            }
-
-            // === Pick local image file (Scene) ===
-            item {
-                OutlinedButton(
-                    onClick = {
-                        if (!isSending) {
-                            imagePicker.launch(arrayOf("image/*"))
-                        }
-                    },
-                    enabled = !isSending,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(Icons.Filled.Image, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Pick local image (Scene wallpaper)")
-                }
-            }
-
-            // === Pick local video file (Video) ===
-            item {
-                OutlinedButton(
-                    onClick = {
-                        if (!isSending) {
-                            videoPicker.launch(arrayOf("video/*"))
-                        }
-                    },
-                    enabled = !isSending,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(Icons.Filled.VideoCall, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Pick local video (Video wallpaper)")
+                    }
                 }
             }
 
@@ -523,86 +426,99 @@ private fun onSendToPhoneClicked(
         "title" to item.title.take(80),
         "tags" to item.tags.joinToString(","),
         "type" to item.type.displayName,
-        "warning" to "preview-only mode — actual content requires local .pkg file")
+        "has_ggntw" to com.wepwawet.pairing.GgntwApiClient.hasCredentials(context))
+
     if (!PairingService.isPaired()) {
         val msg = "Not paired — open the Pairing tab first."
-        WepWawetLogger.workshopWarn("send-to-phone: not paired, aborting",
-            "id" to item.id)
+        WepWawetLogger.workshopWarn("send-to-phone: not paired, aborting", "id" to item.id)
         onEnd(msg)
         return
     }
 
-    WepWawetLogger.workshopWarn("send-to-phone: WARNING — sending PREVIEW ONLY",
-        "explanation" to "Steam hides the file_url for paid apps (Wallpaper Engine = app 431960). The 'preview' image is just a small 192x192 thumbnail (often an animated GIF). For the ACTUAL wallpaper content (real video file or full-resolution .tex textures), use 'Pick local .pkg file' button.",
-        "alternative" to "Use 'Pick local .pkg file' to send real content.")
+    if (!com.wepwawet.pairing.GgntwApiClient.hasCredentials(context)) {
+        val msg = "GGNetwork credentials not set. Open Settings → GGNetwork to enter your email + password (free account at ggntw.com)."
+        WepWawetLogger.workshopWarn("send-to-phone: no GGNetwork credentials", "id" to item.id)
+        onEnd(msg)
+        return
+    }
 
-    onStart("Sending PREVIEW ONLY. For real content use 'Pick local .pkg' below.")
+    onStart("Downloading real .pkg via GGNetwork (this may take 1-2 minutes)…")
     scope.launch {
         try {
-            // === Step 1: Download the preview image ===
-            WepWawetLogger.workshop("send-to-phone: step 1/3 downloading preview",
-                "id" to item.id,
-                "preview_url" to (item.previewUrl ?: "null"),
-                "preview_url_host" to (item.previewUrl?.let { runCatching { android.net.Uri.parse(it).host }.getOrNull() } ?: "null"))
-            val previewFile = downloadWallpaper(context, item) { /* progress; ignored here */ }
-            if (previewFile == null || !previewFile.exists()) {
-                val msg = "Failed to download preview image."
-                WepWawetLogger.workshopWarn("send-to-phone: preview download failed",
-                    "id" to item.id,
-                    "preview_url" to (item.previewUrl ?: "null"))
-                onEnd(msg)
+            // === Step 1: Download the actual .pkg file via GGNetwork ===
+            val workshopUrl = "https://steamcommunity.com/sharedfiles/filedetails/?id=${item.id}"
+            WepWawetLogger.workshop("send-to-phone: step 1/4 requesting .pkg download from GGNetwork",
+                "workshop_url" to workshopUrl,
+                "workshop_id" to item.id)
+
+            val sendId = System.currentTimeMillis()
+            val pkgFile = java.io.File(context.cacheDir, "${item.id}_$sendId.pkg")
+            val ggntwClient = com.wepwawet.pairing.GgntwApiClient()
+            val downloadedPkg = withContext(Dispatchers.IO) {
+                ggntwClient.downloadWorkshopPkg(
+                    context = context,
+                    workshopUrl = workshopUrl,
+                    outputFile = pkgFile,
+                    onProgress = { /* progress; logged internally */ },
+                    onStatusUpdate = { status ->
+                        WepWawetLogger.workshop("send-to-phone: GGNetwork status update",
+                            "status" to status)
+                    },
+                )
+            }
+
+            if (downloadedPkg == null || !downloadedPkg.exists() || downloadedPkg.length() == 0L) {
+                WepWawetLogger.workshopWarn("send-to-phone: step 1/4 GGNetwork download failed",
+                    "pkg_file" to pkgFile.absolutePath,
+                    "exists" to pkgFile.exists(),
+                    "size" to pkgFile.length())
+                onEnd("Failed to download .pkg via GGNetwork (see logs)")
                 return@launch
             }
-            WepWawetLogger.workshop("send-to-phone: step 1/3 preview downloaded",
-                "file" to previewFile.absolutePath,
-                "size" to previewFile.length(),
-                "size_human" to formatBytes(previewFile.length()))
+            WepWawetLogger.workshop("send-to-phone: step 1/4 .pkg downloaded",
+                "file" to downloadedPkg.absolutePath,
+                "size" to downloadedPkg.length(),
+                "size_human" to formatBytes(downloadedPkg.length()))
 
-            // Detect file type (GIF, JPEG, PNG, etc.)
-            val fileType = detectFileType(previewFile)
-            WepWawetLogger.workshop("send-to-phone: detected file type",
+            // === Step 2: Detect file type — Steam .pkg starts with "PKGV0024" ===
+            val fileType = detectFileType(downloadedPkg)
+            WepWawetLogger.workshop("send-to-phone: step 2/4 detected file type",
                 "file_type" to fileType,
-                "file_name" to previewFile.name)
+                "file_name" to downloadedPkg.name)
+            if (fileType != "PKGV0024") {
+                WepWawetLogger.workshopWarn("send-to-phone: step 2/4 unexpected file type from GGNetwork",
+                    "expected" to "PKGV0024",
+                    "got" to fileType)
+                onEnd("GGNetwork returned unexpected file type: $fileType (expected PKGV0024 .pkg)")
+                return@launch
+            }
 
-            // === Step 2: Pack the preview into a Scene-type .mpkg file ===
-            WepWawetLogger.workshop("send-to-phone: step 2/3 packing Scene .mpkg",
-                "out" to "${item.id}_tmp.mpkg",
-                "image_file" to previewFile.name,
-                "image_size" to previewFile.length(),
-                "tex_format" to "RGBA8888 (format=0)",
-                "blending" to "normal",
-                "depth_test" to "enabled",
-                "schemecolor" to "computed average color")
-            val sendId = System.currentTimeMillis()
+            // === Step 3: Pack the .pkg into a .mpkg ===
+            WepWawetLogger.workshop("send-to-phone: step 3/4 packing .pkg → .mpkg",
+                "pkg_file" to downloadedPkg.name,
+                "pkg_size" to downloadedPkg.length())
             val mpkgFile = java.io.File(context.cacheDir, "${item.id}_$sendId.mpkg")
-            try {
-                com.wepwawet.pairing.MpkgPacker.packSceneWallpaper(
+            val mpkgSize = withContext(Dispatchers.IO) {
+                com.wepwawet.pairing.MpkgPacker.packFromPkg(
                     item = item,
-                    imageFile = previewFile,
+                    pkgFile = downloadedPkg,
                     outputFile = mpkgFile,
                 )
-            } catch (e: Exception) {
-                WepWawetLogger.workshopWarn("send-to-phone: step 2/3 packing failed",
-                    "exception" to e.javaClass.name,
-                    "message" to (e.message ?: ""))
-                onEnd("Failed to pack wallpaper: ${e.message}")
+            }
+            if (mpkgSize == 0L || !mpkgFile.exists()) {
+                WepWawetLogger.workshopWarn("send-to-phone: step 3/4 packing failed",
+                    "mpkg_exists" to mpkgFile.exists(),
+                    "mpkg_size" to mpkgSize)
+                onEnd("Failed to pack .pkg → .mpkg (see logs)")
                 return@launch
             }
-            if (!mpkgFile.exists() || mpkgFile.length() == 0L) {
-                WepWawetLogger.workshopWarn("send-to-phone: step 2/3 mpkg empty",
-                    "path" to mpkgFile.absolutePath,
-                    "exists" to mpkgFile.exists(),
-                    "size" to mpkgFile.length())
-                onEnd("Failed to create .mpkg file (empty)")
-                return@launch
-            }
-            WepWawetLogger.workshop("send-to-phone: step 2/3 mpkg ready",
-                "file" to mpkgFile.name,
-                "size" to mpkgFile.length(),
-                "size_human" to formatBytes(mpkgFile.length()))
+            WepWawetLogger.workshop("send-to-phone: step 3/4 .mpkg ready",
+                "mpkg_file" to mpkgFile.name,
+                "mpkg_size" to mpkgSize,
+                "size_human" to formatBytes(mpkgSize))
 
-            // === Step 3: Queue for transfer ===
-            WepWawetLogger.workshop("send-to-phone: step 3/3 queueing for transfer",
+            // === Step 4: Queue for transfer ===
+            WepWawetLogger.workshop("send-to-phone: step 4/4 queueing for transfer",
                 "file" to mpkgFile.name,
                 "size" to mpkgFile.length())
             val deviceName = PairingService.pairedDeviceName ?: "phone"
@@ -613,7 +529,10 @@ private fun onSendToPhoneClicked(
                 "title" to item.title.take(80),
                 "device" to deviceName,
                 "next_action" to "WePairingServer will pick this up on next heartbeat (~3s) and transfer via AES-encrypted chunks")
-            onEnd("Queued for transfer to $deviceName (PREVIEW ONLY — for real content, use 'Pick local .pkg'). Transfer starts on next heartbeat (~3s).")
+            onEnd("Queued for transfer to $deviceName (real .pkg content, ${formatBytes(mpkgFile.length())}). Transfer starts on next heartbeat (~3s).")
+
+            // Clean up the .pkg cache file (the .mpkg is now in cache and queued)
+            downloadedPkg.delete()
         } catch (e: Exception) {
             WepWawetLogger.workshopWarn("send-to-phone: unhandled exception",
                 "exception" to e.javaClass.name,
@@ -637,14 +556,28 @@ private fun formatBytes(bytes: Long): String {
 
 /**
  * Detect file type from magic bytes.
- * Returns "GIF", "JPEG", "PNG", "MP4", or "unknown".
+ * Returns "GIF", "JPEG", "PNG", "MP4", "PKGV0024", or "unknown".
  */
 private fun detectFileType(file: java.io.File): String {
     try {
         val raf = java.io.RandomAccessFile(file, "r")
+        // PKGV0024 is 8 bytes + a 4-byte length prefix = 12 bytes minimum
+        // The .pkg format is: [u32 LE magic_len][magic bytes]...
+        // For "PKGV0024" the magic_len field = 8 (4 bytes LE: 08 00 00 00)
+        // followed by the 8 bytes "PKGV0024"
         val header = ByteArray(12)
         raf.readFully(header)
         raf.close()
+        // Steam Workshop .pkg: starts with [08 00 00 00][PKGV0024]
+        if (header.size >= 12 &&
+            header[0] == 0x08.toByte() && header[1] == 0x00.toByte() &&
+            header[2] == 0x00.toByte() && header[3] == 0x00.toByte() &&
+            header[4] == 'P'.code.toByte() && header[5] == 'K'.code.toByte() &&
+            header[6] == 'G'.code.toByte() && header[7] == 'V'.code.toByte() &&
+            header[8] == '0'.code.toByte() && header[9] == '0'.code.toByte() &&
+            header[10] == '2'.code.toByte() && header[11] == '4'.code.toByte()) {
+            return "PKGV0024"
+        }
         // GIF: starts with "GIF87a" or "GIF89a"
         if (header.size >= 6 && (header[0] == 'G'.code.toByte() && header[1] == 'I'.code.toByte() && header[2] == 'F'.code.toByte())) {
             return "GIF"
@@ -669,320 +602,6 @@ private fun detectFileType(file: java.io.File): String {
         return "unknown"
     } catch (e: Exception) {
         return "unknown (${e.message})"
-    }
-}
-
-/**
- * Pick a local .pkg file (downloaded by user via Steam on PC, copied to phone).
- *
- * This is the BEST-QUALITY path: the user manually downloads the actual
- * workshop content via Steam on their PC, then copies the .pkg file to their
- * phone. We extract all assets (.tex files for Scene, .mp4 for Video) and
- * repackage them into a .mpkg.
- *
- * The .pkg file is typically located at:
- *   `Steam/steamapps/workshop/content/431960/<workshop_id>/scene.pkg`
- * (or similar — may also be named with the workshop ID directly).
- *
- * @param uri the content:// URI returned by the file picker
- * @param onStart called when the operation begins (with a status message)
- * @param onEnd called when the operation ends (with a final status message)
- */
-private fun onPickLocalPkgClicked(
-    context: Context,
-    item: WorkshopItemTyped,
-    scope: kotlinx.coroutines.CoroutineScope,
-    uri: android.net.Uri,
-    onStart: (String) -> Unit,
-    onEnd: (String) -> Unit,
-) {
-    WepWawetLogger.workshop("pick-local-pkg tapped",
-        "id" to item.id,
-        "title" to item.title.take(80),
-        "uri" to uri.toString(),
-        "is_paired" to PairingService.isPaired())
-
-    if (!PairingService.isPaired()) {
-        WepWawetLogger.workshopWarn("pick-local-pkg: not paired, aborting",
-            "id" to item.id)
-        onEnd("Not paired — open the Pairing tab first.")
-        return
-    }
-
-    onStart("Reading .pkg file…")
-    scope.launch {
-        try {
-            // Step 1: Copy the picked file to a local cache file (so we can
-            // use RandomAccessFile + seek). The picked URI may be a content://
-            // URI that we can only read via ContentResolver.
-            val sendId = System.currentTimeMillis()
-            val pkgCacheFile = java.io.File(context.cacheDir, "${item.id}_$sendId.pkg")
-            WepWawetLogger.workshop("pick-local-pkg: copying picked file to cache",
-                "uri" to uri.toString(),
-                "cache_path" to pkgCacheFile.absolutePath)
-
-            val bytesCopied = withContext(Dispatchers.IO) {
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    pkgCacheFile.outputStream().use { output ->
-                        val buffer = ByteArray(64 * 1024)
-                        var read: Int
-                        var total = 0L
-                        while (input.read(buffer).also { read = it } != -1) {
-                            output.write(buffer, 0, read)
-                            total += read
-                        }
-                        total
-                    }
-                } ?: 0L
-            }
-
-            if (bytesCopied == 0L) {
-                WepWawetLogger.workshopWarn("pick-local-pkg: failed to copy picked file",
-                    "uri" to uri.toString(),
-                    "bytes_copied" to bytesCopied)
-                onEnd("Failed to read picked .pkg file (empty?)")
-                return@launch
-            }
-            WepWawetLogger.workshop("pick-local-pkg: file copied",
-                "bytes_copied" to bytesCopied,
-                "cache_path" to pkgCacheFile.absolutePath)
-
-            // Step 2: Pack the .pkg into a .mpkg
-            val mpkgFile = java.io.File(context.cacheDir, "${item.id}_$sendId.mpkg")
-            WepWawetLogger.workshop("pick-local-pkg: packing .mpkg from .pkg",
-                "pkg_file" to pkgCacheFile.name,
-                "pkg_size" to pkgCacheFile.length(),
-                "mpkg_out" to mpkgFile.name)
-
-            val mpkgSize = withContext(Dispatchers.IO) {
-                com.wepwawet.pairing.MpkgPacker.packFromPkg(
-                    item = item,
-                    pkgFile = pkgCacheFile,
-                    outputFile = mpkgFile,
-                )
-            }
-
-            if (mpkgSize == 0L || !mpkgFile.exists()) {
-                WepWawetLogger.workshopWarn("pick-local-pkg: packFromPkg failed",
-                    "mpkg_exists" to mpkgFile.exists(),
-                    "mpkg_size" to mpkgSize)
-                onEnd("Failed to pack .pkg → .mpkg (see logs for details)")
-                return@launch
-            }
-            WepWawetLogger.workshop("pick-local-pkg: .mpkg ready",
-                "mpkg_file" to mpkgFile.name,
-                "mpkg_size" to mpkgSize)
-
-            // Step 3: Queue for transfer
-            val deviceName = PairingService.pairedDeviceName ?: "phone"
-            PairingService.queueWallpaper(mpkgFile, item.title)
-            WepWawetLogger.workshop("pick-local-pkg: queued for transfer",
-                "file" to mpkgFile.name,
-                "size" to mpkgFile.length(),
-                "title" to item.title.take(80),
-                "device" to deviceName)
-            onEnd("Queued for transfer to $deviceName. Transfer starts on next heartbeat (~3s).")
-
-            // Clean up the .pkg cache file (the .mpkg is now in cache)
-            pkgCacheFile.delete()
-        } catch (e: Exception) {
-            WepWawetLogger.workshopWarn("pick-local-pkg: unhandled exception",
-                "exception" to e.javaClass.name,
-                "message" to (e.message ?: ""))
-            onEnd("Error: ${e.message}")
-        }
-    }
-}
-
-/**
- * Pick a local image file (JPEG/PNG) and pack as a Scene wallpaper.
- *
- * This is the FALLBACK path: when the user can't get the actual .pkg file,
- * they can pick any image and we'll pack it as a Scene wallpaper. The image
- * is encoded as a .tex (RGBA8888 format=0) and the WE Android app's native
- * Scene renderer will display it.
- *
- * @param uri the content:// URI returned by the file picker
- * @param onStart called when the operation begins (with a status message)
- * @param onEnd called when the operation ends (with a final status message)
- */
-private fun onPickLocalImageClicked(
-    context: Context,
-    item: WorkshopItemTyped,
-    scope: kotlinx.coroutines.CoroutineScope,
-    uri: android.net.Uri,
-    onStart: (String) -> Unit,
-    onEnd: (String) -> Unit,
-) {
-    WepWawetLogger.workshop("pick-local-image tapped",
-        "id" to item.id,
-        "title" to item.title.take(80),
-        "uri" to uri.toString(),
-        "is_paired" to PairingService.isPaired())
-
-    if (!PairingService.isPaired()) {
-        WepWawetLogger.workshopWarn("pick-local-image: not paired, aborting",
-            "id" to item.id)
-        onEnd("Not paired — open the Pairing tab first.")
-        return
-    }
-
-    onStart("Reading image and packing as Scene .mpkg…")
-    scope.launch {
-        try {
-            // Copy picked image to cache
-            val sendId = System.currentTimeMillis()
-            val imgCacheFile = java.io.File(context.cacheDir, "${item.id}_$sendId.img")
-            val bytesCopied = withContext(Dispatchers.IO) {
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    imgCacheFile.outputStream().use { output -> input.copyTo(output) }
-                } ?: 0L
-            }
-            if (bytesCopied == 0L) {
-                WepWawetLogger.workshopWarn("pick-local-image: failed to copy picked file",
-                    "uri" to uri.toString())
-                onEnd("Failed to read picked image (empty?)")
-                return@launch
-            }
-            WepWawetLogger.workshop("pick-local-image: image copied",
-                "bytes_copied" to bytesCopied,
-                "cache_path" to imgCacheFile.absolutePath)
-
-            // Pack as Scene .mpkg
-            val mpkgFile = java.io.File(context.cacheDir, "${item.id}_$sendId.mpkg")
-            WepWawetLogger.workshop("pick-local-image: packing Scene .mpkg",
-                "image_file" to imgCacheFile.name,
-                "image_size" to imgCacheFile.length(),
-                "mpkg_out" to mpkgFile.name)
-            val mpkgSize = withContext(Dispatchers.IO) {
-                com.wepwawet.pairing.MpkgPacker.packSceneWallpaper(
-                    item = item,
-                    imageFile = imgCacheFile,
-                    outputFile = mpkgFile,
-                )
-            }
-            if (mpkgSize == 0L || !mpkgFile.exists()) {
-                WepWawetLogger.workshopWarn("pick-local-image: packing failed",
-                    "mpkg_exists" to mpkgFile.exists(),
-                    "mpkg_size" to mpkgSize)
-                onEnd("Failed to pack Scene .mpkg (see logs)")
-                return@launch
-            }
-            WepWawetLogger.workshop("pick-local-image: .mpkg ready",
-                "mpkg_file" to mpkgFile.name,
-                "mpkg_size" to mpkgSize)
-
-            // Queue for transfer
-            val deviceName = PairingService.pairedDeviceName ?: "phone"
-            PairingService.queueWallpaper(mpkgFile, item.title)
-            WepWawetLogger.workshop("pick-local-image: queued for transfer",
-                "file" to mpkgFile.name,
-                "size" to mpkgFile.length(),
-                "device" to deviceName)
-            onEnd("Queued for transfer to $deviceName. Transfer starts on next heartbeat (~3s).")
-            imgCacheFile.delete()
-        } catch (e: Exception) {
-            WepWawetLogger.workshopWarn("pick-local-image: unhandled exception",
-                "exception" to e.javaClass.name,
-                "message" to (e.message ?: ""))
-            onEnd("Error: ${e.message}")
-        }
-    }
-}
-
-/**
- * Pick a local video file (MP4) and pack as a Video wallpaper.
- *
- * This is the FALLBACK path for video wallpapers: when the user can't get the
- * actual .pkg file, they can pick any MP4 file and we'll pack it as a Video
- * wallpaper. The WE Android app's VideoDrawable will play the MP4 via
- * MediaPlayer + MPKGVideoReader.
- *
- * @param uri the content:// URI returned by the file picker
- * @param onStart called when the operation begins (with a status message)
- * @param onEnd called when the operation ends (with a final status message)
- */
-private fun onPickLocalVideoClicked(
-    context: Context,
-    item: WorkshopItemTyped,
-    scope: kotlinx.coroutines.CoroutineScope,
-    uri: android.net.Uri,
-    onStart: (String) -> Unit,
-    onEnd: (String) -> Unit,
-) {
-    WepWawetLogger.workshop("pick-local-video tapped",
-        "id" to item.id,
-        "title" to item.title.take(80),
-        "uri" to uri.toString(),
-        "is_paired" to PairingService.isPaired())
-
-    if (!PairingService.isPaired()) {
-        WepWawetLogger.workshopWarn("pick-local-video: not paired, aborting",
-            "id" to item.id)
-        onEnd("Not paired — open the Pairing tab first.")
-        return
-    }
-
-    onStart("Reading video and packing as Video .mpkg…")
-    scope.launch {
-        try {
-            // Copy picked video to cache
-            val sendId = System.currentTimeMillis()
-            val videoCacheFile = java.io.File(context.cacheDir, "${item.id}_$sendId.mp4")
-            val bytesCopied = withContext(Dispatchers.IO) {
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    videoCacheFile.outputStream().use { output -> input.copyTo(output) }
-                } ?: 0L
-            }
-            if (bytesCopied == 0L) {
-                WepWawetLogger.workshopWarn("pick-local-video: failed to copy picked file",
-                    "uri" to uri.toString())
-                onEnd("Failed to read picked video (empty?)")
-                return@launch
-            }
-            WepWawetLogger.workshop("pick-local-video: video copied",
-                "bytes_copied" to bytesCopied,
-                "cache_path" to videoCacheFile.absolutePath)
-
-            // Pack as Video .mpkg
-            val mpkgFile = java.io.File(context.cacheDir, "${item.id}_$sendId.mpkg")
-            WepWawetLogger.workshop("pick-local-video: packing Video .mpkg",
-                "video_file" to videoCacheFile.name,
-                "video_size" to videoCacheFile.length(),
-                "mpkg_out" to mpkgFile.name)
-            val mpkgSize = withContext(Dispatchers.IO) {
-                com.wepwawet.pairing.MpkgPacker.packVideoWallpaper(
-                    item = item,
-                    videoFile = videoCacheFile,
-                    outputFile = mpkgFile,
-                )
-            }
-            if (mpkgSize == 0L || !mpkgFile.exists()) {
-                WepWawetLogger.workshopWarn("pick-local-video: packing failed",
-                    "mpkg_exists" to mpkgFile.exists(),
-                    "mpkg_size" to mpkgSize)
-                onEnd("Failed to pack Video .mpkg (see logs)")
-                return@launch
-            }
-            WepWawetLogger.workshop("pick-local-video: .mpkg ready",
-                "mpkg_file" to mpkgFile.name,
-                "mpkg_size" to mpkgSize)
-
-            // Queue for transfer
-            val deviceName = PairingService.pairedDeviceName ?: "phone"
-            PairingService.queueWallpaper(mpkgFile, item.title)
-            WepWawetLogger.workshop("pick-local-video: queued for transfer",
-                "file" to mpkgFile.name,
-                "size" to mpkgFile.length(),
-                "device" to deviceName)
-            onEnd("Queued for transfer to $deviceName. Transfer starts on next heartbeat (~3s).")
-            videoCacheFile.delete()
-        } catch (e: Exception) {
-            WepWawetLogger.workshopWarn("pick-local-video: unhandled exception",
-                "exception" to e.javaClass.name,
-                "message" to (e.message ?: ""))
-            onEnd("Error: ${e.message}")
-        }
     }
 }
 
