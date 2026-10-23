@@ -210,7 +210,22 @@ class WorkshopDownloader(
                 "steam_client_connected" to (steamClient?.isConnected ?: false),
                 "licenses_count" to licenseList.size,
                 "install_dir" to installDir.absolutePath)
-            val downloader = DepotDownloader(steamClient!!, licenseList, false, false, 8, 4, 8, false, null)
+            // === CRITICAL FIX: pass debug=true to DepotDownloader ===
+            // With debug=false, the library's `logger` field is NULL, so ALL
+            // internal debug logs are suppressed (we'd never see "DepotDownloader
+            // launched with X for account", "requestUGCDetails result: X", etc.).
+            // With debug=true, the logger is initialized and our JavaSteamLogBridge
+            // forwards those logs to WepWawetLogger — letting us see EXACTLY
+            // where the download hangs (e.g., "RPC request sent" but no response,
+            // OR "EResult.X while retrieving file details").
+            // Other params: install dir is set per-item via PubFileItem constructor;
+            // maxDownloads=8, maxDecompress=4, maxFileWrites=8; androidEmulation=false
+            // (false is correct — on Android, IS_OS_LINUX returns true before
+            // IS_OS_ANDROID, so getSteamOS returns "linux" anyway, and Wallpaper
+            // Engine's workshop files don't use OS-specific depots — they're .pkg
+            // files downloaded via downloadWebFile after getPublishedFileDetails
+            // returns the fileUrl).
+            val downloader = DepotDownloader(steamClient!!, licenseList, true, false, 8, 4, 8, false, null)
             WepWawetLogger.proxy("$TAG: DepotDownloader constructed",
                 "downloader_class" to downloader.javaClass.name)
 
@@ -671,6 +686,23 @@ class WorkshopDownloader(
         subscriptions.add(callbackManager!!.subscribe(LoggedOnCallback::class.java) { onLoggedOn(it) })
         subscriptions.add(callbackManager!!.subscribe(LoggedOffCallback::class.java) { onLoggedOff(it) })
         subscriptions.add(callbackManager!!.subscribe(LicenseListCallback::class.java) { onLicenseList(it) })
+        // === Debug: subscribe to the base CallbackMsg class to log EVERY callback
+        // that's dispatched by the callback manager. This catches ServiceMethodResponse
+        // (the RPC response from steamPublishedFile.getDetails), ServiceMethodNotification,
+        // and any other callbacks we don't explicitly subscribe to. ===
+        try {
+            subscriptions.add(callbackManager!!.subscribe(
+                `in`.dragonbra.javasteam.steam.steamclient.callbackmgr.CallbackMsg::class.java
+            ) { msg ->
+                WepWawetLogger.proxy("$TAG: callback dispatched",
+                    "class" to msg.javaClass.simpleName,
+                    "job_id" to (msg.jobID?.toString() ?: "null"))
+            })
+            WepWawetLogger.proxy("$TAG: subscribed to CallbackMsg (base) for verbose dispatch logging")
+        } catch (e: Exception) {
+            WepWawetLogger.proxyWarn("$TAG: failed to subscribe to CallbackMsg base class",
+                "exception" to e.javaClass.name)
+        }
 
         isRunning = true
         cmRetries = 0
@@ -690,12 +722,18 @@ class WorkshopDownloader(
         // leaving no log evidence that the thread had died. Now we log every
         // exception and continue the loop (don't break) so a transient failure
         // doesn't permanently disable RPC dispatch.
+        //
+        // We also call runWaitAllCallbacks(0) AFTER runWaitCallbacks(1000L) to
+        // drain any additional pending callbacks in the queue (in case there's
+        // a burst of multiple callbacks).
         Thread({
             var tick = 0
             var lastException: String? = null
             while (isRunning) {
                 try {
                     callbackManager!!.runWaitCallbacks(1000L)
+                    // Drain any additional pending callbacks immediately
+                    callbackManager!!.runWaitAllCallbacks(0)
                 } catch (e: InterruptedException) {
                     WepWawetLogger.proxy("$TAG: callback thread interrupted, exiting")
                     return@Thread
