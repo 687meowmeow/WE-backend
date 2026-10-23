@@ -17,7 +17,6 @@ import `in`.dragonbra.javasteam.depotdownloader.IDownloadListener
 import `in`.dragonbra.javasteam.depotdownloader.data.DownloadItem
 import `in`.dragonbra.javasteam.depotdownloader.data.PubFileItem
 import `in`.dragonbra.javasteam.enums.EResult
-import `in`.dragonbra.javasteam.steam.authentication.AuthPollResult
 import `in`.dragonbra.javasteam.steam.authentication.AuthSessionDetails
 import `in`.dragonbra.javasteam.steam.authentication.AuthenticationException
 import `in`.dragonbra.javasteam.steam.authentication.IAuthenticator
@@ -43,6 +42,34 @@ class WorkshopDownloader(
         private const val APP_ID_WE = 431960
         private const val PREF_NAME = "wepwawet_steam_token"
         private const val KEY_REFRESH_TOKEN = "refresh_token"
+
+        /**
+         * Test Steam login — connects, authenticates, saves refresh token.
+         * Returns a result message (success or error).
+         */
+        suspend fun testLogin(context: Context): String = withContext(Dispatchers.IO) {
+            val username = SteamCredentialsStore.getUsername(context)
+                ?: return@withContext "No Steam username saved"
+            val password = SteamCredentialsStore.getPassword(context)
+                ?: return@withContext "No Steam password saved"
+            val guardCode = SteamCredentialsStore.getGuardCode(context)
+            WepWawetLogger.proxy("$TAG.testLogin START", "username" to username,
+                "has_guard" to !guardCode.isNullOrBlank())
+
+            val downloader = WorkshopDownloader(username, password, guardCode)
+            // Try to connect and authenticate
+            val connected = downloader.connectAndAuthenticate(context)
+            val result = if (connected) {
+                WepWawetLogger.proxy("$TAG.testLogin SUCCESS")
+                "✓ Login successful! Refresh token saved for future logins."
+            } else {
+                val err = downloader.downloadError?.message ?: "Unknown error"
+                WepWawetLogger.proxyError("$TAG.testLogin FAILED", "error" to err)
+                "✗ Login failed: $err"
+            }
+            downloader.cleanup()
+            result
+        }
     }
 
     private var steamClient: SteamClient? = null
@@ -51,13 +78,12 @@ class WorkshopDownloader(
     private var licenseList: List<License> = emptyList()
     @Volatile private var isRunning = false
     @Volatile private var downloadError: Exception? = null
+    @Volatile private var authenticated = false
+    @Volatile private var cmRetries = 0
     private val subscriptions = mutableListOf<Closeable>()
 
-    /**
-     * IAuthenticator that provides the user's Steam Guard 2FA code.
-     * Returns the guard code if set, or null (which will cause auth to fail
-     * with a clear message).
-     */
+    fun isAuthenticated(): Boolean = authenticated
+
     private inner class GuardAuthenticator : IAuthenticator {
         override fun getDeviceCode(previousCodeWasIncorrect: Boolean): CompletableFuture<String> {
             WepWawetLogger.proxy("$TAG: Steam Guard 2FA code requested",
@@ -66,7 +92,7 @@ class WorkshopDownloader(
             val future = CompletableFuture<String>()
             if (guardCode.isNullOrBlank()) {
                 future.completeExceptionally(
-                    AuthenticationException("Steam Guard 2FA code required but not provided. Enter it in Settings."))
+                    AuthenticationException("Steam Guard 2FA code required. Enter it in Settings."))
             } else {
                 future.complete(guardCode)
             }
@@ -74,13 +100,10 @@ class WorkshopDownloader(
         }
 
         override fun getEmailCode(email: String?, previousCodeWasIncorrect: Boolean): CompletableFuture<String> {
-            WepWawetLogger.proxy("$TAG: Steam email code requested",
-                "email" to (email ?: ""),
-                "previous_incorrect" to previousCodeWasIncorrect)
+            WepWawetLogger.proxy("$TAG: Steam email code requested", "email" to (email ?: ""))
             val future = CompletableFuture<String>()
             if (guardCode.isNullOrBlank()) {
-                future.completeExceptionally(
-                    AuthenticationException("Steam email code required but not provided."))
+                future.completeExceptionally(AuthenticationException("Steam email code required."))
             } else {
                 future.complete(guardCode)
             }
@@ -88,7 +111,7 @@ class WorkshopDownloader(
         }
 
         override fun acceptDeviceConfirmation(): CompletableFuture<Boolean> {
-            WepWawetLogger.proxy("$TAG: device confirmation requested — auto-accepting")
+            WepWawetLogger.proxy("$TAG: device confirmation — auto-accepting")
             return CompletableFuture.completedFuture(true)
         }
     }
@@ -105,7 +128,8 @@ class WorkshopDownloader(
         try {
             onStatusUpdate("Connecting to Steam...")
             if (!connectAndAuthenticate(context)) {
-                onStatusUpdate("Failed to connect to Steam (check credentials + 2FA code)")
+                val err = downloadError?.message ?: "Unknown error"
+                onStatusUpdate("Steam login failed: $err")
                 return@withContext null
             }
 
@@ -143,8 +167,10 @@ class WorkshopDownloader(
                     onStatusUpdate(message)
                 }
                 override fun onFileCompleted(depotId: Int, fileName: String, depotPercentComplete: Float) {
-                    WepWawetLogger.proxyDebug("$TAG: file", "depot" to depotId, "pct" to "%.1f".format(depotPercentComplete * 100))
+                    val pct = (depotPercentComplete * 100).toInt()
+                    WepWawetLogger.proxyDebug("$TAG: file", "depot" to depotId, "pct" to pct)
                     onProgress(depotPercentComplete)
+                    onStatusUpdate("Downloading... $pct%")
                 }
                 override fun onDepotCompleted(depotId: Int, compressedBytes: Long, uncompressedBytes: Long) {
                     WepWawetLogger.proxy("$TAG: depot done", "depot" to depotId, "uncompressed" to uncompressedBytes)
@@ -189,15 +215,14 @@ class WorkshopDownloader(
             onStatusUpdate("Error: ${e.message}")
             null
         } finally {
-            try { steamUser?.logOff() } catch (_: Exception) {}
-            try { steamClient?.disconnect() } catch (_: Exception) {}
-            subscriptions.forEach { try { it.close() } catch (_: Exception) {} }
-            subscriptions.clear()
-            isRunning = false
+            cleanup()
         }
     }
 
-    private fun connectAndAuthenticate(context: Context): Boolean {
+    /**
+     * Connect to Steam and authenticate. Can be called standalone for testLogin.
+     */
+    fun connectAndAuthenticate(context: Context): Boolean {
         val dispatcher = okhttp3.Dispatcher(Executors.newCachedThreadPool { r ->
             Thread(r, "JavaSteam-Http").apply { isDaemon = true }
         })
@@ -219,6 +244,7 @@ class WorkshopDownloader(
         subscriptions.add(callbackManager!!.subscribe(LicenseListCallback::class.java) { onLicenseList(it) })
 
         isRunning = true
+        cmRetries = 0
         WepWawetLogger.proxy("$TAG: connecting to Steam...")
         steamClient!!.connect()
 
@@ -228,14 +254,25 @@ class WorkshopDownloader(
             }
         }, "JavaSteam-Callback").start()
 
-        val timeout = 120000L  // 2 min for 2FA auth
+        val timeout = 120000L
         val start = System.currentTimeMillis()
         while (isRunning && System.currentTimeMillis() - start < timeout) {
-            if (licenseList.isNotEmpty()) return true
+            if (authenticated) return true
             if (downloadError != null) return false
-            Thread.sleep(500)
+            try { Thread.sleep(500) } catch (_: InterruptedException) { return false }
         }
         return false
+    }
+
+    /**
+     * Clean up — disconnect from Steam, close subscriptions.
+     */
+    fun cleanup() {
+        try { steamUser?.logOff() } catch (_: Exception) {}
+        try { steamClient?.disconnect() } catch (_: Exception) {}
+        subscriptions.forEach { try { it.close() } catch (_: Exception) {} }
+        subscriptions.clear()
+        isRunning = false
     }
 
     private fun onConnected(callback: ConnectedCallback, context: Context) {
@@ -272,27 +309,25 @@ class WorkshopDownloader(
 
             val authSessionFuture = steamClient!!.authentication.beginAuthSessionViaCredentials(authDetails)
 
-            // Poll for result in a background thread (handles 2FA automatically)
             Thread {
                 try {
-                    WepWawetLogger.proxy("$TAG: waiting for auth session to start...")
-                    val authSession = authSessionFuture.get()  // blocks until session created
+                    WepWawetLogger.proxy("$TAG: waiting for auth session...")
+                    val authSession = authSessionFuture.get()
 
                     WepWawetLogger.proxy("$TAG: polling auth session (may request 2FA)...")
-                    val result = authSession.pollingWaitForResult().get()  // blocks until 2FA resolved
+                    val result = authSession.pollingWaitForResult().get()
 
                     WepWawetLogger.proxy("$TAG: auth SUCCESS",
                         "account" to result.accountName,
                         "has_refresh_token" to !result.refreshToken.isNullOrBlank())
 
-                    // Save refresh token for future logins (no 2FA needed next time)
+                    // Save refresh token for future logins (survives app updates)
                     if (!result.refreshToken.isNullOrBlank()) {
                         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
                             .edit().putString(KEY_REFRESH_TOKEN, result.refreshToken).apply()
-                        WepWawetLogger.proxy("$TAG: refresh token saved for future logins")
+                        WepWawetLogger.proxy("$TAG: refresh token saved ✓ (survives app updates)")
                     }
 
-                    // Log on with the access token
                     val details = LogOnDetails()
                     details.username = result.accountName
                     details.accessToken = result.refreshToken
@@ -315,11 +350,18 @@ class WorkshopDownloader(
     private fun onLoggedOn(callback: LoggedOnCallback) {
         if (callback.result != EResult.OK) {
             WepWawetLogger.proxyError("$TAG: logon failed", "result" to callback.result)
+            if (callback.result == EResult.TryAnotherCM && cmRetries < 3) {
+                cmRetries++
+                WepWawetLogger.proxy("$TAG: TryAnotherCM — retry #$cmRetries with different CM server...")
+                try { Thread.sleep(2000); steamClient?.connect() } catch (_: Exception) {}
+                return
+            }
             downloadError = java.lang.Exception("Steam logon failed: ${callback.result}")
             isRunning = false
             return
         }
-        WepWawetLogger.proxy("$TAG: logged on to Steam")
+        authenticated = true
+        WepWawetLogger.proxy("$TAG: logged on to Steam ✓")
     }
 
     private fun onLoggedOff(callback: LoggedOffCallback) {
@@ -329,9 +371,14 @@ class WorkshopDownloader(
 
     private fun onDisconnected(callback: DisconnectedCallback) {
         WepWawetLogger.proxy("$TAG: disconnected", "user_initiated" to callback.isUserInitiated)
-        if (!callback.isUserInitiated) {
+        if (!callback.isUserInitiated && authenticated) {
             try { Thread.sleep(2000); steamClient?.connect() } catch (_: Exception) {}
-        } else isRunning = false
+        } else if (!callback.isUserInitiated && !authenticated) {
+            // Reconnect during initial connection attempt
+            try { Thread.sleep(2000); steamClient?.connect() } catch (_: Exception) {}
+        } else {
+            isRunning = false
+        }
     }
 
     private fun onLicenseList(callback: LicenseListCallback) {
@@ -345,7 +392,7 @@ class WorkshopDownloader(
         while (System.currentTimeMillis() - start < timeoutMs) {
             if (licenseList.isNotEmpty()) return true
             if (downloadError != null) return false
-            Thread.sleep(200)
+            try { Thread.sleep(200) } catch (_: InterruptedException) { return false }
         }
         return licenseList.isNotEmpty()
     }

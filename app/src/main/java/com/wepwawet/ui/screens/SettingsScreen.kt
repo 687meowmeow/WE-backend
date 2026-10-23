@@ -170,7 +170,6 @@ fun SettingsScreen(
                             if (steamUsername.isBlank() || steamPassword.isBlank()) return@Button
                             com.wepwawet.pairing.SteamCredentialsStore.saveCredentials(
                                 context, steamUsername, steamPassword)
-                            // Also save the guard code if provided
                             if (steamGuardCode.isNotBlank()) {
                                 com.wepwawet.pairing.SteamCredentialsStore.saveGuardCode(
                                     context, steamGuardCode)
@@ -185,6 +184,53 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text("Save Steam credentials")
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    // Test Login button
+                    val testScope = rememberCoroutineScope()
+                    var testLoginResult by remember { mutableStateOf<String?>(null) }
+                    var testLoginInProgress by remember { mutableStateOf(false) }
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = {
+                            if (!com.wepwawet.pairing.SteamCredentialsStore.hasCredentials(context)) {
+                                testLoginResult = "Save credentials first"
+                                return@OutlinedButton
+                            }
+                            testLoginInProgress = true
+                            testLoginResult = null
+                            WepWawetLogger.lifecycle("SettingsScreen: testing Steam login...")
+                            testScope.launch {
+                                val result = com.wepwawet.pairing.WorkshopDownloader.testLogin(context)
+                                testLoginInProgress = false
+                                testLoginResult = result
+                                WepWawetLogger.lifecycle("SettingsScreen: test login result",
+                                    "result" to result)
+                            }
+                        },
+                        enabled = !testLoginInProgress && com.wepwawet.pairing.SteamCredentialsStore.hasCredentials(context),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        if (testLoginInProgress) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.height(20.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Testing login...")
+                        } else {
+                            Text("Test Steam Login")
+                        }
+                    }
+                    testLoginResult?.let { result ->
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            result,
+                            color = if (result.contains("✓"))
+                                MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                     if (hasCreds) {
                         Spacer(Modifier.height(8.dp))

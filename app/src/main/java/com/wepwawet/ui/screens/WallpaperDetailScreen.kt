@@ -96,7 +96,7 @@ fun WallpaperDetailScreen(
     var isPaired by remember { mutableStateOf(PairingService.isPaired()) }
 
     // Download / transfer state
-    var downloadProgress by remember { mutableStateOf(0f) }  // 0..1
+    var downloadProgress by remember { mutableStateOf(0f) }  // 0..1 for download progress bar
     var isDownloading by remember { mutableStateOf(false) }
     var downloadedFile by remember { mutableStateOf<File?>(null) }
     var isSending by remember { mutableStateOf(false) }
@@ -280,17 +280,16 @@ fun WallpaperDetailScreen(
                 }
             }
 
-            // === Progress ===
-            if (isDownloading || isSending) {
+            // === Progress bar (shows during download + transfer) ===
+            if (isSending) {
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         LinearProgressIndicator(
-                            progress = { if (isDownloading) downloadProgress else 0f },
+                            progress = { downloadProgress },
                             modifier = Modifier.fillMaxWidth(),
                         )
                         Text(
-                            if (isDownloading) "Downloading… ${(downloadProgress * 100).toInt()}%"
-                            else "Sending to phone…",
+                            statusMessage ?: "Working...",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -450,6 +449,9 @@ private fun onSendToPhoneClicked(
     onStart("Downloading real .pkg via Steam (no PC needed, this may take 1-2 minutes)…")
     scope.launch {
         try {
+            // Reset progress
+            downloadProgress = 0f
+
             // === Step 1: Download the actual .pkg file via JavaSteam (direct on-device) ===
             WepWawetLogger.workshop("send-to-phone: step 1/4 downloading .pkg via JavaSteam",
                 "workshop_id" to item.id,
@@ -464,7 +466,9 @@ private fun onSendToPhoneClicked(
                     context = context,
                     workshopId = item.id,
                     outputFile = pkgFile,
-                    onProgress = { /* progress; logged internally */ },
+                    onProgress = { pct ->
+                        downloadProgress = pct * 0.8f  // download is 80% of total progress
+                    },
                     onStatusUpdate = { status ->
                         WepWawetLogger.workshop("send-to-phone: JavaSteam status",
                             "status" to status)
