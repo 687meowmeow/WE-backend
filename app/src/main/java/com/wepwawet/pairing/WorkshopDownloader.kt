@@ -101,9 +101,12 @@ class WorkshopDownloader(
                 "previous_incorrect" to previousCodeWasIncorrect,
                 "has_code" to !guardCode.isNullOrBlank())
             val future = CompletableFuture<String>()
-            if (guardCode.isNullOrBlank()) {
+            if (previousCodeWasIncorrect) {
                 future.completeExceptionally(
-                    AuthenticationException("Steam Guard 2FA code required. Enter it in Settings."))
+                    AuthenticationException("Steam Guard code was wrong or expired. Use device confirmation (approve on Steam mobile app) instead."))
+            } else if (guardCode.isNullOrBlank()) {
+                future.completeExceptionally(
+                    AuthenticationException("Steam Guard 2FA code required but not provided."))
             } else {
                 future.complete(guardCode)
             }
@@ -113,20 +116,14 @@ class WorkshopDownloader(
         override fun getEmailCode(email: String?, previousCodeWasIncorrect: Boolean): CompletableFuture<String> {
             WepWawetLogger.proxy("$TAG: Steam email code requested", "email" to (email ?: ""))
             val future = CompletableFuture<String>()
-            if (guardCode.isNullOrBlank()) {
-                future.completeExceptionally(AuthenticationException("Steam email code required."))
-            } else {
-                future.complete(guardCode)
-            }
+            future.completeExceptionally(AuthenticationException("Email code auth not supported."))
             return future
         }
 
         override fun acceptDeviceConfirmation(): CompletableFuture<Boolean> {
-            WepWawetLogger.proxy("$TAG: device confirmation — REJECTING to force 2FA code flow")
-            // Return false to force Steam to use the 2FA code (getDeviceCode) flow
-            // instead of sending a push notification. The user's 2FA code is
-            // provided automatically by getDeviceCode() from Settings.
-            return CompletableFuture.completedFuture(false)
+            WepWawetLogger.proxy("$TAG: device confirmation — auto-accepting (user approves on Steam mobile app)")
+            updateStatus("Check your Steam mobile app — tap 'Approve' to authorize WepWawet (one-time only)")
+            return CompletableFuture.completedFuture(true)
         }
     }
 

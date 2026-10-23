@@ -55,7 +55,6 @@ fun SettingsScreen(
     // Steam credentials (for JavaSteam direct download — no PC needed)
     var steamUsername by remember { mutableStateOf(com.wepwawet.pairing.SteamCredentialsStore.getUsername(context) ?: "") }
     var steamPassword by remember { mutableStateOf("") }
-    var steamGuardCode by remember { mutableStateOf("") }
 
     // Backend URL state (for the self-hosted workshop content backend)
     var backendUrl by remember { mutableStateOf(com.wepwawet.pairing.WorkshopBackendClient.getBackendUrl(context) ?: "") }
@@ -148,20 +147,10 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = steamGuardCode,
-                        onValueChange = { steamGuardCode = it },
-                        label = { Text("Steam Guard code (2FA — optional, only needed first time)") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
                     Text(
-                        "If your Steam account has 2FA (Steam Guard Mobile Authenticator), " +
-                        "enter a fresh 2FA code here. It's only needed for the first download — " +
-                        "after that, a refresh token is saved for automatic future logins. " +
-                        "Get a fresh code from your Steam mobile app → Steam Guard → View code.",
+                        "First login: Steam will send a push notification to your Steam " +
+                        "mobile app — just tap 'Approve'. This only happens ONCE. After that, " +
+                        "the login is saved automatically and future downloads need no approval.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -171,15 +160,9 @@ fun SettingsScreen(
                             if (steamUsername.isBlank() || steamPassword.isBlank()) return@Button
                             com.wepwawet.pairing.SteamCredentialsStore.saveCredentials(
                                 context, steamUsername, steamPassword)
-                            if (steamGuardCode.isNotBlank()) {
-                                com.wepwawet.pairing.SteamCredentialsStore.saveGuardCode(
-                                    context, steamGuardCode)
-                            }
                             WepWawetLogger.lifecycle("SettingsScreen: Steam credentials saved",
-                                "username" to steamUsername,
-                                "has_guard" to steamGuardCode.isNotBlank())
+                                "username" to steamUsername)
                             steamPassword = ""
-                            steamGuardCode = ""
                         },
                         enabled = steamUsername.isNotBlank() && steamPassword.isNotBlank(),
                         modifier = Modifier.fillMaxWidth(),
