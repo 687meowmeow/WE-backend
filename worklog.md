@@ -2514,3 +2514,43 @@ Stage Summary:
   debug APK (different signing keys — debug vs release)
 - For a release APK with the proper signing key, the user would need to
   commit these changes and let CI build it
+
+---
+Task ID: stable-keystore
+Agent: main
+Task: Fix CI OOM + commit stable debug keystore so users can upgrade without uninstalling
+
+Work Log:
+- User provided GitHub PAT (ghp_...) for pushing to 687meowmeow/WE-backend repo
+- Pushed commit 6819130 (containing source fixes from previous task)
+- First CI build (40008204857) FAILED with OutOfMemoryError: Metaspace during
+  R8 minifyReleaseWithR8 — caused by my earlier gradle.properties change that
+  set MaxMetaspaceSize=256m (too small for R8 in release builds)
+- Reverted gradle.properties back to -Xmx4g -XX:MaxMetaspaceSize=1g (CI defaults)
+- Pushed fix as commit 82b5ca3
+- Second CI build (40008798368) SUCCEEDED
+- Downloaded the artifact — but it was signed with a DIFFERENT debug keystore
+  (SHA-256: 4f98427a...) than the v4 APK the user has installed (45dbfc21...)
+- Root cause: each CI runner generates a fresh ~/.android/debug.keystore on
+  first use, so each release build is signed with a different key — forcing
+  users to uninstall before each upgrade (losing Steam credentials + refresh
+  tokens)
+- Generated a stable debug.keystore committed at app/debug.keystore (well-
+  known password "android", standard Android debug DN)
+- Updated app/build.gradle.kts to add a "stableDebug" signingConfig and use
+  it for BOTH debug and release builds (when WEPWAWET_KEYSTORE_PATH is unset)
+- Pushed commit 3cbd710
+- Third CI build (40010405058) SUCCEEDED
+- Downloaded new APK — verified signature SHA-256 ea6cea74aa9e0f6c...
+  matches the stable keystore (will match for ALL future builds from now on)
+- Placed final release APK at /home/z/my-project/download/wepwawet-0.1.1-alpha-release.apk
+
+Stage Summary:
+- Final release APK: /home/z/my-project/download/wepwawet-0.1.1-alpha-release.apk (16 MB)
+- Signed with stable debug keystore (SHA-256: ea6cea74aa9e0f6c...)
+- User can install this directly OVER the existing v4 APK (different signatures
+  STILL require uninstall for THIS upgrade — but all FUTURE upgrades from
+  this point will work without uninstall)
+- User will need to re-enter Steam credentials one more time after this install
+  (since the existing v4 APK used a different signing key), but never again
+- All the download progress + logging fixes from the previous task are included
