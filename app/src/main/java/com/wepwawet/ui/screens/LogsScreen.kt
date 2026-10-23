@@ -32,7 +32,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableBooleanStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -64,7 +63,7 @@ fun LogsScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val events = remember { mutableStateListOf<LogEntry>() }
     val tick = remember { mutableIntStateOf(0) }
-    var isDownloading by remember { mutableBooleanStateOf(false) }
+    var isDownloading by remember { mutableStateOf(false) }
     var downloadStatus by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
