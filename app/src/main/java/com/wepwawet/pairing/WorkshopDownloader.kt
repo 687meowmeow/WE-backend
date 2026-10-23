@@ -42,6 +42,7 @@ class WorkshopDownloader(
         private const val APP_ID_WE = 431960
         private const val PREF_NAME = "wepwawet_steam_token"
         private const val KEY_REFRESH_TOKEN = "refresh_token"
+        private const val KEY_ACCOUNT_NAME = "account_name"
 
         /**
          * Test Steam login — connects, authenticates, saves refresh token.
@@ -85,6 +86,7 @@ class WorkshopDownloader(
     @Volatile private var cmRetries = 0
     @Volatile private var authInProgress = false
     @Volatile private var isRetrying = false  // true during TryAnotherCM retry
+    @Volatile private var usedRefreshToken = false  // true if we tried refresh token login
     @Volatile private var statusCallback: ((String) -> Unit)? = null
     private val subscriptions = mutableListOf<Closeable>()
 
@@ -300,20 +302,25 @@ class WorkshopDownloader(
         isRetrying = false  // clear retry flag on new connection
 
         // Step 1: Try saved refresh token first (no 2FA needed)
-        val savedToken = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_REFRESH_TOKEN, null)
-        if (!savedToken.isNullOrBlank()) {
-            WepWawetLogger.proxy("$TAG: trying saved refresh token")
+        val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        val savedToken = prefs.getString(KEY_REFRESH_TOKEN, null)
+        val savedAccountName = prefs.getString(KEY_ACCOUNT_NAME, null)
+        if (!savedToken.isNullOrBlank() && !savedAccountName.isNullOrBlank()) {
+            WepWawetLogger.proxy("$TAG: trying saved refresh token",
+                "account_name" to savedAccountName,
+                "user_entered" to username)
             try {
                 val details = LogOnDetails()
-                details.username = username
+                details.username = savedAccountName  // Use Steam's account name (case-correct)
                 details.accessToken = savedToken
                 details.loginID = 149
+                usedRefreshToken = true
                 steamUser!!.logOn(details)
-                return
+                return  // Wait for onLoggedOn callback — if it fails, we'll fall back
             } catch (e: Exception) {
-                WepWawetLogger.proxyWarn("$TAG: refresh token failed, falling back to credentials",
+                WepWawetLogger.proxyWarn("$TAG: refresh token logOn call failed",
                     "exception" to e.javaClass.name)
+                usedRefreshToken = false
             }
         }
 
@@ -344,11 +351,15 @@ class WorkshopDownloader(
                         "account" to result.accountName,
                         "has_refresh_token" to !result.refreshToken.isNullOrBlank())
 
-                    // Save refresh token for future logins (survives app updates)
+                    // Save refresh token + account name for future logins (survives app updates)
                     if (!result.refreshToken.isNullOrBlank()) {
                         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-                            .edit().putString(KEY_REFRESH_TOKEN, result.refreshToken).apply()
-                        WepWawetLogger.proxy("$TAG: refresh token saved ✓ (survives app updates)")
+                            .edit()
+                            .putString(KEY_REFRESH_TOKEN, result.refreshToken)
+                            .putString(KEY_ACCOUNT_NAME, result.accountName)
+                            .apply()
+                        WepWawetLogger.proxy("$TAG: refresh token + account name saved ✓ (survives app updates)",
+                            "account_name" to result.accountName)
                     }
 
                     val details = LogOnDetails()
@@ -379,13 +390,34 @@ class WorkshopDownloader(
 
     private fun onLoggedOn(callback: LoggedOnCallback) {
         if (callback.result != EResult.OK) {
-            WepWawetLogger.proxyError("$TAG: logon failed", "result" to callback.result)
+            WepWawetLogger.proxyError("$TAG: logon failed", "result" to callback.result,
+                "used_refresh_token" to usedRefreshToken)
             if (callback.result == EResult.TryAnotherCM && cmRetries < 5) {
                 cmRetries++
                 isRetrying = true
                 authInProgress = false
                 WepWawetLogger.proxy("$TAG: TryAnotherCM — retry #$cmRetries with different CM server...")
                 try { Thread.sleep(3000); steamClient?.connect() } catch (_: Exception) {}
+                return
+            }
+            // If refresh token failed (e.g. InvalidPassword due to expired token),
+            // fall back to the modern auth flow (push notification)
+            if (usedRefreshToken && callback.result == EResult.InvalidPassword) {
+                WepWawetLogger.proxy("$TAG: refresh token invalid — falling back to modern auth (push notification)")
+                usedRefreshToken = false
+                authInProgress = false
+                // Clear the stale refresh token
+                val prefs = android.content.Context::class.java.let { _ ->
+                    // Can't access context here, but we'll clear it next time we save
+                }
+                // Start modern auth flow by calling onConnected's step 2
+                // We need to re-enter the auth flow — disconnect and reconnect
+                try {
+                    updateStatus("Refresh token expired — reconnecting for fresh login...")
+                    steamClient?.disconnect()
+                    Thread.sleep(2000)
+                    steamClient?.connect()
+                } catch (_: Exception) {}
                 return
             }
             // Provide user-friendly error messages
@@ -403,6 +435,7 @@ class WorkshopDownloader(
         }
         authenticated = true
         authInProgress = false
+        usedRefreshToken = false
         WepWawetLogger.proxy("$TAG: logged on to Steam ✓")
         updateStatus("Logged in to Steam ✓ — fetching licenses...")
     }

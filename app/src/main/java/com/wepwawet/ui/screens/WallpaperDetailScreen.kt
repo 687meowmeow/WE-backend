@@ -644,30 +644,52 @@ private fun onDownloadMpkgClicked(
     WepWawetLogger.workshop("download-mpkg (debug) tapped",
         "id" to item.id,
         "title" to item.title.take(80))
-    onStart("Preparing .mpkg for download…")
+    
+    if (!com.wepwawet.pairing.SteamCredentialsStore.hasCredentials(context)) {
+        onEnd("Steam login not set. Open Settings → Steam account first.")
+        return
+    }
+    
+    val steamUser = com.wepwawet.pairing.SteamCredentialsStore.getUsername(context)!!
+    val steamPass = com.wepwawet.pairing.SteamCredentialsStore.getPassword(context)!!
+    
+    onStart("Downloading real .pkg via JavaSteam (debug)…")
     scope.launch {
         try {
-            // Step 1: Download the preview image
-            val previewFile = downloadWallpaper(context, item) { }
-            if (previewFile == null || !previewFile.exists()) {
-                onEnd("Failed to download preview image.")
-                return@launch
-            }
-
-            // Step 2: Pack the preview into a Scene-type .mpkg file in the cache dir
             val sendId = System.currentTimeMillis()
-            val cacheMpkg = java.io.File(context.cacheDir, "${item.id}_$sendId.mpkg")
-            com.wepwawet.pairing.MpkgPacker.packSceneWallpaper(
-                item = item,
-                imageFile = previewFile,
-                outputFile = cacheMpkg,
-            )
-            if (!cacheMpkg.exists() || cacheMpkg.length() == 0L) {
-                onEnd("Failed to create .mpkg file")
+            val pkgFile = java.io.File(context.cacheDir, "${item.id}_${sendId}_debug.pkg")
+            val downloader = com.wepwawet.pairing.WorkshopDownloader(steamUser, steamPass)
+            val downloadedPkg = withContext(Dispatchers.IO) {
+                downloader.downloadWorkshopPkg(
+                    context = context,
+                    workshopId = item.id,
+                    outputFile = pkgFile,
+                    onProgress = { },
+                    onStatusUpdate = { status ->
+                        WepWawetLogger.workshop("download-mpkg: JavaSteam status", "status" to status)
+                    },
+                )
+            }
+            if (downloadedPkg == null || !downloadedPkg.exists() || downloadedPkg.length() == 0L) {
+                onEnd("Failed to download .pkg via Steam (see logs)")
                 return@launch
             }
 
-            // Step 3: Copy the .mpkg to the public Downloads/WepWawet/ folder
+            // Pack the .pkg into a .mpkg
+            val cacheMpkg = java.io.File(context.cacheDir, "${item.id}_${sendId}_debug.mpkg")
+            val mpkgSize = withContext(Dispatchers.IO) {
+                com.wepwawet.pairing.MpkgPacker.packFromPkg(
+                    item = item,
+                    pkgFile = downloadedPkg,
+                    outputFile = cacheMpkg,
+                )
+            }
+            if (mpkgSize == 0L || !cacheMpkg.exists()) {
+                onEnd("Failed to pack .pkg → .mpkg")
+                return@launch
+            }
+
+            // Copy to public Downloads
             val bytes = cacheMpkg.readBytes()
             val downloadsName = "${item.id}_debug.mpkg"
             val uri = com.wepwawet.log.PublicDownloadsWriter.writeBytes(
@@ -677,10 +699,12 @@ private fun onDownloadMpkgClicked(
                     "file" to downloadsName,
                     "size" to bytes.size,
                     "uri" to uri.toString())
-                onEnd("Saved ${bytes.size} bytes to Downloads/WepWawet/$downloadsName")
+                onEnd("Saved ${formatBytes(bytes.size.toLong())} to Downloads/WepWawet/$downloadsName")
             } else {
                 onEnd("Failed to write .mpkg to Downloads (see logs)")
             }
+            downloadedPkg.delete()
+            cacheMpkg.delete()
         } catch (e: Exception) {
             WepWawetLogger.workshopWarn("download-mpkg: failed",
                 "exception" to e.javaClass.name,
