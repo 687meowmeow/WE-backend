@@ -534,14 +534,17 @@ class WePairingServer {
      * Send AES-encrypted raw data (file chunk) to the phone.
      * Mirrors TcpClient$Companion.sendEncryptedGSONObject but for raw bytes:
      *   writeLeInt(ciphertext_length) + AES_encrypted(data)
+     *
+     * CRITICAL: Do NOT manually pad the data! AES/CBC/PKCS5Padding already
+     * handles PKCS5/PKCS7 padding internally. The previous version had a
+     * double-padding bug that corrupted every chunk — the phone would
+     * decrypt the data and get extra padding bytes appended to each chunk,
+     * making the .mpkg file invalid.
      */
     private fun sendEncryptedData(output: DataOutputStream, data: ByteArray) {
         val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
         cipher.init(Cipher.ENCRYPT_MODE, currentAesKey, currentIv)
-        // PKCS7 pad to 16-byte boundary
-        val padLen = 16 - (data.size % 16)
-        val padded = data + ByteArray(padLen) { padLen.toByte() }
-        val ciphertext = cipher.doFinal(padded)
+        val ciphertext = cipher.doFinal(data)
         writeLeInt(output, ciphertext.size)
         output.write(ciphertext)
         output.flush()
@@ -565,7 +568,13 @@ class WePairingServer {
         title: String,
     ) {
         val totalSize = mpkgFile.length()
-        val fileName = "wallpapers/${mpkgFile.name}"
+        // Use just the filename without "wallpapers/" prefix.
+        // The phone prepends DOWNLOAD_FOLDER ("downloads/") to this path,
+        // so the final path is "downloads/<filename>". Using a shorter path
+        // reduces the directory depth that mkdirs() needs to create on the
+        // phone side, which helps avoid the file-move issue where mkdirs()
+        // creates the .mpkg filename as a directory.
+        val fileName = mpkgFile.name
 
         WepWawetLogger.proxy("transferWallpaper START",
             "file" to fileName,
