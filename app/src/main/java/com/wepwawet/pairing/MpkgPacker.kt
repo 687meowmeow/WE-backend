@@ -89,58 +89,6 @@ object MpkgPacker {
             "image_vpath" to imageVPath,
             "image_bytes" to previewBytes.size,
             "project_json_bytes" to projectJsonBytes.size,
-            "output" to outputFile.absolutePath)
-
-        // VFS entries: (name, bytes) pairs
-        // Order matters: project.json MUST be first (it's looked up by name,
-        // and the .so may rely on the first entry being the project manifest).
-        val entries = listOf(
-            "project.json" to projectJsonBytes,
-            imageVPath to previewBytes,
-        )
-
-        val totalSize = pack(entries, outputFile)
-
-        WepWawetLogger.proxy("MpkgPacker.packImageWallpaper done",
-            "output" to outputFile.name,
-            "mpkg_size" to totalSize,
-            "vfs_entries" to entries.size)
-
-        // Verify by re-reading the header
-        verifyMpkg(outputFile, entries)
-
-        return totalSize
-    }
-
-    /**
-     * Pack the contents of [imageFile] (a JPG/PNG/etc. image) into a .mpkg at
-     * [outputFile] as an Image-type wallpaper.
-     *
-     * @param item workshop item metadata (title, description, etc.)
-     * @param imageFile the actual image file (preview JPG works for Image type)
-     * @param imageVPath the VFS path inside the .mpkg (e.g. "preview.jpg")
-     * @param outputFile the output .mpkg file path
-     * @return the size of the .mpkg in bytes
-     */
-    fun packImageWallpaper(
-        item: WorkshopItemTyped,
-        imageFile: File,
-        imageVPath: String = "preview.jpg",
-        outputFile: File,
-    ): Long {
-        require(imageFile.exists()) { "imageFile not found: ${imageFile.absolutePath}" }
-        require(imageFile.canRead()) { "imageFile not readable: ${imageFile.absolutePath}" }
-
-        val previewBytes = imageFile.readBytes()
-        val projectJson = buildProjectJson(item, imageVPath, imageVPath)
-        val projectJsonBytes = projectJson.toByteArray(Charsets.UTF_8)
-
-        WepWawetLogger.proxy("MpkgPacker.packImageWallpaper",
-            "item_id" to item.id,
-            "title" to item.title.take(80),
-            "image_vpath" to imageVPath,
-            "image_bytes" to previewBytes.size,
-            "project_json_bytes" to projectJsonBytes.size,
             "output" to outputFile.absolutePath,
             "magic" to MAGIC,
             "project_json_preview" to projectJson.take(200))
