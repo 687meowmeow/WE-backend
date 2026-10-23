@@ -11,6 +11,7 @@ import java.io.File
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 import `in`.dragonbra.javasteam.depotdownloader.DepotDownloader
 import `in`.dragonbra.javasteam.depotdownloader.IDownloadListener
@@ -31,6 +32,40 @@ import `in`.dragonbra.javasteam.steam.steamclient.callbackmgr.CallbackManager
 import `in`.dragonbra.javasteam.steam.steamclient.callbacks.ConnectedCallback
 import `in`.dragonbra.javasteam.steam.steamclient.callbacks.DisconnectedCallback
 import `in`.dragonbra.javasteam.steam.steamclient.configuration.SteamConfiguration
+import `in`.dragonbra.javasteam.util.log.LogListener
+import `in`.dragonbra.javasteam.util.log.LogManager
+
+/**
+ * Bridge that forwards JavaSteam library log messages into our [WepWawetLogger]
+ * so they show up in the in-app Logs screen + log dumps.
+ *
+ * Without this, the DepotDownloader's internal debug logs (RPC requests,
+ * manifest fetches, chunk downloads, errors) are invisible — making it
+ * impossible to diagnose why a download hangs at "Download started".
+ *
+ * Installed once globally (since JavaSteam's LogManager is a singleton).
+ */
+private object JavaSteamLogBridge : LogListener {
+    private val installed = AtomicBoolean(false)
+    fun installIfNeeded() {
+        if (installed.compareAndSet(false, true)) {
+            LogManager.addListener(this)
+            WepWawetLogger.proxy("JavaSteamLogBridge installed — forwarding library logs to WepWawetLogger")
+        }
+    }
+    override fun onLog(clazz: Class<*>, message: String?, throwable: Throwable?) {
+        // JavaSteam uses onLog for INFO-level messages
+        WepWawetLogger.proxy("JavaSteam: ${clazz.simpleName}",
+            "msg" to (message?.take(200) ?: ""),
+            "level" to "INFO",
+            "throwable" to (throwable?.javaClass?.name))
+    }
+    override fun onError(clazz: Class<*>, message: String?, throwable: Throwable?) {
+        WepWawetLogger.proxyError("JavaSteam ERROR: ${clazz.simpleName}",
+            "msg" to (message?.take(200) ?: ""),
+            "exception" to (throwable?.javaClass?.name ?: "null"))
+    }
+}
 
 class WorkshopDownloader(
     private val username: String,
@@ -609,6 +644,12 @@ class WorkshopDownloader(
      * Connect to Steam and authenticate. Can be called standalone for testLogin.
      */
     fun connectAndAuthenticate(context: Context): Boolean {
+        // === Install the JavaSteam library log bridge ONCE globally so we can
+        // see what the library is doing internally (RPC requests, callback
+        // dispatch, errors). Without this, the DepotDownloader's logs are
+        // invisible — making it impossible to diagnose why a download hangs. ===
+        JavaSteamLogBridge.installIfNeeded()
+
         val dispatcher = okhttp3.Dispatcher(Executors.newCachedThreadPool { r ->
             Thread(r, "JavaSteam-Http").apply { isDaemon = true }
         })
@@ -632,13 +673,53 @@ class WorkshopDownloader(
 
         isRunning = true
         cmRetries = 0
+        // Reset the modern-auth fallback flag so a new session can fall back again
+        hasTriedModernAuthFallback = false
         WepWawetLogger.proxy("$TAG: connecting to Steam...")
         steamClient!!.connect()
 
+        // === Callback manager thread ===
+        // Runs runWaitCallbacks(1000) in a loop while isRunning is true.
+        // The JavaSteam library's CoroutineScope (used by DepotDownloader) suspends
+        // on AsyncJobSingle.await() — this only resumes when the corresponding
+        // callback is dispatched through the callback manager. If this thread dies
+        // (e.g., due to an unhandled exception), every async RPC call hangs forever.
+        //
+        // Previously, the catch(_:Exception){break} silently killed the thread —
+        // leaving no log evidence that the thread had died. Now we log every
+        // exception and continue the loop (don't break) so a transient failure
+        // doesn't permanently disable RPC dispatch.
         Thread({
+            var tick = 0
+            var lastException: String? = null
             while (isRunning) {
-                try { callbackManager!!.runWaitCallbacks(1000L) } catch (_: Exception) { break }
+                try {
+                    callbackManager!!.runWaitCallbacks(1000L)
+                } catch (e: InterruptedException) {
+                    WepWawetLogger.proxy("$TAG: callback thread interrupted, exiting")
+                    return@Thread
+                } catch (e: Exception) {
+                    // Log the exception ONCE per unique message to avoid spam
+                    val excName = e.javaClass.name
+                    if (excName != lastException) {
+                        lastException = excName
+                        WepWawetLogger.proxyError("$TAG: callback thread exception (continuing)",
+                            "exception" to excName,
+                            "message" to (e.message ?: "").take(200))
+                    }
+                }
+                // Heartbeat every 10 iterations (~10s) so we can verify
+                // the thread is alive in the logs
+                tick++
+                if (tick % 10 == 0) {
+                    WepWawetLogger.proxy("$TAG: callback thread heartbeat",
+                        "tick" to tick,
+                        "is_running" to isRunning,
+                        "authenticated" to authenticated,
+                        "steam_connected" to (steamClient?.isConnected ?: false))
+                }
             }
+            WepWawetLogger.proxy("$TAG: callback thread EXITED (isRunning=false)")
         }, "JavaSteam-Callback").start()
 
         val timeout = 120000L
@@ -805,13 +886,30 @@ class WorkshopDownloader(
                     ?.edit()?.remove(KEY_REFRESH_TOKEN)?.remove(KEY_ACCOUNT_NAME)?.apply()
                 WepWawetLogger.proxy("$TAG: stale refresh token cleared (was rejected with ${callback.result})")
                 // Reconnect — onConnected will see no saved token and start the
-                // modern auth flow (push notification to Steam mobile app)
+                // modern auth flow (push notification to Steam mobile app).
+                //
+                // === CRITICAL FIX: just call steamClient.connect() — do NOT call
+                // disconnect() first! ===
+                // Previously we did: disconnect(); sleep(2000); connect()
+                // But the disconnect() call triggers onDisconnected(user_initiated=true)
+                // which sets isRunning=false, killing the callback thread. The
+                // subsequent connect()'s onConnected callback never gets processed
+                // because the callback thread is dead. Result: connectAndAuthenticate()
+                // times out (or returns early because isRunning=false), and the user
+                // sees "Steam login failed: Unknown error".
+                //
+                // SteamClient.connect() handles re-initialization internally —
+                // if already connected, it disconnects and reconnects atomically
+                // without triggering a user_initiated disconnect callback.
                 try {
                     updateStatus("Refresh token rejected (${callback.result}) — reconnecting for fresh push-notification login...")
-                    steamClient?.disconnect()
-                    Thread.sleep(2000)
+                    WepWawetLogger.proxy("$TAG: calling steamClient.connect() for fallback (no manual disconnect to preserve callback thread)")
                     steamClient?.connect()
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    WepWawetLogger.proxyError("$TAG: fallback connect() threw",
+                        "exception" to e.javaClass.name,
+                        "message" to (e.message ?: ""))
+                }
                 return
             }
             // Clear stale token on RateLimitExceeded
