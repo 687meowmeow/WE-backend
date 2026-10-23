@@ -18,6 +18,7 @@ object SteamCredentialsStore {
     private const val PREF_NAME = "wepwawet_steam_credentials"
     private const val KEY_USERNAME = "steam_username"
     private const val KEY_PASSWORD = "steam_password"
+    private const val KEY_GUARD_CODE = "steam_guard_code"
 
     fun saveCredentials(context: Context, username: String, password: String) {
         val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
@@ -27,6 +28,17 @@ object SteamCredentialsStore {
             .apply()
         WepWawetLogger.proxy("SteamCredentialsStore: credentials saved",
             "username" to username)
+    }
+
+    fun saveGuardCode(context: Context, code: String) {
+        val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_GUARD_CODE, code).apply()
+        WepWawetLogger.proxy("SteamCredentialsStore: guard code saved")
+    }
+
+    fun getGuardCode(context: Context): String? {
+        return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_GUARD_CODE, null)?.takeIf { it.isNotBlank() }
     }
 
     fun getUsername(context: Context): String? {

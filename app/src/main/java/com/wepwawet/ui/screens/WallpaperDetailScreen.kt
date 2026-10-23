@@ -445,6 +445,7 @@ private fun onSendToPhoneClicked(
 
     val steamUser = com.wepwawet.pairing.SteamCredentialsStore.getUsername(context)!!
     val steamPass = com.wepwawet.pairing.SteamCredentialsStore.getPassword(context)!!
+    val steamGuard = com.wepwawet.pairing.SteamCredentialsStore.getGuardCode(context)
 
     onStart("Downloading real .pkg via Steam (no PC needed, this may take 1-2 minutes)…")
     scope.launch {
@@ -452,11 +453,12 @@ private fun onSendToPhoneClicked(
             // === Step 1: Download the actual .pkg file via JavaSteam (direct on-device) ===
             WepWawetLogger.workshop("send-to-phone: step 1/4 downloading .pkg via JavaSteam",
                 "workshop_id" to item.id,
-                "steam_user" to steamUser)
+                "steam_user" to steamUser,
+                "has_guard_code" to !steamGuard.isNullOrBlank())
 
             val sendId = System.currentTimeMillis()
             val pkgFile = java.io.File(context.cacheDir, "${item.id}_$sendId.pkg")
-            val downloader = com.wepwawet.pairing.WorkshopDownloader(steamUser, steamPass)
+            val downloader = com.wepwawet.pairing.WorkshopDownloader(steamUser, steamPass, steamGuard)
             val downloadedPkg = withContext(Dispatchers.IO) {
                 downloader.downloadWorkshopPkg(
                     context = context,
