@@ -2554,3 +2554,70 @@ Stage Summary:
 - User will need to re-enter Steam credentials one more time after this install
   (since the existing v4 APK used a different signing key), but never again
 - All the download progress + logging fixes from the previous task are included
+
+---
+Task ID: access-denied-fix
+Agent: main
+Task: Fix AccessDenied on refresh token — download worse than before (login failing)
+
+Work Log:
+- User uploaded new logs (wepwawet-logs-20261023-143827.txt) showing:
+  * Download attempt at 14:35:18 → "logon failed result=AccessDenied
+    used_refresh_token=true has_valid_token=false"
+  * User re-saved credentials (Kirbsuki → kirbsuki) and tested login at
+    14:37:33 → STILL AccessDenied
+  * User re-saved credentials AGAIN at 14:38:05 with lowercase kirbsuki
+    and tested → STILL AccessDenied
+- Used WebSearch to research what Steam's EResult.AccessDenied means
+- Found Dr. McKay's forum post (node-steam-session) dated April 30 2025:
+  "Seems like a backend change that access token refreshes for
+   SteamClient tokens are authenticated now."
+  → Steam made a backend change where refresh tokens for SteamClient
+    platform can no longer be used directly to log on — they require
+    an established CM-authenticated session first
+- Fetched Steam EResult enum docs from steam.readthedocs.io to identify
+  all token-related failure codes:
+  * AccessDenied = 15 (the user's symptom)
+  * InvalidPassword = 5 (the only one previously handled)
+  * Expired = 27, Revoked = 26
+  * LogonSessionReplaced = 34, AlreadyLoggedInElsewhere = 50
+  * PasswordRequiredToKickSession = 49
+- Root cause: WorkshopDownloader.onLoggedOn only fell back to modern auth
+  (push notification) when result == InvalidPassword. For AccessDenied
+  (and other token failures), it gave up immediately with a user-friendly
+  error message and no recovery.
+- Fix #1 (WorkshopDownloader.kt):
+  * Added hasTriedModernAuthFallback flag (prevents infinite fallback loop
+    if modern auth ALSO fails)
+  * Extended the fallback condition to cover ALL token-related failures:
+    InvalidPassword, AccessDenied, Expired, Revoked,
+    LogonSessionReplaced, AlreadyLoggedInElsewhere,
+    PasswordRequiredToKickSession
+  * When triggered: clears the stale refresh token, disconnects, and
+    reconnects — onConnected will see no saved token and start the
+    modern auth flow (push notification to Steam mobile app)
+- Fix #2 (SteamCredentialsStore.kt):
+  * saveCredentials now also clears the saved refresh token in the
+    "wepwawet_steam_token" SharedPreferences file
+  * Why: when the user re-enters their Steam credentials, they almost
+    certainly want a FRESH push-notification login, not a stale-token
+    attempt that will fail with AccessDenied
+  * Logs the clearing so it's visible in logs
+- Bumped version to 0.1.2-alpha (versionCode 3)
+- Committed and pushed (54d4384) — CI build 40013707707 SUCCEEDED
+- Downloaded the artifact and verified signature SHA-256 matches the
+  stable keystore (ea6cea74aa9e0f6c...) — so the user can install this
+  directly over the previous 0.1.1-alpha build without uninstalling
+- Final APK: /home/z/my-project/download/wepwawet-0.1.2-alpha-release.apk (16 MB)
+
+Stage Summary:
+- Final release APK: /home/z/my-project/download/wepwawet-0.1.2-alpha-release.apk
+- Signed with the same stable debug keystore as 0.1.1-alpha — user can
+  install directly over 0.1.1-alpha without uninstalling (preserves any
+  Steam credentials)
+- After installing, the user should re-enter Steam credentials once in
+  Settings (this triggers saveCredentials which clears the stale refresh
+  token) OR just trigger a download — the new fallback logic will detect
+  AccessDenied and automatically switch to push-notification auth
+- The push notification will require one-time approval on the Steam
+  mobile app — after that, downloads should work normally
