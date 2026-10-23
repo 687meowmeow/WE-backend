@@ -2701,3 +2701,87 @@ Stage Summary:
       silently for 10 minutes — at which point we'll have a clear log
       of WHAT failed (Steam disconnect, no manifest, etc.) and can fix
       the next layer
+
+---
+Task ID: watchdog-and-fallback-fixes
+Agent: main
+Task: Diagnose why download hangs at "Download started" (60s silence, 0 chunks)
+
+Work Log:
+- User uploaded logs (wepwawet-logs-20261023-162628.txt) from 0.1.4-alpha
+  with TWO download attempts.
+- The new JavaSteamLogBridge revealed EXACTLY what's happening inside
+  the library — without it, we'd be flying blind.
+
+- BUG 1 (AccessDenied fallback broken):
+  * First download attempt at 16:24:22:
+    - Got AccessDenied on refresh token
+    - My fallback fired: "calling steamClient.connect() for fallback
+      (no manual disconnect to preserve callback thread)"
+    - BUT the logs showed:
+      16:24:24.985 - calling steamClient.connect() for fallback
+      16:24:24.985 - WebSocketConnection msg=Disconnect called: true
+      16:24:24.986 - EventHandler `disconnected` called. User Initiated: true
+      16:24:24.987 - callback thread EXITED (isRunning=false)
+      16:24:25.378 - Steam login failed: Unknown error
+  * Root cause: when steamClient.connect() is called on an ALREADY-
+    connected client, the library INTERNALLY calls disconnect() first.
+    This triggers onDisconnected(user_initiated=true) which sets
+    isRunning=false → kills the callback thread → the new connect()'s
+    onConnected callback never gets processed → connectAndAuthenticate
+    times out → user sees "Steam login failed: Unknown error".
+  * FIX: Added isReconnectingForFallback flag
+    - Set to true BEFORE calling steamClient.connect() in the fallback
+    - When this flag is true, onDisconnected returns early WITHOUT
+      setting isRunning=false (preserves the callback thread)
+    - Cleared in onConnected when the new connection is established
+
+- BUG 2 (WebSocket watchdog kills connection mid-download):
+  * Second download attempt at 16:24:48 (after successful testLogin):
+    - Login ✓ (refresh token valid this time)
+    - Got 131 licenses ✓
+    - PubFileItem added ✓
+    - DepotDownloader constructed, awaitCompletion ENTERED ✓
+    - 16:24:50.741 - "Watchdog: No response for 25 seconds" (WARNING)
+    - 16:24:55.742 - "Watchdog: No response for 30 seconds.
+                      Disconnecting from steam" (ERROR)
+    - 16:24:55.743 - Disconnect called: false (NOT user_initiated)
+  * The WebSocket connection has a 30-second watchdog that fires
+    when no responses arrive. Once it fires, the connection is dead
+    but steamClient.isConnected still returns true (stale state).
+    My earlier "don't auto-reconnect during download" code meant
+    the DepotDownloader was hanging on a dead connection for the
+    full 60s stuck-detection window.
+  * The watchdog timer was CUMULATIVE across connections — started
+    counting during the first download attempt at 16:24:24, never
+    reset, fired during the second download at 16:24:55.
+  * FIX: When a non-user-initiated disconnect fires DURING a download
+    (i.e., the watchdog killed the connection), set downloadError
+    IMMEDIATELY with a clear "Steam connection dropped during download"
+    message instead of waiting 60s. The awaitCompletion wrapper will
+    detect downloadError != null and break out, surfacing the error
+    to the user immediately.
+
+- Bumped version to 0.1.5-alpha (versionCode 6)
+- Committed as e10b35f, pushed, CI build 40030175445 SUCCEEDED
+- Final APK: /home/z/my-project/download/wepwawet-0.1.5-alpha-release.apk (16 MB)
+
+Stage Summary:
+- Two key fixes:
+  1. AccessDenied fallback now actually works (was failing with
+     "Steam login failed: Unknown error" because the callback thread
+     was getting killed by the internal disconnect() call inside
+     steamClient.connect())
+  2. Watchdog disconnect during download now aborts IMMEDIATELY
+     with a clear error message instead of making the user wait
+     60 seconds for stuck-detection
+- After installing, user should retry the download. Two possible
+  outcomes:
+  (a) If the AccessDenied fallback was the only issue (testLogin
+      cleared the stale token and got a fresh one), the download
+      should now succeed
+  (b) If the watchdog still fires (because the timer is cumulative
+      across connections in the library), the download will fail
+      IMMEDIATELY with a clear error message — at which point we
+      can implement a workaround (e.g., wait 30+ seconds between
+      testLogin and download to let the watchdog timer expire)
