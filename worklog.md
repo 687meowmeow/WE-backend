@@ -2621,3 +2621,83 @@ Stage Summary:
   AccessDenied and automatically switch to push-notification auth
 - The push notification will require one-time approval on the Steam
   mobile app — after that, downloads should work normally
+
+---
+Task ID: stuck-download-fix
+Agent: main
+Task: Fix download stuck — "Downloaded" status with 0 bytes, time elapsed keeps increasing
+
+Work Log:
+- User uploaded logs (wepwawet-logs-20261023-151646.txt) showing:
+  * At 15:16:03 user tapped download on Talia Yang wallpaper (id=3823357259)
+  * At 15:16:05.107: "WorkshopDownloader: item added app_id=431960 install_dir=null"
+    ← THIS IS THE BUG: install_dir is null!
+  * At 15:16:05.108: awaitCompletion thread ENTERED
+  * At 15:16:07.724: WorkshopDownloader disconnected user_initiated=false
+    ← Steam killed our connection 2.6s after download started
+  * Heartbeat ticks every 3s showing silent_s increasing, dir_file_count=0
+  * At 15:16:09.726: WorkshopDownloader reconnected (auto-reconnect kicked in)
+    and re-attempted auth — this interfered with the DepotDownloader's
+    in-flight network calls
+  * Stuck for 39+ seconds with no progress
+
+- Used `javap` to decompile javasteam-depotdownloader-1.8.0.jar to
+  understand the API:
+  * PubFileItem has multiple constructors:
+    (appId, pubFile)
+    (appId, pubFile, installToGameNameDirectory, installDirectory)
+    (appId, pubFile, installToGameNameDirectory, installDirectory, verify)
+    (appId, pubFile, installToGameNameDirectory, installDirectory, verify,
+     downloadManifestOnly)
+  * We were using the 2-arg constructor → installDirectory=null
+  * DEFAULT_DOWNLOAD_DIR = "depots" (relative to JVM working dir)
+  * So the DepotDownloader was writing files to
+    /data/user/0/com.wepwawet/depots/ NOT our prepared
+    /data/user/0/com.wepwawet/cache/workshop_downloads/3823357259/
+  * The file-watcher was scanning the WRONG directory → always saw 0 files
+
+- BUG 1 FIX: Use the 4-arg constructor:
+    PubFileItem(APP_ID_WE, pubFileId, false, installDir.absolutePath)
+  This sets installToGameNameDirectory=false and installDirectory=our path.
+  Added "pub_item_install_dir" to the log so we can verify it matches
+  install_dir next time.
+
+- BUG 2 FIX: Added isDownloadInProgress flag (Volatile)
+  * Set to true before calling awaitCompletion
+  * Set to false in the finally block after awaitCompletion returns
+  * In onDisconnected: if isDownloadInProgress is true, do NOT auto-reconnect.
+    The DepotDownloader holds a reference to steamClient; if we reconnect
+    (creating a new internal session), the DepotDownloader's network calls
+    hang forever waiting for chunks that will never arrive on the new session.
+    Instead, let the DepotDownloader fail naturally OR succeed on its own.
+  * Added logging for download_in_progress flag in onDisconnected
+
+- BUG 3 FIX: Added stuck-detection in the heartbeat
+  * If silentSec >= 60 AND dir_file_count == 0 AND downloadError == null,
+    set downloadError with a clear message:
+    "Download stuck — no activity for ${silentSec}s and no files written.
+     Steam may have disconnected mid-download (last status: $status,
+     steam_connected=$steamConnected)."
+  * The awaitCompletion wrapper will detect downloadError != null and break
+    out of the wait loop, surfacing the error to the user via
+    WorkshopDownloadJob.errorMessage instead of waiting the full 10min.
+
+- Bumped version to 0.1.3-alpha (versionCode 4)
+- Committed as 7f83229, pushed, CI build 40019679004 SUCCEEDED
+- Verified signature SHA-256 matches stable keystore (ea6cea74aa9e0f6c...)
+- Final APK: /home/z/my-project/download/wepwawet-0.1.3-alpha-release.apk (16 MB)
+
+Stage Summary:
+- All three root-cause bugs fixed:
+  1. installDirectory now passed to PubFileItem (files go to right place)
+  2. onDisconnected no longer auto-reconnects during a download
+     (which would corrupt the DepotDownloader's session state)
+  3. Stuck-detection aborts downloads after 60s of silence with no files
+     written (instead of making the user wait the full 10min timeout)
+- User can install this directly over 0.1.2-alpha (same signing key)
+- Next download attempt should either:
+  (a) Succeed because installDirectory is now correct, OR
+  (b) Fail within ~60s with a clear error message instead of hanging
+      silently for 10 minutes — at which point we'll have a clear log
+      of WHAT failed (Steam disconnect, no manifest, etc.) and can fix
+      the next layer
