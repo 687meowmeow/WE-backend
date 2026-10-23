@@ -199,6 +199,7 @@ object MpkgPacker {
             append("\t\"visibility\" : \"private\",\r\n")
             append("\t\"workshopurl\" : \"https://steamcommunity.com/sharedfiles/filedetails/?id=${item.id}\"\r\n")
             append("}")
+        }
     }
 
     /**
