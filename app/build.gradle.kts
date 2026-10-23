@@ -136,6 +136,13 @@ dependencies {
     implementation(libs.coil.compose)
     implementation("com.google.code.gson:gson:2.10.1")
 
+    // JavaSteam — Java/Kotlin port of SteamKit2 for direct Steam protocol access
+    // Downloads real workshop .pkg files via Steam's binary TCP protocol — NO PC required
+    // (runs entirely on-device via Java/Kotlin, no server-side component)
+    implementation(libs.javasteam.core)
+    implementation(libs.javasteam.depotdownloader)
+    implementation(libs.bouncycastleProvider)  // required by JavaSteam for crypto
+
     // WorkManager (for log persistence + background tasks)
     implementation(libs.androidx.work.runtime.ktx)
 
