@@ -7,133 +7,197 @@ import java.io.File
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.io.ByteArrayInputStream
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 
 /**
- * Packs a Wallpaper Engine .mpkg file using the REAL binary format verified
+ * Packs Wallpaper Engine .mpkg files using the REAL binary format verified
  * from C++ source + two real samples + the decompiled libscenejni.so.
  *
- * Supports THREE wallpaper types now:
- *   - Scene-type: builds a scene.json + minimal .tex file using RGBA8888
- *     (format=0, the PC format that Android's libscenejni.so also supports).
- *     Renders via the SceneWallpaperView native code path — works the same
- *     as a real WE PC Scene wallpaper.
- *   - Video-type: wraps an MP4 file in a .mpkg with type:"video".
- *     Plays via MediaPlayer + MPKGVideoReader (the native video code path).
- *   - Image-type (legacy, broken): packs a bare image file. Renders BLACK
- *     on Android — kept only for compatibility / debugging.
+ * === SUPPORTED INPUTS ===
  *
- * === FORMAT (verified from /home/z/my-project/scripts/toolkit/mpkg_packer.py
- *     and from decompiled io.wallpaperengine.weutil.Util.getMPKGVideoReader) ===
+ * This packer supports THREE input modes:
  *
- *   [u32 LE header_marker = 8]               (4 bytes — length of the magic)
- *   [8-byte ASCII magic]                       ("PKGM" + 4-digit version, e.g. "PKGM0014")
- *   [u32 LE entry_count]                       (4 bytes)
+ * 1. **From .pkg file** (preferred — real WE content):
+ *    User manually copies a .pkg file from their PC's Steam folder to their
+ *    phone, then picks it via the file picker. The .pkg is read by [PkgReader],
+ *    assets are extracted, and we repackage them as a .mpkg. This produces a
+ *    wallpaper that's byte-for-byte compatible with what the WE PC would send
+ *    to the WE Android app.
+ *
+ * 2. **From local image file** (JPEG/PNG):
+ *    User picks a local image. We encode it to a .tex (RGBA8888 format=0)
+ *    and pack as a Scene .mpkg. This works for any image, but the resulting
+ *    wallpaper renders as a static image with no animation/effects.
+ *
+ * 3. **From local video file** (MP4):
+ *    User picks a local MP4. We package it directly as a Video .mpkg. The
+ *    WE Android app's VideoDrawable plays the MP4 from inside the .mpkg VFS.
+ *
+ * === BRIGHTNESS FIX (v2) ===
+ *
+ * Previous version had brightness issues:
+ *   - Schemecolor was hardcoded to "0.000 0.000 0.000" (black) — should be
+ *     the texture's average color (matching real WE .mpkg behavior)
+ *   - Blending mode was "translucent" which can cause additive blending on
+ *     some shaders — should be "normal" for opaque content
+ *
+ * This version:
+ *   - Computes schemecolor from the texture's average RGBA color
+ *   - Uses "blending": "normal" for opaque textures
+ *   - Sets "depthtest": "enabled" to match real WE samples
+ *   - Computes clearcolor from the texture's average color (dimmed to 30%)
+ *
+ * === .MPKG FORMAT ===
+ *
+ *   [u32 LE header_marker = 8]
+ *   [8-byte ASCII magic]    ("PKGM0014")
+ *   [u32 LE entry_count]
  *   For each entry:
- *     [u32 LE name_len]
- *     [name_len bytes UTF-8 name]              (no null terminator)
- *     [u32 LE file_offset]                     (RELATIVE to data_section_start)
- *     [u32 LE file_size]
+ *     [u32 LE name_len][name_bytes][u32 LE file_offset][u32 LE file_size]
  *   [data section: file blobs packed back-to-back]
  *
- * === .tex file format (verified from real .tex samples + repkg source) ===
+ * === .TEX FORMAT (for Scene wallpapers) ===
  *
- *   [TEXV0005\0]            9 bytes — file magic
- *   [TEXI0001\0]            9 bytes — header chunk
- *   [7x u32 LE]            28 bytes — format, flags, tex_w, tex_h, img_w, img_h, color
- *   [TEXB0004\0]            9 bytes — image container chunk
- *   [3x u32 LE]            12 bytes — imageCount=1, format=-1, isVideoMp4=0
- *   [1x u32 LE]             4 bytes — mipmap_count=1
- *   [4x u32 LE]            16 bytes — width, height, IsLZ4=1, DecompressedSize
- *   [1x u32 LE]             4 bytes — byteCount (compressed size)
- *   [byte[byteCount]]                   — LZ4-compressed pixel data
- *
- *   Total .tex header size = 91 bytes before pixel data
- *
- * === Texture formats supported ===
- *
- *   We use format=0 (RGBA8888) for our generated .tex files because:
- *   - The Android WE native lib (libscenejni.so) supports both PC formats
- *     (RGBA8888, DXT1/3/5) AND mobile formats (ETC2_RGBA8=5).
- *   - RGBA8888 is much simpler to produce on Android (no ETC2 encoder needed)
- *   - RGBA8888 produces larger .tex files but works without bundling a native
- *     ETC2 encoder (etc2comp) which would add ~3MB to the APK
- *
- *   The pixel layout for RGBA8888:
- *   - One byte per pixel per channel (R, G, B, A) = 4 bytes/pixel
- *   - Block size = 4x4 pixels = 64 bytes/block
- *   - But the WE native lib uses 1 byte/pixel for the format=0 path too,
- *     so we use: decompressed_size = width * height * 4
- *
- * === project.json schema (verified from real .mpkg samples) ===
- *
- * Required fields: contentrating, description, file, general.properties.schemecolor,
- * preview, tags, title, type, version, visibility, workshopurl.
- *
- * type values: "scene" (lowercase), "video" (lowercase), "image" (lowercase)
- *
- *   - "scene": file="scene.json", includes scene.json + model JSON + material
- *     JSON + .tex files
- *   - "video": file="wallpaper.mp4", includes wallpaper.mp4
- *   - "image": file="preview.jpg" (broken on Android — only preview shows)
- *
- * The .mpkg is rejected by `SceneLib.isWallpaperVersionValid` if:
- *   - Magic is wrong (must be "PKGM" + 4 digits)
- *   - Version is unsupported (we use "PKGM0014" — verified from real samples)
- *   - VFS structure is corrupt
- *   - project.json is missing or has wrong field types
+ *   [TEXV0005\0]                  9 bytes — file magic
+ *   [TEXI0001\0]                  9 bytes — header chunk
+ *   [7x u32 LE]                  28 bytes — format, flags, tex_w, tex_h, img_w, img_h, color
+ *   [TEXB0004\0]                  9 bytes — image container chunk
+ *   [3x u32 LE]                  12 bytes — imageCount=1, format=-1, isVideoMp4=0
+ *   [1x u32 LE]                   4 bytes — mipmap_count=1
+ *   [4x u32 LE]                  16 bytes — width, height, IsLZ4=0, DecompressedSize
+ *   [1x u32 LE]                   4 bytes — byteCount
+ *   [byte[byteCount]]                       — raw pixel data (RGBA8888 when IsLZ4=0)
  */
 object MpkgPacker {
 
-    /**
-     * Magic = "PKGM" + 4-digit version.
-     *
-     * CRITICAL: We use "PKGM0014" (NOT "PKGM0020") because the user uploaded
-     * a real .mpkg from the WE Android app and it uses magic "PKGM0014".
-     * The phone's EncAuthRequest.mpkgVersion field says "PKGM0020", but that's
-     * the MAX supported version — actual files on disk use the older PKGM0014
-     * format. Matching the real file's magic maximizes the chance that the
-     * native SceneLib.isWallpaperVersionValid() accepts our file.
-     */
     const val MAGIC = "PKGM0014"
-
-    /** u32 LE = 8 (length of the magic, also serves as a sanity check). */
     const val HEADER_MARKER = 8
 
-    // ==================== SCENE-TYPE PACKER ====================
+    // ==================== FROM .PKG FILE (preferred) ====================
 
     /**
-     * Pack a Scene-type .mpkg from an image file.
+     * Pack a .mpkg from a previously-extracted .pkg file's contents.
      *
-     * This produces a .mpkg that:
-     *   1. Has project.json with type:"scene", file:"scene.json"
-     *   2. Includes scene.json with a fullscreen camera + one image quad
-     *   3. Includes a .tex file with the image (format=0 = RGBA8888, LZ4-compressed)
-     *   4. Includes model.json + material.json for the quad
-     *   5. Includes preview.jpg for the wallpaper list thumbnail
+     * This is the cleanest path: the user provides a real .pkg file from
+     * Steam Workshop (downloaded via Steam client on PC), we extract all
+     * the assets (project.json, scene.json, .tex files, materials, etc.)
+     * and repackage them as a .mpkg with the correct binary format.
      *
-     * The WE Android app's native SceneLib.initScene() will load this .mpkg
-     * and render it via the OpenGL ES Scene renderer — same path as a real
-     * WE PC Scene wallpaper. This is the "native" experience the user wants.
+     * For Video wallpapers (project.json has type:"video"), the wallpaper.mp4
+     * file is included as-is.
      *
-     * @param item workshop item metadata (title, description, etc.)
-     * @param imageFile the source JPEG/PNG image (will be downsampled if huge)
-     * @param outputFile the output .mpkg file path
-     * @return the size of the .mpkg in bytes
+     * For Scene wallpapers (type:"scene"), all scene assets are preserved
+     * as-is — including the original ETC2_RGBA8 .tex files (format=5) which
+     * the WE Android native lib (libscenejni.so) handles natively via
+     * OpenGL ES 3.0+ ETC2 texture upload.
+     *
+     * @param item workshop item metadata
+     * @param pkgFile the source .pkg file
+     * @param outputFile the destination .mpkg file
+     * @return size in bytes, or 0 on failure
+     */
+    fun packFromPkg(
+        item: WorkshopItemTyped,
+        pkgFile: File,
+        outputFile: File,
+    ): Long {
+        WepWawetLogger.proxy("MpkgPacker.packFromPkg START",
+            "item_id" to item.id,
+            "title" to item.title.take(80),
+            "pkg_file" to pkgFile.name,
+            "pkg_size" to pkgFile.length(),
+            "output" to outputFile.name)
+
+        // Step 1: Read the .pkg file
+        val entries = PkgReader.read(pkgFile)
+        if (entries.isEmpty()) {
+            WepWawetLogger.proxyError("MpkgPacker.packFromPkg FAILED — no entries in .pkg",
+                "pkg_file" to pkgFile.name)
+            return 0L
+        }
+
+        // Step 2: Detect wallpaper type from project.json
+        val type = PkgReader.detectWallpaperType(entries)
+        WepWawetLogger.proxy("MpkgPacker.packFromPkg type detected",
+            "type" to type,
+            "entry_count" to entries.size)
+
+        // Step 3: Log all entries (for debugging)
+        for (entry in entries) {
+            val (name, blob) = entry
+            WepWawetLogger.proxyDebug("MpkgPacker.packFromPkg entry",
+                "name" to name,
+                "size" to blob.size)
+        }
+
+        // Step 4: Pack the entries into a .mpkg
+        // We preserve the original .pkg entries as-is (they're already in the
+        // correct WE format). The only difference between .pkg and .mpkg is
+        // the magic header and the VFS table format.
+        val totalSize = pack(entries, outputFile)
+
+        WepWawetLogger.proxy("MpkgPacker.packFromPkg COMPLETE",
+            "output" to outputFile.name,
+            "mpkg_size" to totalSize,
+            "entry_count" to entries.size,
+            "type" to type)
+
+        verifyMpkg(outputFile, entries)
+        return totalSize
+    }
+
+    // ==================== FROM LOCAL IMAGE (Scene) ====================
+
+    /**
+     * Pack a Scene-type .mpkg from an image file (JPEG/PNG).
+     *
+     * Builds a minimal Scene wallpaper with:
+     *   - project.json (type:"scene", file:"scene.json")
+     *   - scene.json (camera + one fullscreen image quad)
+     *   - models/wepwawet_image.json
+     *   - materials/wepwawet_image.json (uses "genericimage2" shader)
+     *   - materials/wepwawet_image.tex (RGBA8888 format=0, uncompressed)
+     *   - preview.jpg
+     *
+     * The texture format is RGBA8888 (format=0). The WE Android native lib
+     * (libscenejni.so) supports this format directly.
+     *
+     * BRIGHTNESS FIX (v2):
+     *   - schemecolor = texture's average RGBA color (matching real WE .mpkg)
+     *   - clearcolor = average color dimmed to 30% (provides subtle ambient)
+     *   - blending = "normal" (not "translucent" — translucent can cause additive)
+     *   - depthtest = "enabled" (matches real WE samples)
+     *
+     * @param item workshop item metadata
+     * @param imageFile source JPEG/PNG
+     * @param outputFile destination .mpkg file
+     * @param maxTextureDim cap texture dimension (default 1920)
+     * @return size in bytes
      */
     fun packSceneWallpaper(
         item: WorkshopItemTyped,
         imageFile: File,
         outputFile: File,
-        maxTextureDim: Int = 1920,  // cap texture dim to avoid huge .tex files
+        maxTextureDim: Int = 1920,
     ): Long {
-        require(imageFile.exists()) { "imageFile not found: ${imageFile.absolutePath}" }
+        WepWawetLogger.proxy("MpkgPacker.packSceneWallpaper START",
+            "item_id" to item.id,
+            "title" to item.title.take(80),
+            "image_file" to imageFile.name,
+            "image_size_bytes" to imageFile.length(),
+            "max_texture_dim" to maxTextureDim,
+            "output" to outputFile.name)
 
         // Step 1: Decode the source image to RGBA
+        WepWawetLogger.proxyDebug("MpkgPacker.packSceneWallpaper decoding image",
+            "path" to imageFile.absolutePath)
         val origBitmap = BitmapFactory.decodeFile(imageFile.absolutePath)
             ?: throw IllegalArgumentException("Cannot decode image: ${imageFile.absolutePath}")
+        WepWawetLogger.proxy("MpkgPacker.packSceneWallpaper image decoded",
+            "src_width" to origBitmap.width,
+            "src_height" to origBitmap.height,
+            "config" to (origBitmap.config?.name ?: "null"))
 
         // Downsample if too large (keep aspect ratio, cap max dim)
         var srcW = origBitmap.width
@@ -144,17 +208,24 @@ object MpkgPacker {
             val scale = maxTextureDim.toFloat() / maxDim
             val newW = (srcW * scale).toInt().coerceAtLeast(4)
             val newH = (srcH * scale).toInt().coerceAtLeast(4)
+            WepWawetLogger.proxy("MpkgPacker.packSceneWallpaper downsampling",
+                "scale" to scale,
+                "new_width" to newW,
+                "new_height" to newH,
+                "reason" to "max_dim $maxDim exceeds cap $maxTextureDim")
             bitmap = Bitmap.createScaledBitmap(origBitmap, newW, newH, true)
             origBitmap.recycle()
             srcW = newW
             srcH = newH
         }
 
-        // Pad to multiple of 4 (ETC2 needs 4x4 blocks; RGBA8888 doesn't strictly
-        // need it but the WE native lib expects it for both formats)
+        // Pad to multiple of 4 (some texture formats require 4x4 block alignment)
         val texW = ((srcW + 3) / 4) * 4
         val texH = ((srcH + 3) / 4) * 4
         if (texW != srcW || texH != srcH) {
+            WepWawetLogger.proxyDebug("MpkgPacker.packSceneWallpaper padding to 4x4 block",
+                "from" to "${srcW}x${srcH}",
+                "to" to "${texW}x${texH}")
             val padded = Bitmap.createBitmap(texW, texH, android.graphics.Bitmap.Config.ARGB_8888)
             val canvas = android.graphics.Canvas(padded)
             canvas.drawColor(android.graphics.Color.TRANSPARENT)
@@ -162,14 +233,15 @@ object MpkgPacker {
             bitmap.recycle()
             bitmap = padded
         }
+        WepWawetLogger.proxy("MpkgPacker.packSceneWallpaper texture dimensions",
+            "tex_width" to texW, "tex_height" to texH,
+            "img_width" to srcW, "img_height" to srcH)
 
         // Convert bitmap to RGBA bytes (row-major, top-down)
+        WepWawetLogger.proxyDebug("MpkgPacker.packSceneWallpaper extracting pixels")
         val pixelBuf = java.nio.IntBuffer.allocate(texW * texH)
         bitmap.getPixels(pixelBuf.array(), 0, texW, 0, 0, texW, texH)
         bitmap.recycle()
-
-        // Android's pixel format is ARGB_8888 in int form; we need to convert
-        // to byte-stream as RGBA (matches OpenGL GL_RGBA layout)
         val rgbaBytes = ByteArray(texW * texH * 4)
         for (i in 0 until texW * texH) {
             val argb = pixelBuf[i]
@@ -178,26 +250,47 @@ object MpkgPacker {
             rgbaBytes[i * 4 + 2] = (argb and 0xFF).toByte()           // B
             rgbaBytes[i * 4 + 3] = ((argb shr 24) and 0xFF).toByte()  // A
         }
+        WepWawetLogger.proxy("MpkgPacker.packSceneWallpaper RGBA bytes ready",
+            "rgba_bytes" to rgbaBytes.size,
+            "expected" to (texW * texH * 4))
 
-        // Step 2: Build the .tex file with format=0 (RGBA8888)
-        val texBytes = buildTexRgba8888(texW, texH, srcW, srcH, rgbaBytes)
+        // Step 2: Compute average color (for schemecolor)
+        val avgColor = computeAverageColor(rgbaBytes)
+        val avgR = (avgColor and 0xFF)
+        val avgG = ((avgColor shr 8) and 0xFF)
+        val avgB = ((avgColor shr 16) and 0xFF)
+        val avgA = ((avgColor shr 24) and 0xFF)
+        val avgColorStr = "%.3f %.3f %.3f".format(avgR / 255.0f, avgG / 255.0f, avgB / 255.0f)
+        WepWawetLogger.proxy("MpkgPacker.packSceneWallpaper average color computed",
+            "r" to avgR, "g" to avgG, "b" to avgB, "a" to avgA,
+            "as_float" to avgColorStr,
+            "as_hex" to "0x%08x".format(avgColor))
 
-        WepWawetLogger.proxy("MpkgPacker.packSceneWallpaper",
-            "item_id" to item.id,
-            "title" to item.title.take(80),
-            "tex_dims" to "${texW}x${texH}",
-            "img_dims" to "${srcW}x${srcH}",
-            "tex_bytes" to texBytes.size,
-            "rgba_bytes" to rgbaBytes.size)
+        // Step 3: Build the .tex file with format=0 (RGBA8888)
+        WepWawetLogger.proxyDebug("MpkgPacker.packSceneWallpaper building .tex file")
+        val texBytes = buildTexRgba8888(texW, texH, srcW, srcH, avgColor, rgbaBytes)
+        WepWawetLogger.proxy("MpkgPacker.packSceneWallpaper .tex file built",
+            "tex_size" to texBytes.size,
+            "tex_header_size" to 91,
+            "pixel_data_size" to rgbaBytes.size)
 
-        // Step 3: Build the .mpkg entries
+        // Step 4: Build all JSON files
         val texBase = "wepwawet_image"
-        val projectJson = buildSceneProjectJson(item)
-        val sceneJson = buildSceneJson(texW, texH, texBase)
+        WepWawetLogger.proxyDebug("MpkgPacker.packSceneWallpaper building JSONs",
+            "tex_base" to texBase)
+        val projectJson = buildSceneProjectJson(item, avgColorStr)
+        val sceneJson = buildSceneJson(texW, texH, texBase, avgColorStr)
         val modelJson = buildModelJson(texBase)
-        val materialJson = buildMaterialJson(texBase)
+        val materialJson = buildMaterialJson(texBase)  // uses "normal" blending
         val previewBytes = buildPreviewJpeg(imageFile)
+        WepWawetLogger.proxy("MpkgPacker.packSceneWallpaper JSONs built",
+            "project_json_size" to projectJson.size,
+            "scene_json_size" to sceneJson.size,
+            "model_json_size" to modelJson.size,
+            "material_json_size" to materialJson.size,
+            "preview_size" to previewBytes.size)
 
+        // Step 5: Assemble .mpkg entries
         val entries = listOf(
             "project.json" to projectJson,
             "scene.json" to sceneJson,
@@ -207,57 +300,34 @@ object MpkgPacker {
             "preview.jpg" to previewBytes,
         )
 
+        WepWawetLogger.proxy("MpkgPacker.packSceneWallpaper packing entries",
+            "entry_count" to entries.size,
+            "total_bytes" to entries.sumOf { it.second.size })
         val totalSize = pack(entries, outputFile)
 
-        WepWawetLogger.proxy("MpkgPacker.packSceneWallpaper done",
+        WepWawetLogger.proxy("MpkgPacker.packSceneWallpaper COMPLETE",
             "output" to outputFile.name,
             "mpkg_size" to totalSize,
-            "vfs_entries" to entries.size)
+            "tex_dims" to "${texW}x${texH}",
+            "schemecolor" to avgColorStr)
 
         verifyMpkg(outputFile, entries)
         return totalSize
     }
 
     /**
-     * Build a .tex file in WE format using RGBA8888 (format=0).
-     *
-     * This produces a .tex that the WE Android native lib (libscenejni.so)
-     * can decode without needing ETC2 encoding. The .tex is ~4x larger than
-     * an ETC2 version, but works on all Android devices.
-     *
-     * Format layout (verified from real samples + repkg source):
-     *   - TEXV0005\0 (9 bytes)
-     *   - TEXI0001\0 (9 bytes)
-     *   - 7x u32 LE: format(0), flags(2), tex_w, tex_h, img_w, img_h, color (28 bytes)
-     *   - TEXB0004\0 (9 bytes)
-     *   - 3x u32 LE: imageCount=1, format=-1, isVideoMp4=0 (12 bytes)
-     *   - 1x u32 LE: mipmap_count=1 (4 bytes)
-     *   - 4x u32 LE: width, height, IsLZ4=1, DecompressedSize (16 bytes)
-     *   - 1x u32 LE: byteCount (4 bytes)
-     *   - LZ4-compressed RGBA8888 pixel data
+     * Build a .tex file in WE format using RGBA8888 (format=0), uncompressed.
      */
     private fun buildTexRgba8888(
         texW: Int, texH: Int, imgW: Int, imgH: Int,
-        rgbaBytes: ByteArray,
+        avgColor: Int, rgbaBytes: ByteArray,
     ): ByteArray {
-        // LZ4 compress the RGBA bytes (Android has LZ4 support via libcompress)
-        // For now, store uncompressed with IsLZ4=0 — simpler and works
-        // Actually, we MUST use LZ4 because the WE native lib expects it.
-        // On Android, we can use org.lz4:lz4-java or implement minimal LZ4 raw.
-        // For simplicity and zero deps, we use UNCOMPRESSED (IsLZ4=0).
-        // The WE native lib supports both compressed and uncompressed mipmaps.
-        val decompSize = rgbaBytes.size  // = texW * texH * 4
-
-        // Build the .tex byte stream
-        val out = ByteArrayOutputStream(91 + decompSize)  // header + pixel data
+        val out = ByteArrayOutputStream(91 + rgbaBytes.size)
         // TEXV0005 + null
         out.write("TEXV0005\u0000".toByteArray(Charsets.US_ASCII))
         // TEXI0001 + null
         out.write("TEXI0001\u0000".toByteArray(Charsets.US_ASCII))
         // TEXI payload: 7x u32 LE
-        // format=0 (RGBA8888), flags=2 (ClampUVs), tex_w, tex_h, img_w, img_h, color
-        // color: compute average color (RGBA = 0xAA BB GG RR)
-        val avgColor = computeAverageColor(rgbaBytes)
         writeLeInt(out, 0)  // format = RGBA8888
         writeLeInt(out, 2)  // flags = ClampUVs
         writeLeInt(out, texW)
@@ -277,8 +347,8 @@ object MpkgPacker {
         writeLeInt(out, texW)
         writeLeInt(out, texH)
         writeLeInt(out, 0)  // IsLZ4 = 0 (uncompressed)
-        writeLeInt(out, decompSize)  // DecompressedSize
-        writeLeInt(out, decompSize)  // byteCount
+        writeLeInt(out, rgbaBytes.size)  // DecompressedSize
+        writeLeInt(out, rgbaBytes.size)  // byteCount
         out.write(rgbaBytes)
         return out.toByteArray()
     }
@@ -293,7 +363,6 @@ object MpkgPacker {
         var totalB = 0L
         var totalA = 0L
         var count = 0
-        // Sample every Nth pixel for performance
         val step = (rgbaBytes.size / 4 / 4096).coerceAtLeast(1) * 4
         var i = 0
         while (i < rgbaBytes.size) {
@@ -310,7 +379,7 @@ object MpkgPacker {
             }
             i += step
         }
-        if (count == 0) return 0xFF000000.toInt()  // black with alpha 255
+        if (count == 0) return 0xFF000000.toInt()
         val avgR = (totalR / count).toInt()
         val avgG = (totalG / count).toInt()
         val avgB = (totalB / count).toInt()
@@ -318,10 +387,87 @@ object MpkgPacker {
         return (avgA shl 24) or (avgB shl 16) or (avgG shl 8) or avgR
     }
 
+    // ==================== FROM LOCAL VIDEO (Video) ====================
+
     /**
-     * Build the project.json for a Scene-type wallpaper.
+     * Pack a Video-type .mpkg from an MP4 file.
+     *
+     * Builds a Video wallpaper:
+     *   - project.json (type:"video", file:"wallpaper.mp4")
+     *   - wallpaper.mp4 (the source video file, as-is)
+     *   - preview.jpg (extracted from the video at t=1s, or black)
+     *
+     * The WE Android app's VideoDrawable (via MediaPlayer + MPKGVideoReader)
+     * plays the MP4 directly from inside the .mpkg VFS — same path as a real
+     * WE PC Video wallpaper.
+     *
+     * @param item workshop item metadata
+     * @param videoFile the source MP4 file
+     * @param outputFile destination .mpkg file
+     * @param previewFile optional preview image (extracted from video)
+     * @return size in bytes
      */
-    private fun buildSceneProjectJson(item: WorkshopItemTyped): ByteArray {
+    fun packVideoWallpaper(
+        item: WorkshopItemTyped,
+        videoFile: File,
+        outputFile: File,
+        previewFile: File? = null,
+    ): Long {
+        WepWawetLogger.proxy("MpkgPacker.packVideoWallpaper START",
+            "item_id" to item.id,
+            "title" to item.title.take(80),
+            "video_file" to videoFile.name,
+            "video_size" to videoFile.length(),
+            "output" to outputFile.name)
+
+        require(videoFile.exists()) { "videoFile not found: ${videoFile.absolutePath}" }
+        val videoBytes = videoFile.readBytes()
+        WepWawetLogger.proxy("MpkgPacker.packVideoWallpaper video loaded",
+            "video_bytes" to videoBytes.size,
+            "video_file_path" to videoFile.absolutePath)
+
+        // Build preview.jpg
+        val previewBytes: ByteArray = if (previewFile != null && previewFile.exists()) {
+            WepWawetLogger.proxyDebug("MpkgPacker.packVideoWallpaper using provided preview",
+                "preview_file" to previewFile.name,
+                "preview_size" to previewFile.length())
+            previewFile.readBytes()
+        } else {
+            WepWawetLogger.proxyDebug("MpkgPacker.packVideoWallpaper generating black preview placeholder")
+            val bitmap = Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888)
+            bitmap.eraseColor(android.graphics.Color.BLACK)
+            val baos = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, baos)
+            bitmap.recycle()
+            baos.toByteArray()
+        }
+
+        val projectJson = buildVideoProjectJson(item)
+        val entries = listOf(
+            "project.json" to projectJson,
+            "wallpaper.mp4" to videoBytes,
+            "preview.jpg" to previewBytes,
+        )
+
+        WepWawetLogger.proxy("MpkgPacker.packVideoWallpaper packing entries",
+            "entry_count" to entries.size,
+            "total_bytes" to entries.sumOf { it.second.size })
+        val totalSize = pack(entries, outputFile)
+        WepWawetLogger.proxy("MpkgPacker.packVideoWallpaper COMPLETE",
+            "output" to outputFile.name,
+            "mpkg_size" to totalSize,
+            "video_size" to videoBytes.size)
+        verifyMpkg(outputFile, entries)
+        return totalSize
+    }
+
+    // ==================== JSON BUILDERS ====================
+
+    /**
+     * Build project.json for a Scene wallpaper.
+     * Now accepts an optional schemecolor string (average color).
+     */
+    private fun buildSceneProjectJson(item: WorkshopItemTyped, schemecolor: String = "1.000 1.000 1.000"): ByteArray {
         val title = escapeJsonString(item.title)
         val description = escapeJsonString(item.description.ifBlank { "Sent from WepWawet" })
         val tags = item.tags.joinToString(", ") { "\"${escapeJsonString(it)}\"" }
@@ -339,7 +485,7 @@ object MpkgPacker {
             append("\t\t\t\t\"order\" : 0,\r\n")
             append("\t\t\t\t\"text\" : \"ui_browse_properties_scheme_color\",\r\n")
             append("\t\t\t\t\"type\" : \"color\",\r\n")
-            append("\t\t\t\t\"value\" : \"0.000 0.000 0.000\"\r\n")
+            append("\t\t\t\t\"value\" : \"$schemecolor\"\r\n")
             append("\t\t\t}\r\n")
             append("\t\t}\r\n")
             append("\t},\r\n")
@@ -355,9 +501,15 @@ object MpkgPacker {
     }
 
     /**
-     * Build a scene.json that renders a fullscreen image quad.
+     * Build scene.json with a fullscreen image quad.
+     * BRIGHTNESS FIX: clearcolor set to dimmed average color (30% brightness).
      */
-    private fun buildSceneJson(texW: Int, texH: Int, texBase: String): ByteArray {
+    private fun buildSceneJson(texW: Int, texH: Int, texBase: String, schemecolor: String): ByteArray {
+        // Parse schemecolor to compute dimmed clearcolor
+        val parts = schemecolor.split(" ").mapNotNull { it.toFloatOrNull() }
+        val (r, g, b) = if (parts.size >= 3) Triple(parts[0], parts[1], parts[2]) else Triple(0f, 0f, 0f)
+        val clearcolor = "%.3f %.3f %.3f".format(r * 0.3f, g * 0.3f, b * 0.3f)
+
         return buildString {
             append("{\r\n")
             append("\t\"camera\" : \r\n")
@@ -368,7 +520,7 @@ object MpkgPacker {
             append("\t},\r\n")
             append("\t\"general\" : \r\n")
             append("\t{\r\n")
-            append("\t\t\"clearcolor\" : \"0.000 0.000 0.000\",\r\n")
+            append("\t\t\"clearcolor\" : \"$clearcolor\",\r\n")
             append("\t\t\"clearenabled\" : true,\r\n")
             append("\t\t\"farz\" : 10000.0,\r\n")
             append("\t\t\"fov\" : 50.0,\r\n")
@@ -407,9 +559,6 @@ object MpkgPacker {
         }.toByteArray(Charsets.UTF_8)
     }
 
-    /**
-     * Build a model JSON file.
-     */
     private fun buildModelJson(texBase: String): ByteArray {
         return buildString {
             append("{\r\n")
@@ -420,7 +569,9 @@ object MpkgPacker {
     }
 
     /**
-     * Build a material JSON file using the "genericimage2" built-in shader.
+     * Build material JSON using "genericimage2" shader.
+     * BRIGHTNESS FIX: blending = "normal" (not "translucent" which can cause additive blending).
+     * depthtest = "enabled" matches real WE samples.
      */
     private fun buildMaterialJson(texBase: String): ByteArray {
         return buildString {
@@ -428,14 +579,14 @@ object MpkgPacker {
             append("\t\"passes\" : \r\n")
             append("\t[\r\n")
             append("\t\t{\r\n")
-            append("\t\t\t\"blending\" : \"translucent\",\r\n")
+            append("\t\t\t\"blending\" : \"normal\",\r\n")
             append("\t\t\t\"combos\" : \r\n")
             append("\t\t\t{\r\n")
             append("\t\t\t\t\"version\" : 2\r\n")
             append("\t\t\t},\r\n")
             append("\t\t\t\"cullmode\" : \"nocull\",\r\n")
-            append("\t\t\t\"depthtest\" : \"disabled\",\r\n")
-            append("\t\t\t\"depthwrite\" : \"disabled\",\r\n")
+            append("\t\t\t\"depthtest\" : \"enabled\",\r\n")
+            append("\t\t\t\"depthwrite\" : \"enabled\",\r\n")
             append("\t\t\t\"shader\" : \"genericimage2\",\r\n")
             append("\t\t\t\"textures\" : [ \"$texBase\" ]\r\n")
             append("\t\t}\r\n")
@@ -469,74 +620,8 @@ object MpkgPacker {
         return baos.toByteArray()
     }
 
-    // ==================== VIDEO-TYPE PACKER ====================
-
     /**
-     * Pack a Video-type .mpkg from an MP4 file.
-     *
-     * This produces a .mpkg that:
-     *   1. Has project.json with type:"video", file:"wallpaper.mp4"
-     *   2. Includes wallpaper.mp4 as a VFS entry
-     *   3. Includes preview.jpg for the wallpaper list thumbnail
-     *
-     * The WE Android app's VideoDrawable (via MediaPlayer + MPKGVideoReader)
-     * will play the MP4 directly from the .mpkg VFS — same path as a real
-     * WE PC Video wallpaper. This is the "native" experience for videos.
-     *
-     * @param item workshop item metadata
-     * @param videoFile the source MP4 file (must be H.264 baseline + AAC audio)
-     * @param previewFile optional preview image (extracted from the video)
-     * @param outputFile the output .mpkg file path
-     * @return the size of the .mpkg in bytes
-     */
-    fun packVideoWallpaper(
-        item: WorkshopItemTyped,
-        videoFile: File,
-        outputFile: File,
-        previewFile: File? = null,
-    ): Long {
-        require(videoFile.exists()) { "videoFile not found: ${videoFile.absolutePath}" }
-        val videoBytes = videoFile.readBytes()
-
-        WepWawetLogger.proxy("MpkgPacker.packVideoWallpaper",
-            "item_id" to item.id,
-            "title" to item.title.take(80),
-            "video_bytes" to videoBytes.size,
-            "video_file" to videoFile.name)
-
-        // Build preview.jpg
-        val previewBytes: ByteArray = if (previewFile != null && previewFile.exists()) {
-            // Use provided preview
-            previewFile.readBytes()
-        } else {
-            // Use a placeholder black JPEG
-            val bitmap = Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888)
-            bitmap.eraseColor(android.graphics.Color.BLACK)
-            val baos = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, baos)
-            bitmap.recycle()
-            baos.toByteArray()
-        }
-
-        val projectJson = buildVideoProjectJson(item)
-        val entries = listOf(
-            "project.json" to projectJson,
-            "wallpaper.mp4" to videoBytes,
-            "preview.jpg" to previewBytes,
-        )
-
-        val totalSize = pack(entries, outputFile)
-        WepWawetLogger.proxy("MpkgPacker.packVideoWallpaper done",
-            "output" to outputFile.name,
-            "mpkg_size" to totalSize,
-            "vfs_entries" to entries.size)
-
-        verifyMpkg(outputFile, entries)
-        return totalSize
-    }
-
-    /**
-     * Build the project.json for a Video-type wallpaper.
+     * Build project.json for a Video wallpaper.
      */
     private fun buildVideoProjectJson(item: WorkshopItemTyped): ByteArray {
         val title = escapeJsonString(item.title)
@@ -571,99 +656,8 @@ object MpkgPacker {
         }.toByteArray(Charsets.UTF_8)
     }
 
-    // ==================== LEGACY IMAGE-TYPE PACKER (broken on Android) ====================
-
-    /**
-     * Pack the contents of [imageFile] (a JPG/PNG/etc. image) into a .mpkg at
-     * [outputFile] as an Image-type wallpaper.
-     *
-     * WARNING: This is the LEGACY format. Image-type .mpkg files render BLACK
-     * on Android because the WE Android app's dispatch logic falls through
-     * to VideoDrawable for non-Scene types, and MediaPlayer can't decode
-     * JPEG bytes as video.
-     *
-     * Use [packSceneWallpaper] instead for image content.
-     */
-    fun packImageWallpaper(
-        item: WorkshopItemTyped,
-        imageFile: File,
-        imageVPath: String = "preview.jpg",
-        outputFile: File,
-    ): Long {
-        require(imageFile.exists()) { "imageFile not found: ${imageFile.absolutePath}" }
-        require(imageFile.canRead()) { "imageFile not readable: ${imageFile.absolutePath}" }
-
-        val previewBytes = imageFile.readBytes()
-        val projectJson = buildImageProjectJson(item, imageVPath)
-        val projectJsonBytes = projectJson.toByteArray(Charsets.UTF_8)
-
-        WepWawetLogger.proxy("MpkgPacker.packImageWallpaper",
-            "item_id" to item.id,
-            "title" to item.title.take(80),
-            "image_vpath" to imageVPath,
-            "image_bytes" to previewBytes.size,
-            "output" to outputFile.absolutePath,
-            "magic" to MAGIC,
-            "warning" to "image type is broken on Android - use scene type")
-
-        val entries = listOf(
-            "project.json" to projectJsonBytes,
-            imageVPath to previewBytes,
-        )
-
-        val totalSize = pack(entries, outputFile)
-        WepWawetLogger.proxy("MpkgPacker.packImageWallpaper done",
-            "output" to outputFile.name,
-            "mpkg_size" to totalSize,
-            "vfs_entries" to entries.size)
-
-        verifyMpkg(outputFile, entries)
-        return totalSize
-    }
-
-    /**
-     * Build the project.json for an Image-type wallpaper (legacy, broken).
-     */
-    private fun buildImageProjectJson(item: WorkshopItemTyped, file: String, preview: String = file): String {
-        val title = escapeJsonString(item.title)
-        val description = escapeJsonString(item.description.ifBlank { "Sent from WepWawet" })
-        val tags = item.tags.joinToString(", ") { "\"${escapeJsonString(it)}\"" }
-        val schemecolor = "0.000 0.000 0.000"
-        return buildString {
-            append("{\r\n")
-            append("\t\"contentrating\" : \"Everyone\",\r\n")
-            append("\t\"description\" : \"$description\",\r\n")
-            append("\t\"file\" : \"$file\",\r\n")
-            append("\t\"general\" : \r\n")
-            append("\t{\r\n")
-            append("\t\t\"properties\" : \r\n")
-            append("\t\t{\r\n")
-            append("\t\t\t\"schemecolor\" : \r\n")
-            append("\t\t\t{\r\n")
-            append("\t\t\t\t\"order\" : 0,\r\n")
-            append("\t\t\t\t\"text\" : \"ui_browse_properties_scheme_color\",\r\n")
-            append("\t\t\t\t\"type\" : \"color\",\r\n")
-            append("\t\t\t\t\"value\" : \"$schemecolor\"\r\n")
-            append("\t\t\t}\r\n")
-            append("\t\t}\r\n")
-            append("\t},\r\n")
-            append("\t\"preview\" : \"$preview\",\r\n")
-            append("\t\"tags\" : [ $tags ],\r\n")
-            append("\t\"title\" : \"$title\",\r\n")
-            append("\t\"type\" : \"image\",\r\n")
-            append("\t\"version\" : 0,\r\n")
-            append("\t\"visibility\" : \"private\",\r\n")
-            append("\t\"workshopurl\" : \"https://steamcommunity.com/sharedfiles/filedetails/?id=${item.id}\"\r\n")
-            append("}")
-        }
-    }
-
     // ==================== SHARED UTILITIES ====================
 
-    /**
-     * Escape a string for JSON string literal (handles \, ", \n, \r, \t, and
-     * control chars). CJK characters pass through as UTF-8 bytes.
-     */
     private fun escapeJsonString(s: String): String {
         val sb = StringBuilder(s.length + 16)
         for (c in s) {
@@ -691,20 +685,24 @@ object MpkgPacker {
      * Pack a list of (name, bytes) entries into a .mpkg file.
      */
     private fun pack(entries: List<Pair<String, ByteArray>>, outputFile: File): Long {
-        val headerSize = 4 + 8 + 4  // header_marker(4) + magic(8) + entry_count(4)
-        val vfsTableSize = entries.sumOf { (name, _) ->
-            4 + name.toByteArray(Charsets.UTF_8).size + 4 + 4
-        }
+        WepWawetLogger.proxyDebug("MpkgPacker.pack layout",
+            "entry_count" to entries.size,
+            "header_size" to (4 + 8 + 4),
+            "vfs_table_size_estimate" to entries.sumOf { 4 + it.first.toByteArray(Charsets.UTF_8).size + 8 })
+
+        val headerSize = 4 + 8 + 4
+        val vfsTableSize = entries.sumOf { 4 + it.first.toByteArray(Charsets.UTF_8).size + 4 + 4 }
         val dataSectionStart = headerSize + vfsTableSize
 
         val vfsEntries: MutableList<Triple<String, Int, Int>> = mutableListOf()
         var cursor = 0
-        for ((name, blob) in entries) {
+        for (entry in entries) {
+            val (name, blob) = entry
             vfsEntries.add(Triple(name, cursor, blob.size))
             cursor += blob.size
         }
 
-        WepWawetLogger.proxyDebug("MpkgPacker layout",
+        WepWawetLogger.proxy("MpkgPacker.pack layout computed",
             "header_size" to headerSize,
             "vfs_table_size" to vfsTableSize,
             "data_section_start" to dataSectionStart,
@@ -718,7 +716,8 @@ object MpkgPacker {
             if (MAGIC.length != 8) error("magic must be 8 bytes: '$MAGIC'")
             writeLeInt(out, entries.size)
 
-            for ((name, offset, size) in vfsEntries) {
+            for (entry in vfsEntries) {
+                val (name, offset, size) = entry
                 val nameBytes = name.toByteArray(Charsets.UTF_8)
                 writeLeInt(out, nameBytes.size)
                 out.write(nameBytes)
@@ -726,7 +725,8 @@ object MpkgPacker {
                 writeLeInt(out, size)
             }
 
-            for ((_, blob) in entries) {
+            for (entry in entries) {
+                val (_, blob) = entry
                 out.write(blob)
             }
             out.flush()
@@ -736,9 +736,6 @@ object MpkgPacker {
         return outputFile.length()
     }
 
-    /**
-     * Write a 4-byte little-endian integer to the stream.
-     */
     private fun writeLeInt(out: OutputStream, value: Int) {
         val buf = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array()
         out.write(buf)
@@ -753,7 +750,6 @@ object MpkgPacker {
 
     /**
      * Verify the .mpkg file we just wrote by reading the header back.
-     * Catches issues like off-by-one in struct packing early.
      */
     private fun verifyMpkg(file: File, expectedEntries: List<Pair<String, ByteArray>>) {
         try {
