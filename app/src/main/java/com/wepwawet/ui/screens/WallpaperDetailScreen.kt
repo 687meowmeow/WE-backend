@@ -102,11 +102,11 @@ fun WallpaperDetailScreen(
     var isSending by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
 
-    // Track whether the user has Backend URL set up
-    var hasBackendUrl by remember { mutableStateOf(com.wepwawet.pairing.WorkshopBackendClient.hasBackendUrl(context)) }
-    // Re-check credentials whenever this screen is resumed (user might have just set them)
+    // Track whether the user has Steam credentials set up (for JavaSteam direct download)
+    var hasSteamCredentials by remember { mutableStateOf(com.wepwawet.pairing.SteamCredentialsStore.hasCredentials(context)) }
+    // Re-check whenever this screen is resumed
     LaunchedEffect(itemId) {
-        hasBackendUrl = com.wepwawet.pairing.WorkshopBackendClient.hasBackendUrl(context)
+        hasSteamCredentials = com.wepwawet.pairing.SteamCredentialsStore.hasCredentials(context)
     }
 
     LaunchedEffect(itemId) {
@@ -298,7 +298,7 @@ fun WallpaperDetailScreen(
                 }
             }
 
-            // === Send to phone button — downloads ACTUAL .pkg content via backend ===
+            // === Send to phone button — downloads REAL .pkg via JavaSteam (no PC) ===
             item {
                 Button(
                     onClick = {
@@ -316,15 +316,15 @@ fun WallpaperDetailScreen(
                     Text(
                         if (isSending) "Sending…"
                         else if (!isPaired) "Send to phone (pair first)"
-                        else if (!hasBackendUrl) "Send to phone (set up backend first)"
-                        else "Send to phone (real .pkg via backend)"
+                        else if (!hasSteamCredentials) "Send to phone (enter Steam login in Settings)"
+                        else "Send to phone"
                     )
                 }
             }
 
             // === Helper hint ===
             item {
-                if (!hasBackendUrl) {
+                if (!hasSteamCredentials) {
                     Surface(
                         color = MaterialTheme.colorScheme.secondaryContainer,
                         shape = RoundedCornerShape(8.dp),
@@ -332,14 +332,15 @@ fun WallpaperDetailScreen(
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Text(
-                                "Backend URL required",
+                                "Steam login required",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer,
                             )
                             Text(
-                                "To download the actual workshop content (not just the preview), " +
-                                "create a free account at your backend server and enter your email + password " +
-                                "in the Settings screen.",
+                                "To download the actual wallpaper content directly on your phone " +
+                                "(no PC needed), enter your Steam username and password in Settings. " +
+                                "Your Steam account must own Wallpaper Engine. Your credentials are " +
+                                "stored only on this device.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer,
                             )
@@ -426,7 +427,7 @@ private fun onSendToPhoneClicked(
         "title" to item.title.take(80),
         "tags" to item.tags.joinToString(","),
         "type" to item.type.displayName,
-        "has_backend" to com.wepwawet.pairing.WorkshopBackendClient.hasBackendUrl(context))
+        "has_steam_credentials" to com.wepwawet.pairing.SteamCredentialsStore.hasCredentials(context))
 
     if (!PairingService.isPaired()) {
         val msg = "Not paired — open the Pairing tab first."
@@ -435,42 +436,46 @@ private fun onSendToPhoneClicked(
         return
     }
 
-    if (!com.wepwawet.pairing.WorkshopBackendClient.hasBackendUrl(context)) {
-        val msg = "Backend URL not set. Open Settings → Open Settings → Backend URL to set up your self-hosted workshop content backend."
-        WepWawetLogger.workshopWarn("send-to-phone: no Backend URL", "id" to item.id)
+    if (!com.wepwawet.pairing.SteamCredentialsStore.hasCredentials(context)) {
+        val msg = "Steam login not set. Open Settings → Steam account → enter your Steam username and password."
+        WepWawetLogger.workshopWarn("send-to-phone: no Steam credentials", "id" to item.id)
         onEnd(msg)
         return
     }
 
-    onStart("Downloading real .pkg via backend (this may take 1-2 minutes)…")
+    val steamUser = com.wepwawet.pairing.SteamCredentialsStore.getUsername(context)!!
+    val steamPass = com.wepwawet.pairing.SteamCredentialsStore.getPassword(context)!!
+
+    onStart("Downloading real .pkg via Steam (no PC needed, this may take 1-2 minutes)…")
     scope.launch {
         try {
-            // === Step 1: Download the actual .pkg file via the self-hosted backend ===
-            WepWawetLogger.workshop("send-to-phone: step 1/4 requesting .pkg download from backend",
-                "workshop_id" to item.id)
+            // === Step 1: Download the actual .pkg file via JavaSteam (direct on-device) ===
+            WepWawetLogger.workshop("send-to-phone: step 1/4 downloading .pkg via JavaSteam",
+                "workshop_id" to item.id,
+                "steam_user" to steamUser)
 
             val sendId = System.currentTimeMillis()
             val pkgFile = java.io.File(context.cacheDir, "${item.id}_$sendId.pkg")
-            val backendClient = com.wepwawet.pairing.WorkshopBackendClient()
+            val downloader = com.wepwawet.pairing.WorkshopDownloader(steamUser, steamPass)
             val downloadedPkg = withContext(Dispatchers.IO) {
-                backendClient.downloadWorkshopPkg(
+                downloader.downloadWorkshopPkg(
                     context = context,
                     workshopId = item.id,
                     outputFile = pkgFile,
                     onProgress = { /* progress; logged internally */ },
                     onStatusUpdate = { status ->
-                        WepWawetLogger.workshop("send-to-phone: backend status update",
+                        WepWawetLogger.workshop("send-to-phone: JavaSteam status",
                             "status" to status)
                     },
                 )
             }
 
             if (downloadedPkg == null || !downloadedPkg.exists() || downloadedPkg.length() == 0L) {
-                WepWawetLogger.workshopWarn("send-to-phone: step 1/4 backend download failed",
+                WepWawetLogger.workshopWarn("send-to-phone: step 1/4 JavaSteam download failed",
                     "pkg_file" to pkgFile.absolutePath,
                     "exists" to pkgFile.exists(),
                     "size" to pkgFile.length())
-                onEnd("Failed to download .pkg via backend (see logs)")
+                onEnd("Failed to download .pkg via Steam (see logs)")
                 return@launch
             }
             WepWawetLogger.workshop("send-to-phone: step 1/4 .pkg downloaded",
@@ -484,10 +489,10 @@ private fun onSendToPhoneClicked(
                 "file_type" to fileType,
                 "file_name" to downloadedPkg.name)
             if (fileType != "PKGV0024") {
-                WepWawetLogger.workshopWarn("send-to-phone: step 2/4 unexpected file type from backend",
+                WepWawetLogger.workshopWarn("send-to-phone: step 2/4 unexpected file type",
                     "expected" to "PKGV0024",
                     "got" to fileType)
-                onEnd("backend returned unexpected file type: $fileType (expected PKGV0024 .pkg)")
+                onEnd("Steam returned unexpected file type: $fileType (expected PKGV0024 .pkg)")
                 return@launch
             }
 
@@ -529,7 +534,7 @@ private fun onSendToPhoneClicked(
                 "next_action" to "WePairingServer will pick this up on next heartbeat (~3s) and transfer via AES-encrypted chunks")
             onEnd("Queued for transfer to $deviceName (real .pkg content, ${formatBytes(mpkgFile.length())}). Transfer starts on next heartbeat (~3s).")
 
-            // Clean up the .pkg cache file (the .mpkg is now in cache and queued)
+            // Clean up the .pkg cache file
             downloadedPkg.delete()
         } catch (e: Exception) {
             WepWawetLogger.workshopWarn("send-to-phone: unhandled exception",

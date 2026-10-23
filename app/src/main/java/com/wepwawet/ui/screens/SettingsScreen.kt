@@ -50,9 +50,10 @@ fun SettingsScreen(
     val context = LocalContext.current
     var autoStart by remember { mutableStateOf(false) }
     var verboseLog by remember { mutableStateOf(true) }
-    // Re-check login state on every recomposition (cheap SharedPreferences read)
-    var steamLoggedIn by remember { mutableStateOf(SteamLoginActivity.isLoggedIn(context)) }
-    var steamId by remember { mutableStateOf(SteamLoginActivity.getSteamId(context)) }
+
+    // Steam credentials (for JavaSteam direct download — no PC needed)
+    var steamUsername by remember { mutableStateOf(com.wepwawet.pairing.SteamCredentialsStore.getUsername(context) ?: "") }
+    var steamPassword by remember { mutableStateOf("") }
 
     // Backend URL state (for the self-hosted workshop content backend)
     var backendUrl by remember { mutableStateOf(com.wepwawet.pairing.WorkshopBackendClient.getBackendUrl(context) ?: "") }
@@ -102,51 +103,75 @@ fun SettingsScreen(
                 }
             }
 
-            // Steam account
+            // Steam account (for JavaSteam direct download — no PC needed)
             Card {
                 Column(Modifier.padding(16.dp)) {
                     Text("Steam account", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Sign in to Steam to subscribe to and download workshop items. " +
-                            "Your password stays on Steam's servers — WepWawet only " +
-                            "stores the resulting session cookies.",
+                        "Enter your Steam username and password to download workshop " +
+                        "content directly on your phone via JavaSteam (no PC needed). " +
+                        "Your Steam account must own Wallpaper Engine. Credentials are " +
+                        "stored only on this device.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Spacer(Modifier.height(8.dp))
+                    // Show saved status
+                    val hasCreds = com.wepwawet.pairing.SteamCredentialsStore.hasCredentials(context)
                     Text(
-                        if (steamLoggedIn)
-                            "Logged in as ${steamId ?: "unknown Steam ID"}"
-                        else "Not logged in",
-                        color = if (steamLoggedIn)
+                        if (hasCreds) {
+                            "Credentials saved for: ${com.wepwawet.pairing.SteamCredentialsStore.getUsername(context) ?: "unknown"}"
+                        } else "No Steam credentials saved",
+                        color = if (hasCreds)
                             MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = steamUsername,
+                        onValueChange = { steamUsername = it },
+                        label = { Text("Steam username") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = steamPassword,
+                        onValueChange = { steamPassword = it },
+                        label = { Text("Steam password") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
                     Button(
                         onClick = {
-                            WepWawetLogger.lifecycle("SettingsScreen: open Steam login")
-                            onOpenSteamLogin()
+                            if (steamUsername.isBlank() || steamPassword.isBlank()) return@Button
+                            com.wepwawet.pairing.SteamCredentialsStore.saveCredentials(
+                                context, steamUsername, steamPassword)
+                            WepWawetLogger.lifecycle("SettingsScreen: Steam credentials saved",
+                                "username" to steamUsername)
+                            steamPassword = ""  // clear from memory
                         },
+                        enabled = steamUsername.isNotBlank() && steamPassword.isNotBlank(),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Icon(Icons.Filled.Login, contentDescription = null)
-                        Spacer(Modifier.height(0.dp))
-                        Text("  ${if (steamLoggedIn) "Re-authenticate" else "Log in to Steam"}")
+                        Text("Save Steam credentials")
                     }
-                    if (steamLoggedIn) {
+                    if (hasCreds) {
                         Spacer(Modifier.height(8.dp))
                         androidx.compose.material3.OutlinedButton(
                             onClick = {
-                                WepWawetLogger.lifecycle("SettingsScreen: Steam logout")
-                                SteamLoginActivity.logout(context)
-                                steamLoggedIn = false
-                                steamId = null
+                                com.wepwawet.pairing.SteamCredentialsStore.clearCredentials(context)
+                                steamUsername = ""
+                                steamPassword = ""
+                                WepWawetLogger.lifecycle("SettingsScreen: Steam credentials cleared")
                             },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text("Log out")
+                            Text("Clear saved credentials")
                         }
                     }
                 }
