@@ -73,6 +73,8 @@ object MpkgPacker {
 
     const val MAGIC = "PKGM0014"
     const val HEADER_MARKER = 8
+    /** PNG magic bytes — used to detect PNG data inside .tex files. */
+    private val PNG_MAGIC = byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47) // \x89PNG
 
     // ==================== FROM .PKG FILE (preferred) ====================
 
@@ -150,6 +152,43 @@ object MpkgPacker {
                         "source" to standaloneFile.absolutePath)
                 }
             }
+        }
+
+        // Step 3c: Convert .tex files that contain PNG data to raw RGBA8888.
+        // The Steam depot stores .tex files with PNG-encoded data inside the
+        // TEXB section (TEXB format=13=PNG). The TEXI header declares
+        // format=0 (RGBA8888 = raw pixel data). The WE PC app decodes the PNG
+        // at load time, but the WE Android app reads format=0 and expects raw
+        // RGBA pixel data — interpreting PNG bytes as pixels produces the
+        // yellow/black checkerboard pattern.
+        // Fix: decode each PNG inside .tex files to raw RGBA8888 pixels.
+        val processedEntries = mutableListOf<Pair<String, ByteArray>>()
+        var texConverted = 0
+        for (entry in entries) {
+            val (name, blob) = entry
+            if (name.endsWith(".tex") && blob.contains(PNG_MAGIC[0]) && findBytes(blob, PNG_MAGIC) >= 0) {
+                val converted = convertTexPngToRgba(blob, name)
+                if (converted != null) {
+                    processedEntries.add(Pair(name, converted))
+                    texConverted++
+                    WepWawetLogger.proxy("MpkgPacker: converted .tex PNG→RGBA",
+                        "name" to name,
+                        "original_size" to blob.size,
+                        "converted_size" to converted.size)
+                } else {
+                    processedEntries.add(entry)
+                    WepWawetLogger.proxyWarn("MpkgPacker: .tex PNG conversion FAILED — using original",
+                        "name" to name)
+                }
+            } else {
+                processedEntries.add(entry)
+            }
+        }
+        if (texConverted > 0) {
+            // Replace entries with processed ones
+            entries.clear()
+            entries.addAll(processedEntries)
+            WepWawetLogger.proxy("MpkgPacker: converted $texConverted .tex files from PNG→RGBA")
         }
 
         // Step 4: Pack the entries into a .mpkg
@@ -700,6 +739,229 @@ object MpkgPacker {
             }
         }
         return sb.toString()
+    }
+
+    /**
+     * Convert a .tex file containing PNG data inside the TEXB section to raw RGBA8888.
+     *
+     * The .tex format from Steam depot:
+     *   TEXV0005\0TEXI0001\0 (18 bytes header)
+     *   format(2), pad(2), mipmap_count(4), then mipmap_count * (width(4), height(4))
+     *   Then for each mipmap: TEXB0004\0(9) + fields(9*4=36) + data_size(4) + PNG data
+     *
+     * After conversion:
+     *   TEXV0005\0TEXI0001\0 (18 bytes header, format=0 = RGBA8888, unchanged)
+     *   mipmap entries (unchanged)
+     *   Then for each mipmap: TEXB0004\0(9) + fields(9*4=36, format changed to 0) + data_size(4) + raw RGBA data
+     */
+    private fun convertTexPngToRgba(texData: ByteArray, name: String): ByteArray? {
+        try {
+            // Find all PNG images inside the .tex data
+            val pngImages = mutableListOf<ByteArray>()
+            var searchPos = 0
+            while (true) {
+                val pngStart = findBytes(texData, PNG_MAGIC, searchPos)
+                if (pngStart < 0) break
+                // Find IEND marker (end of PNG)
+                val iendStart = findBytes(texData, byteArrayOf(0x49, 0x45, 0x4e, 0x44), pngStart)
+                if (iendStart < 0) break
+                val pngEnd = iendStart + 8 // IEND + CRC
+                val pngData = texData.copyOfRange(pngStart, pngEnd)
+                pngImages.add(pngData)
+                searchPos = pngEnd
+            }
+
+            if (pngImages.isEmpty()) return null
+
+            WepWawetLogger.proxyDebug("MpkgPacker.convertTexPngToRgba",
+                "name" to name,
+                "png_count" to pngImages.size,
+                "tex_size" to texData.size)
+
+            // Decode each PNG to raw RGBA8888
+            val rgbaImages = mutableListOf<ByteArray>()
+            for (png in pngImages) {
+                val bitmap = android.graphics.BitmapFactory.decodeByteArray(
+                    png, 0, png.size)
+                if (bitmap == null) {
+                    WepWawetLogger.proxyWarn("MpkgPacker: failed to decode PNG",
+                        "name" to name,
+                        "png_size" to png.size)
+                    return null
+                }
+                // Convert to RGBA8888
+                val rgbaBitmap = bitmap.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
+                bitmap.recycle()
+                if (rgbaBitmap == null) return null
+
+                val w = rgbaBitmap.width
+                val h = rgbaBitmap.height
+                val pixelBuffer = java.nio.ByteBuffer.allocateDirect(w * h * 4)
+                    .order(java.nio.ByteOrder.nativeOrder())
+                rgbaBitmap.copyPixelsToBuffer(pixelBuffer)
+                rgbaBitmap.recycle()
+
+                val rgba = ByteArray(w * h * 4)
+                pixelBuffer.rewind()
+                pixelBuffer.get(rgba)
+
+                // Android stores as ARGB (not RGBA) — swap to match WE's RGBA8888 format
+                for (i in rgba.indices step 4) {
+                    val a = rgba[i]
+                    rgba[i] = rgba[i + 1]     // R ← G (Android ARGB: A,R,G,B → WE RGBA: R,G,B,A)
+                    rgba[i + 1] = rgba[i + 2] // G ← B
+                    rgba[i + 2] = rgba[i + 3] // B ← A
+                    rgba[i + 3] = a           // A ← R(original A)
+                }
+
+                rgbaImages.add(rgba)
+            }
+
+            // Rebuild the .tex file with raw RGBA data
+            val out = java.io.ByteArrayOutputStream()
+            // Copy the header (TEXV0005\0TEXI0001\0 + format + pad + mipmap_count + mipmap entries)
+            // The TEXB section starts at the first TEXB marker
+            val texbStart = findBytes(texData, byteArrayOf(0x54, 0x45, 0x58, 0x42)) // "TEXB"
+            if (texbStart < 0) return null
+
+            // Copy everything before TEXB (header + TEXI)
+            out.write(texData, 0, texbStart)
+
+            // For each PNG image, write a new TEXB section with raw RGBA data
+            for (i in rgbaImages.indices) {
+                val rgba = rgbaImages[i]
+                // TEXB0004\0 (9 bytes)
+                out.write(byteArrayOf(0x54, 0x45, 0x58, 0x42, 0x30, 0x30, 0x30, 0x34, 0x00))
+                // Fields: flags=1, format=0(RGBA), 0, 4(bpp), width, height, 0, 0, data_size
+                val w = texData.size // We don't have width/height easily; use from PNG decode
+                // Actually we need the width and height. Let me extract them from the original TEXB fields.
+                // For now, write the fields from the original data but change format from 13 to 0
+                // The TEXB fields start at texbStart + 9 (after TEXB0004\0)
+                // Each TEXB section has 9 fields of 4 bytes = 36 bytes + 4 bytes data_size = 40 bytes
+                // Let me find the TEXB section for this mipmap
+                // For simplicity, just write all 0s for fields and let WE figure it out from TEXI
+                // Actually this is getting complex. Let me take a simpler approach.
+                // Instead of rebuilding the TEXB section, let me just replace the PNG data
+                // with RGBA data in-place, keeping all the header bytes the same except
+                // changing the TEXB format field from 13 to 0.
+                break // For now, just handle the first mipmap
+            }
+
+            // SIMPLER APPROACH: Just replace each PNG block with RGBA data in-place
+            // and change TEXB format field from 13 to 0
+            val result = texData.copyOf()
+            for (i in pngImages.indices) {
+                val pngStart = findBytes(result, PNG_MAGIC, if (i == 0) 0 else
+                    findBytes(result, byteArrayOf(0x49, 0x45, 0x4e, 0x44), 0) + 8)
+                if (pngStart < 0) continue
+                val iendStart = findBytes(result, byteArrayOf(0x49, 0x45, 0x4e, 0x44), pngStart)
+                if (iendStart < 0) continue
+                val pngEnd = iendStart + 8
+
+                val rgba = rgbaImages[i]
+                // Replace PNG data with RGBA data
+                // Find the data_size field (4 bytes before PNG start)
+                // The data_size is at pngStart - 5 (4 bytes size + 1 byte padding)
+                // Actually, the structure before PNG is:
+                // ... TEXB fields ... data_size(4) padding(1) PNG_data
+                // Let me just overwrite: replace the entire .tex with a new buffer
+
+                // For a simpler approach: just write the raw RGBA over the PNG data
+                // and pad/truncate as needed. The data_size field will be wrong but
+                // WE will read format=0 and use width*height*4 as the data size.
+                break
+            }
+
+            // SIMPLEST APPROACH: Build a completely new .tex with raw RGBA data
+            out.reset()
+
+            // TEXV0005\0TEXI0001\0 (18 bytes) — copy from original
+            out.write(texData, 0, 18)
+
+            // TEXI fields: format(2) + pad(2) + mipmap_count(4) + mipmaps
+            // These are already correct in the original (format=0, RGBA8888)
+            // Copy from offset 18 to texbStart
+            out.write(texData, 18, texbStart - 18)
+
+            // For each mipmap, write TEXB section with raw RGBA
+            for (i in rgbaImages.indices) {
+                val rgba = rgbaImages[i]
+
+                // Decode width and height from the PNG
+                val png = pngImages[i]
+                val bitmap = android.graphics.BitmapFactory.decodeByteArray(png, 0, png.size)
+                val w = bitmap.width
+                val h = bitmap.height
+                bitmap.recycle()
+
+                // TEXB0004\0 (9 bytes)
+                out.write(byteArrayOf(0x54, 0x45, 0x58, 0x42, 0x30, 0x30, 0x30, 0x34, 0x00))
+                // Fields (9 * 4 bytes = 36 bytes):
+                // [0] flags = 1
+                writeLeIntToStream(out, 1)
+                // [1] format = 0 (RGBA8888, was 13=PNG)
+                writeLeIntToStream(out, 0)
+                // [2] = 0
+                writeLeIntToStream(out, 0)
+                // [3] bytes_per_pixel = 4
+                writeLeIntToStream(out, 4)
+                // [4] width
+                writeLeIntToStream(out, w)
+                // [5] height
+                writeLeIntToStream(out, h)
+                // [6] = 0
+                writeLeIntToStream(out, 0)
+                // [7] = 0
+                writeLeIntToStream(out, 0)
+                // [8] data_size
+                writeLeIntToStream(out, rgba.size)
+
+                // Raw RGBA data
+                out.write(rgba)
+
+                WepWawetLogger.proxyDebug("MpkgPacker: wrote TEXB mipmap",
+                    "name" to name,
+                    "mipmap" to i,
+                    "width" to w,
+                    "height" to h,
+                    "rgba_size" to rgba.size)
+            }
+
+            val result2 = out.toByteArray()
+            WepWawetLogger.proxy("MpkgPacker.convertTexPngToRgba SUCCESS",
+                "name" to name,
+                "original_size" to texData.size,
+                "converted_size" to result2.size,
+                "png_count" to pngImages.size)
+            return result2
+
+        } catch (e: Exception) {
+            WepWawetLogger.proxyError("MpkgPacker.convertTexPngToRgba FAILED",
+                "name" to name,
+                "exception" to e.javaClass.name,
+                "message" to (e.message ?: ""))
+            return null
+        }
+    }
+
+    /** Find a byte pattern in a byte array, starting from offset. Returns -1 if not found. */
+    private fun findBytes(data: ByteArray, pattern: ByteArray, start: Int = 0): Int {
+        if (pattern.isEmpty()) return -1
+        for (i in start..data.size - pattern.size) {
+            var match = true
+            for (j in pattern.indices) {
+                if (data[i + j] != pattern[j]) { match = false; break }
+            }
+            if (match) return i
+        }
+        return -1
+    }
+
+    private fun writeLeIntToStream(out: java.io.ByteArrayOutputStream, value: Int) {
+        out.write(value and 0xFF)
+        out.write((value shr 8) and 0xFF)
+        out.write((value shr 16) and 0xFF)
+        out.write((value shr 24) and 0xFF)
     }
 
     /**
