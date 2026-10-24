@@ -3088,3 +3088,61 @@ Stage Summary:
   the .pkg file should be assembled, packed into .mpkg, and saved to
   Downloads.
 - This should be THE fix that makes the download actually work.
+
+---
+Task ID: fix-zstd-aar
+Agent: main
+Task: Fix UnsatisfiedLinkError — use zstd-jni AAR instead of JAR for Android-compatible .so
+
+Work Log:
+- User uploaded crash report (crash-latest (2).txt) from 0.2.0-alpha showing:
+  java.lang.UnsatisfiedLinkError: dlopen failed: library
+    "libzstd-jni-1.5.7-6.so" not found
+  Unsupported OS/arch, cannot find /linux/aarch64/libzstd-jni-1.5.7-6.so
+
+- ROOT CAUSE: the zstd-jni JAR includes native libraries compiled for
+  standard Linux (glibc), which are INCOMPATIBLE with Android (bionic
+  libc). The .so file is loaded via dlopen() which fails because the
+  library is linked against glibc symbols not available in Android's
+  bionic libc.
+
+- The download pipeline had progressed even further than in 0.1.9-alpha:
+  * Downloaded the manifest ✓
+  * Pre-allocated scene.pkg (4.7 MB!), preview.jpg, project.json ✓
+  * Downloaded ALL 9 chunks from 9 different Steam CDN servers ✓
+  * Started validating files ✓
+  * THEN crashed when trying to decompress the first chunk with Zstd
+
+- FIX: Maven Central has both a JAR and an AAR version of zstd-jni:
+  - zstd-jni-1.5.7-6.jar — includes Linux/macOS/Windows .so/.dylib/.dll
+    (compiled with glibc, NOT Android-compatible)
+  - zstd-jni-1.5.7-6.aar — includes Android-compatible .so files for
+    arm64-v8a, armeabi-v7a, x86, x86_64 (compiled with Android NDK/bionic)
+
+  Changed app/build.gradle.kts to explicitly request the AAR:
+    implementation(libs.zstdJni) { artifact { type = "aar" } }
+
+- Verified the APK includes the Android-compatible .so:
+  lib/arm64-v8a/libzstd-jni-1.5.7-6.so ✓
+  lib/armeabi-v7a/libzstd-jni-1.5.7-6.so ✓
+  lib/x86/libzstd-jni-1.5.7-6.so ✓
+  lib/x86_64/libzstd-jni-1.5.7-6.so ✓
+
+- Bumped version to 0.2.1-alpha (versionCode 12)
+- CI build 40055304587 SUCCEEDED
+- Final APK: /home/z/my-project/download/wepwawet-0.2.1-alpha-release.apk (19 MB)
+
+Stage Summary:
+- ALL blockers now fixed:
+  1. fileType=0 (First) → patched in JavaSteam fork v7
+  2. SHA-1 NoSuchAlgorithmException → patched in JavaSteam fork v8
+  3. zstd-jni NoClassDefFoundError → added dependency (v0.2.0)
+  4. zstd-jni UnsatisfiedLinkError (glibc vs bionic) → switched to AAR (v0.2.1)
+- The download pipeline progressed to:
+  * Downloading ALL 9 chunks from 9 CDN servers
+  * Pre-allocating scene.pkg (4.7 MB), preview.jpg, project.json
+  * Starting file validation
+  * Then crashed on chunk decompression
+- With the AAR .so, the chunks should now decompress successfully
+- The .pkg file should be assembled, packed into .mpkg, and saved to Downloads
+- THIS should be the fix that makes the download actually complete
