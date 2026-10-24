@@ -3146,3 +3146,55 @@ Stage Summary:
 - With the AAR .so, the chunks should now decompress successfully
 - The .pkg file should be assembled, packed into .mpkg, and saved to Downloads
 - THIS should be the fix that makes the download actually complete
+
+---
+Task ID: fix-missing-project-json-preview
+Agent: main
+Task: Fix WE import failure — include standalone project.json + preview.jpg in .mpkg
+
+Work Log:
+- User reported: "wallpaper engine failed to import it"
+- User provided two files for comparison:
+  * 2279314480.mpkg — a REAL .mpkg from Wallpaper Engine (2.0 MB, 11 files)
+  * 3823357259_debug.mpkg — our downloaded .mpkg (4.5 MB, 72 files)
+
+- Wrote scripts/compare_mpkg.py to parse and compare both files.
+  Comparison revealed:
+  * Our .mpkg is MISSING project.json (critical — WE uses this for metadata)
+  * Our .mpkg is MISSING preview.jpg (critical — WE uses this for preview)
+  * scene.json in our .mpkg is 22 KB vs real's 1.8 KB (different content)
+  * Our .mpkg has 72 files vs real's 11 files (different workshop items)
+
+- ROOT CAUSE: The DepotDownloader downloads files to the install directory:
+  - scene.pkg (the depot's internal .pkg file containing 72 entries)
+  - project.json (standalone file)
+  - preview.jpg (standalone file)
+  
+  But our packFromPkg only read the internal entries from scene.pkg — it
+  DIDN'T include the standalone project.json and preview.jpg files.
+  
+  Without project.json, WE can't determine the wallpaper type, title,
+  tags, or any metadata — so it refuses to import the .mpkg.
+
+- FIX:
+  1. Added installDir parameter to MpkgPacker.packFromPkg()
+  2. After reading .pkg entries, also read standalone files from the
+     install directory (project.json, preview.jpg) and add them to
+     the entries list if they're not already present in the .pkg
+  3. Updated WorkshopDownloadJob to pass the install directory:
+     cacheDir/workshop_downloads/{item.id}/
+
+- Bumped version to 0.2.2-alpha (versionCode 13)
+- CI build 40057070474 SUCCEEDED
+- Final APK: /home/z/my-project/download/wepwawet-0.2.2-alpha-release.apk (19 MB)
+
+Stage Summary:
+- The .mpkg now includes project.json and preview.jpg from the install
+  directory, which WE needs to import the wallpaper.
+- All download pipeline blockers have been fixed:
+  1. fileType=0 → patched JavaSteam fork v7
+  2. SHA-1 NoSuchAlgorithmException → patched JavaSteam fork v8
+  3. zstd-jni NoClassDefFoundError → added dependency (v0.2.0)
+  4. zstd-jni UnsatisfiedLinkError → switched to AAR (v0.2.1)
+  5. Missing project.json + preview.jpg → include from install dir (v0.2.2)
+- The .mpkg should now be importable by Wallpaper Engine.
