@@ -101,6 +101,7 @@ object MpkgPacker {
         item: WorkshopItemTyped,
         pkgFile: File,
         outputFile: File,
+        installDir: File? = null,
     ): Long {
         WepWawetLogger.proxy("MpkgPacker.packFromPkg START",
             "item_id" to item.id,
@@ -110,7 +111,7 @@ object MpkgPacker {
             "output" to outputFile.name)
 
         // Step 1: Read the .pkg file
-        val entries = PkgReader.read(pkgFile)
+        val entries = PkgReader.read(pkgFile).toMutableList()
         if (entries.isEmpty()) {
             WepWawetLogger.proxyError("MpkgPacker.packFromPkg FAILED — no entries in .pkg",
                 "pkg_file" to pkgFile.name)
@@ -129,6 +130,26 @@ object MpkgPacker {
             WepWawetLogger.proxyDebug("MpkgPacker.packFromPkg entry",
                 "name" to name,
                 "size" to blob.size)
+        }
+
+        // Step 3b: Include standalone files from the install directory
+        // (project.json, preview.jpg, etc.) that are NOT inside the .pkg
+        // but are needed by WE's .mpkg format.
+        if (installDir != null && installDir.exists()) {
+            val standaloneNames = listOf("project.json", "preview.jpg")
+            val existingNames = entries.map { it.first }.toSet()
+            for (name in standaloneNames) {
+                if (name in existingNames) continue // already in .pkg
+                val standaloneFile = File(installDir, name)
+                if (standaloneFile.exists() && standaloneFile.length() > 0) {
+                    val blob = standaloneFile.readBytes()
+                    entries.add(Pair(name, blob))
+                    WepWawetLogger.proxy("MpkgPacker.packFromPkg added standalone file",
+                        "name" to name,
+                        "size" to blob.size,
+                        "source" to standaloneFile.absolutePath)
+                }
+            }
         }
 
         // Step 4: Pack the entries into a .mpkg

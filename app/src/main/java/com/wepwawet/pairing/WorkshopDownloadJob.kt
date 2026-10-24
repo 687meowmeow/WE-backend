@@ -180,10 +180,12 @@ object WorkshopDownloadJob {
                 "pkg_input_size" to downloadedPkg.length(),
                 "mpkg_output" to cacheMpkg.absolutePath)
             val mpkgSize = runCatching {
+                val installDir = File(appContext.cacheDir, "workshop_downloads/${item.id}")
                 com.wepwawet.pairing.MpkgPacker.packFromPkg(
                     item = item,
                     pkgFile = downloadedPkg,
                     outputFile = cacheMpkg,
+                    installDir = installDir,
                 )
             }.getOrElse { e ->
                 val err = "Failed to pack .pkg → .mpkg: ${e.message}"
