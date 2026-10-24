@@ -11,8 +11,8 @@
       "type": "SINGLE",
       "filters": [],
       "attributes": [],
-      "versionCode": 10,
-      "versionName": "0.1.9-alpha-debug",
+      "versionCode": 11,
+      "versionName": "0.2.0-alpha-debug",
       "outputFile": "linked-resources-binary-format-debug.ap_"
     }
   ],

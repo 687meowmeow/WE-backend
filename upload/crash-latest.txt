@@ -1,138 +1,546 @@
 === WepWawet crash report ===
-Time: 2026-10-22T22:23:52.144Z
-Thread: main (id=2)
-Process: 22231
+Time: 2026-10-24T02:11:15.748Z
+Thread: DefaultDispatcher-worker-13 (id=423)
+Process: 9598
 Device: OnePlus CPH2749 (OP611FL1)
 Android: 16 (SDK 36)
 ABI: arm64-v8a
-App version: 0.1.0-alpha (1)
-Git sha: 398ffe5
-Build time: 2026-10-22T22:18:45Z
+App version: 0.1.9-alpha (10)
+Git sha: 1507bbe
+Build time: 2026-10-24T01:48:33Z
 
 --- Exception ---
-java.lang.ExceptionInInitializerError
-	at o0.f.c(SourceFile:146)
-	at J0.a.invoke(SourceFile:104)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:23)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:1)
-	at N1.b.z(SourceFile:4)
-	at androidx.compose.material3.SurfaceKt$Surface$1.invoke(SourceFile:33)
-	at androidx.compose.material3.SurfaceKt$Surface$1.invoke(SourceFile:1)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:23)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:1)
-	at androidx.compose.runtime.CompositionLocalKt.CompositionLocalProvider(SourceFile:3)
-	at androidx.compose.material3.SurfaceKt.Surface-T9BRK9s(SourceFile:177)
-	at J0.b.invoke(SourceFile:74)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:23)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:1)
-	at androidx.compose.runtime.CompositionLocalKt.CompositionLocalProvider(SourceFile:7)
-	at androidx.compose.material3.TextKt.ProvideTextStyle(SourceFile:89)
-	at androidx.compose.material3.MaterialThemeKt$MaterialTheme$1.invoke(SourceFile:2)
-	at androidx.compose.material3.MaterialThemeKt$MaterialTheme$1.invoke(SourceFile:1)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:23)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:1)
-	at androidx.compose.runtime.CompositionLocalKt.CompositionLocalProvider(SourceFile:3)
-	at androidx.compose.material3.MaterialThemeKt.MaterialTheme(SourceFile:289)
-	at R0.c.a(SourceFile:83)
-	at J0.a.invoke(SourceFile:49)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:23)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:1)
-	at androidx.compose.ui.platform.ComposeView.Content(SourceFile:82)
-	at androidx.compose.ui.platform.AbstractComposeView$ensureCompositionCreated$1.invoke(SourceFile:2)
-	at androidx.compose.ui.platform.AbstractComposeView$ensureCompositionCreated$1.invoke(SourceFile:1)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:23)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:1)
-	at androidx.compose.runtime.CompositionLocalKt.CompositionLocalProvider(SourceFile:3)
-	at androidx.compose.ui.platform.CompositionLocalsKt.ProvideCommonCompositionLocals(SourceFile:310)
-	at androidx.compose.ui.platform.AndroidCompositionLocals_androidKt$ProvideAndroidCompositionLocals$3.invoke(SourceFile:8)
-	at androidx.compose.ui.platform.AndroidCompositionLocals_androidKt$ProvideAndroidCompositionLocals$3.invoke(SourceFile:1)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:23)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:1)
-	at androidx.compose.runtime.CompositionLocalKt.CompositionLocalProvider(SourceFile:3)
-	at androidx.compose.ui.platform.AndroidCompositionLocals_androidKt.ProvideAndroidCompositionLocals(SourceFile:354)
-	at androidx.compose.ui.platform.WrappedComposition$setContent$1$1$3.invoke(SourceFile:2)
-	at androidx.compose.ui.platform.WrappedComposition$setContent$1$1$3.invoke(SourceFile:1)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:23)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:1)
-	at androidx.compose.runtime.CompositionLocalKt.CompositionLocalProvider(SourceFile:7)
-	at androidx.compose.ui.platform.WrappedComposition$setContent$1$1.invoke(SourceFile:25)
-	at androidx.compose.ui.platform.WrappedComposition$setContent$1$1.invoke(SourceFile:1)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:23)
-	at androidx.compose.runtime.internal.ComposableLambdaImpl.invoke(SourceFile:1)
-	at androidx.compose.runtime.ActualJvm_jvmKt.invokeComposable(SourceFile:14)
-	at androidx.compose.runtime.ComposerImpl.doCompose(SourceFile:227)
-	at androidx.compose.runtime.ComposerImpl.composeContent$runtime_release(SourceFile:13)
-	at androidx.compose.runtime.CompositionImpl.composeContent(SourceFile:35)
-	at androidx.compose.runtime.Recomposer.composeInitial$runtime_release(SourceFile:24)
-	at androidx.compose.runtime.CompositionImpl.composeInitial(SourceFile:13)
-	at androidx.compose.runtime.CompositionImpl.setContent(SourceFile:0)
-	at androidx.compose.ui.platform.WrappedComposition$setContent$1.invoke(SourceFile:10)
-	at androidx.compose.ui.platform.WrappedComposition$setContent$1.invoke(SourceFile:1)
-	at androidx.compose.ui.platform.AndroidComposeView.setOnViewTreeOwnersAvailable(SourceFile:6)
-	at androidx.compose.ui.platform.WrappedComposition.setContent(SourceFile:7)
-	at androidx.compose.ui.platform.WrappedComposition.onStateChanged(SourceFile:18)
-	at androidx.lifecycle.v.a(SourceFile:22)
-	at androidx.lifecycle.w.a(SourceFile:250)
-	at androidx.compose.ui.platform.WrappedComposition$setContent$1.invoke(SourceFile:7)
-	at androidx.compose.ui.platform.WrappedComposition$setContent$1.invoke(SourceFile:1)
-	at androidx.compose.ui.platform.AndroidComposeView.onAttachedToWindow(SourceFile:119)
-	at android.view.View.dispatchAttachedToWindow(View.java:23559)
-	at android.view.ViewGroup.dispatchAttachedToWindow(ViewGroup.java:3605)
-	at android.view.ViewGroup.dispatchAttachedToWindow(ViewGroup.java:3612)
-	at android.view.ViewGroup.dispatchAttachedToWindow(ViewGroup.java:3612)
-	at android.view.ViewGroup.dispatchAttachedToWindow(ViewGroup.java:3612)
-	at android.view.ViewGroup.dispatchAttachedToWindow(ViewGroup.java:3612)
-	at android.view.ViewRootImpl.performTraversals(ViewRootImpl.java:4163)
-	at android.view.ViewRootImpl.doTraversal(ViewRootImpl.java:3519)
-	at android.view.ViewRootImpl$TraversalRunnable.run(ViewRootImpl.java:11951)
-	at android.view.Choreographer$CallbackRecord.run(Choreographer.java:1852)
-	at android.view.Choreographer$CallbackRecord.run(Choreographer.java:1861)
-	at android.view.Choreographer.doCallbacks(Choreographer.java:1373)
-	at android.view.Choreographer.doFrame(Choreographer.java:1230)
-	at android.view.Choreographer$FrameDisplayEventReceiver.run(Choreographer.java:1835)
-	at android.os.Handler.handleCallback(Handler.java:1027)
-	at android.os.Handler.dispatchMessage(Handler.java:108)
-	at android.os.Looper.loopOnce(Looper.java:298)
-	at android.os.Looper.loop(Looper.java:408)
-	at android.app.ActivityThread.main(ActivityThread.java:9964)
-	at java.lang.reflect.Method.invoke(Native Method)
-	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:613)
-	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1074)
-Caused by: java.lang.IllegalStateException: TypeToken must be created with a type argument: new TypeToken<...>() {}; When using code shrinkers (ProGuard, R8, ...) make sure that generic signatures are preserved.
-	at com.google.gson.reflect.TypeToken.getTypeTokenTypeArgument(SourceFile:40)
-	at com.google.gson.reflect.TypeToken.<init>(SourceFile:2)
-	at L0.l.<clinit>(SourceFile:2)
-	... 87 more
+java.lang.NoClassDefFoundError: Failed resolution of: Lcom/github/luben/zstd/Zstd;
+	at in.dragonbra.javasteam.util.VZstdUtil.decompress(SourceFile:13)
+	at in.dragonbra.javasteam.steam.cdn.DepotChunk.process(SourceFile:134)
+	at in.dragonbra.javasteam.depotdownloader.DepotDownloader$processFileDecompress$2.invokeSuspend(SourceFile:52)
+	at in.dragonbra.javasteam.depotdownloader.DepotDownloader$processFileDecompress$2.invoke(SourceFile:2)
+	at in.dragonbra.javasteam.depotdownloader.DepotDownloader$processFileDecompress$2.invoke(SourceFile:1)
+	at kotlinx.coroutines.intrinsics.UndispatchedKt.startUndspatched(SourceFile:17)
+	at kotlinx.coroutines.intrinsics.UndispatchedKt.startUndispatchedOrReturn(SourceFile:1)
+	at kotlinx.coroutines.BuildersKt__Builders_commonKt.withContext(SourceFile:53)
+	at kotlinx.coroutines.BuildersKt.withContext(SourceFile:0)
+	at in.dragonbra.javasteam.depotdownloader.DepotDownloader.processFileDecompress(SourceFile:10)
+	at in.dragonbra.javasteam.depotdownloader.DepotDownloader.access$processFileDecompress(SourceFile:0)
+	at in.dragonbra.javasteam.depotdownloader.DepotDownloader$createChunkProcessingFlow$2$1.invokeSuspend(SourceFile:49)
+	at in.dragonbra.javasteam.depotdownloader.DepotDownloader$createChunkProcessingFlow$2$1.invoke(SourceFile:2)
+	at in.dragonbra.javasteam.depotdownloader.DepotDownloader$createChunkProcessingFlow$2$1.invoke(SourceFile:1)
+	at kotlinx.coroutines.flow.SafeFlow.collectSafely(SourceFile:2)
+	at kotlinx.coroutines.flow.AbstractFlow.collect(SourceFile:69)
+	at kotlinx.coroutines.flow.internal.ChannelFlowOperatorImpl.flowCollect(SourceFile:2)
+	at kotlinx.coroutines.flow.internal.ChannelFlowOperator.collectTo$suspendImpl(SourceFile:5)
+	at kotlinx.coroutines.flow.internal.ChannelFlowOperator.collectTo(SourceFile:0)
+	at kotlinx.coroutines.flow.internal.ChannelFlow$collectToFun$1.invokeSuspend(SourceFile:32)
+	at kotlin.coroutines.jvm.internal.a.resumeWith(SourceFile:8)
+	at kotlinx.coroutines.DispatchedTask.run(SourceFile:109)
+	at kotlinx.coroutines.scheduling.CoroutineScheduler.runSafely(SourceFile:0)
+	at kotlinx.coroutines.scheduling.CoroutineScheduler$Worker.executeTask(SourceFile:61)
+	at kotlinx.coroutines.scheduling.CoroutineScheduler$Worker.runWorker(SourceFile:28)
+	at kotlinx.coroutines.scheduling.CoroutineScheduler$Worker.run(SourceFile:0)
+	Suppressed: kotlinx.coroutines.internal.DiagnosticCoroutineContextException: [StandaloneCoroutine{Cancelling}@bdc832e, Dispatchers.IO]
+Caused by: java.lang.ClassNotFoundException: com.github.luben.zstd.Zstd
+	... 26 more
 
 
 --- Recent log entries (last 2000) ---
-[2026-10-22T17:23:52.104463-05:00] INFO/WEP-APP WepWawetApplication.onCreate complete app_version=0.1.0-alpha git_sha=398ffe5 build_time=2026-10-22T22:18:45Z device_model=OnePlus CPH2749 android_version=36 abi=arm64-v8a
-[2026-10-22T17:23:52.113925-05:00] INFO/WEP-LIFE MainActivity.onCreate intent=null
-[2026-10-22T17:23:52.115051-05:00] INFO/WEP-LIFE Auto-started pairing proxy
-[2026-10-22T17:23:52.119471-05:00] INFO/WEP-LIFE MainActivity.onResume
+[2026-10-23T21:09:09.989522-05:00] INFO/WEP-APP WepWawetApplication.onCreate complete app_version=0.1.9-alpha git_sha=1507bbe build_time=2026-10-24T01:48:33Z device_model=OnePlus CPH2749 android_version=36 abi=arm64-v8a
+[2026-10-23T21:09:09.994469-05:00] INFO/WEP-APP appScope initialized
+[2026-10-23T21:09:09.999595-05:00] INFO/WEP-LIFE MainActivity.onCreate intent=null
+[2026-10-23T21:09:10.002632-05:00] INFO/WEP-LIFE Auto-started pairing proxy
+[2026-10-23T21:09:10.008808-05:00] INFO/WEP-LIFE MainActivity.onResume
+[2026-10-23T21:09:10.087814-05:00] INFO/WEP-PROXY PairingService.onCreate
+[2026-10-23T21:09:10.08807-05:00] INFO/WEP-PROXY PairingService.onStartCommand flags=0
+[2026-10-23T21:09:10.08909-05:00] INFO/WEP-PROXY Starting pairing servers pin=1234
+[2026-10-23T21:09:10.089211-05:00] INFO/WEP-PROXY Generating RSA keypair (1024 bits)
+[2026-10-23T21:09:10.10565-05:00] INFO/WEP-PROXY Pairing server starting port=7889 pin=1234 rsa_key_size=1024
+[2026-10-23T21:09:10.105789-05:00] INFO/WEP-PROXY Discovery broadcaster starting hostname=WepWawet udp_port=7884 multicast_group=239.100.0.1
+[2026-10-23T21:09:10.106269-05:00] INFO/WEP-PROXY Pairing server listening on TCP 7889
+[2026-10-23T21:09:10.106847-05:00] INFO/WEP-WS WorkshopBrowserScreen first composition — startBrowse
+[2026-10-23T21:09:10.106898-05:00] INFO/WEP-WS loadNextPage start page=1 sort=mostsubscribed tag=none query=none
+[2026-10-23T21:09:10.107101-05:00] INFO/WEP-WS filter/sort changed — restarting browse sort=mostsubscribed tag=all
+[2026-10-23T21:09:10.107115-05:00] INFO/WEP-WS clearSearch
+[2026-10-23T21:09:10.10738-05:00] INFO/WEP-STEAM browseWorkshop start sort=mostsubscribed page=1 tags=
+[2026-10-23T21:09:10.107641-05:00] INFO/WEP-PROXY Discovery broadcaster listening on UDP 7884 payload=WallpaperEngine/Ping:07889:WepWawet:4:29105AA7-F927-493E-B682-EDBADAFE0602
+[2026-10-23T21:09:10.779802-05:00] INFO/WEP-STEAM getPublishedFileDetails start id_count=30
+[2026-10-23T21:09:11.034732-05:00] INFO/WEP-STEAM getPublishedFileDetails done requested=30 returned=30
+[2026-10-23T21:09:11.03481-05:00] INFO/WEP-STEAM browseWorkshop done ids=30 items=30 page=1
+[2026-10-23T21:09:11.034959-05:00] INFO/WEP-WS loadNextPage done page=1 new_items=30 total_items=30
+[2026-10-23T21:09:11.035163-05:00] INFO/WEP-WS loadNextPage start page=1 sort=mostsubscribed tag=none query=none
+[2026-10-23T21:09:11.035287-05:00] INFO/WEP-STEAM browseWorkshop start sort=mostsubscribed page=1 tags=
+[2026-10-23T21:09:11.369128-05:00] INFO/WEP-STEAM getPublishedFileDetails start id_count=30
+[2026-10-23T21:09:11.504369-05:00] INFO/WEP-STEAM getPublishedFileDetails done requested=30 returned=30
+[2026-10-23T21:09:11.504438-05:00] INFO/WEP-STEAM browseWorkshop done ids=30 items=30 page=1
+[2026-10-23T21:09:11.504632-05:00] INFO/WEP-WS loadNextPage done page=1 new_items=30 total_items=30
+[2026-10-23T21:09:12.573625-05:00] INFO/WEP-WS filter chip selected type=Scene
+[2026-10-23T21:09:12.579838-05:00] INFO/WEP-WS filter/sort changed — restarting browse sort=mostsubscribed tag=Scene
+[2026-10-23T21:09:12.579885-05:00] INFO/WEP-WS clearSearch
+[2026-10-23T21:09:12.579936-05:00] INFO/WEP-WS loadNextPage start page=1 sort=mostsubscribed tag=Scene query=none
+[2026-10-23T21:09:12.580086-05:00] INFO/WEP-STEAM browseWorkshop start sort=mostsubscribed page=1 tags=Scene
+[2026-10-23T21:09:13.337929-05:00] INFO/WEP-STEAM getPublishedFileDetails start id_count=30
+[2026-10-23T21:09:13.623508-05:00] INFO/WEP-STEAM getPublishedFileDetails done requested=30 returned=30
+[2026-10-23T21:09:13.623624-05:00] INFO/WEP-STEAM browseWorkshop done ids=30 items=30 page=1
+[2026-10-23T21:09:13.623751-05:00] INFO/WEP-WS loadNextPage done page=1 new_items=30 total_items=30
+[2026-10-23T21:09:14.358596-05:00] INFO/WEP-WS workshop card tap id=3823357259 title=Talia Yang / Cyberpunk Edgerunners 2 (X-ray Interactive)
+[2026-10-23T21:09:14.383906-05:00] INFO/WEP-LIFE NavHost navigate to detail item_id=3823357259
+[2026-10-23T21:09:14.400096-05:00] INFO/WEP-WS WallpaperDetailScreen load id=3823357259
+[2026-10-23T21:09:14.745752-05:00] INFO/WEP-LIFE NavHost navigate to detail item_id=3823357259
+[2026-10-23T21:09:14.763259-05:00] INFO/WEP-LIFE NavHost navigate to detail item_id=3823357259
+[2026-10-23T21:09:15.775103-05:00] INFO/WEP-LIFE NavHost navigate to detail item_id=3823357259
+[2026-10-23T21:09:15.788104-05:00] INFO/WEP-LIFE NavHost navigate to detail item_id=3823357259
+[2026-10-23T21:09:15.818705-05:00] INFO/WEP-WS WorkshopBrowserScreen first composition — startBrowse
+[2026-10-23T21:09:15.818762-05:00] INFO/WEP-WS loadNextPage start page=1 sort=mostsubscribed tag=none query=none
+[2026-10-23T21:09:15.818814-05:00] INFO/WEP-WS filter/sort changed — restarting browse sort=mostsubscribed tag=all
+[2026-10-23T21:09:15.818823-05:00] INFO/WEP-WS clearSearch
+[2026-10-23T21:09:15.818975-05:00] INFO/WEP-STEAM browseWorkshop start sort=mostsubscribed page=1 tags=
+[2026-10-23T21:09:16.685556-05:00] INFO/WEP-WS re-browse failed exception=androidx.compose.runtime.LeftCompositionCancellationException
+[2026-10-23T21:09:16.713775-05:00] WARN/WEP-WS loadNextPage exception page=0 exception=androidx.compose.runtime.LeftCompositionCancellationException
+[2026-10-23T21:09:17.429953-05:00] INFO/WEP-LIFE SettingsScreen: testing Steam login...
+[2026-10-23T21:09:17.430867-05:00] INFO/WEP-PROXY WorkshopDownloader.testLogin START username=Kirbsuki has_guard=false
+[2026-10-23T21:09:17.431235-05:00] INFO/WEP-PROXY JavaSteamLogBridge installed — forwarding library logs to WepWawetLogger
+[2026-10-23T21:09:17.436663-05:00] INFO/WEP-PROXY WorkshopDownloader: subscribed to CallbackMsg (base) for verbose dispatch logging
+[2026-10-23T21:09:17.436709-05:00] INFO/WEP-PROXY WorkshopDownloader: connecting to Steam...
+[2026-10-23T21:09:17.436826-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Querying SteamDirectory for a fresh server list level=INFO throwable=null
+[2026-10-23T21:09:17.870494-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Resolved 43 servers from SteamDirectory level=INFO throwable=null
+[2026-10-23T21:09:17.871774-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Next server candidate: cmp2-ord1.steamserver.net/162.254.193.75:443 (WEB_SOCKET) level=INFO throwable=null
+[2026-10-23T21:09:17.872155-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=Connecting to cmp2-ord1.steamserver.net/162.254.193.75:443 with protocol [WEB_SOCKET], and with connection impl WebSocketConnection level=INFO throwable=null
+[2026-10-23T21:09:17.872819-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Trying connection to cmp2-ord1.steamserver.net:443 level=INFO throwable=null
+[2026-10-23T21:09:18.046394-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Connected to cmp2-ord1.steamserver.net:443 level=INFO throwable=null
+[2026-10-23T21:09:18.04654-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=EventHandler `connected` called level=INFO throwable=null
+[2026-10-23T21:09:18.046706-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking cmp2-ord1.steamserver.net/162.254.193.75:443 - WEB_SOCKET as GOOD level=INFO throwable=null
+[2026-10-23T21:09:18.050554-05:00] INFO/WEP-PROXY WorkshopDownloader: connected — authenticating as Kirbsuki
+[2026-10-23T21:09:18.050605-05:00] INFO/WEP-PROXY WorkshopDownloader: Connected to Steam — authenticating...
+[2026-10-23T21:09:18.050629-05:00] INFO/WEP-PROXY WorkshopDownloader.testLogin: Connected to Steam — authenticating...
+[2026-10-23T21:09:18.052762-05:00] INFO/WEP-PROXY WorkshopDownloader: checking for saved refresh token has_token=true has_account_name=true token_length=501 account_name=kirbsuki
+[2026-10-23T21:09:18.052806-05:00] INFO/WEP-PROXY WorkshopDownloader: trying saved refresh token account_name=kirbsuki user_entered=Kirbsuki
+[2026-10-23T21:09:18.114033-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=ConnectedCallback job_id=9223372036854775807
+[2026-10-23T21:09:18.332393-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=handleLogOnResponse got response: AccessDenied, extended: AccessDenied level=INFO throwable=null
+[2026-10-23T21:09:18.334688-05:00] ERROR/WEP-PROXY WorkshopDownloader: logon failed result=AccessDenied used_refresh_token=true has_valid_token=false
+[2026-10-23T21:09:18.334826-05:00] INFO/WEP-PROXY WorkshopDownloader: refresh token rejected (result=AccessDenied) — falling back to modern auth (push notification) result=AccessDenied
+[2026-10-23T21:09:18.335401-05:00] INFO/WEP-PROXY WorkshopDownloader: stale refresh token cleared (was rejected with AccessDenied)
+[2026-10-23T21:09:18.335467-05:00] INFO/WEP-PROXY WorkshopDownloader: Refresh token rejected (AccessDenied) — reconnecting for fresh push-notification login...
+[2026-10-23T21:09:18.335496-05:00] INFO/WEP-PROXY WorkshopDownloader.testLogin: Refresh token rejected (AccessDenied) — reconnecting for fresh push-notification login...
+[2026-10-23T21:09:18.335522-05:00] INFO/WEP-PROXY WorkshopDownloader: calling steamClient.connect() for fallback (isReconnectingForFallback=true to preserve callback thread)
+[2026-10-23T21:09:18.335572-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Disconnect called: true level=INFO throwable=null
+[2026-10-23T21:09:18.33598-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Next server candidate: cmp2-ord1.steamserver.net/162.254.193.75:443 (WEB_SOCKET) level=INFO throwable=null
+[2026-10-23T21:09:18.336132-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=Connecting to cmp2-ord1.steamserver.net/162.254.193.75:443 with protocol [WEB_SOCKET], and with connection impl WebSocketConnection level=INFO throwable=null
+[2026-10-23T21:09:18.336259-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=LoggedOnCallback job_id=9223372036854775807
+[2026-10-23T21:09:18.336308-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Trying connection to cmp2-ord1.steamserver.net:443 level=INFO throwable=null
+[2026-10-23T21:09:18.336359-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=EventHandler `disconnected` called. User Initiated: true, Expected Disconnection: false level=INFO throwable=null
+[2026-10-23T21:09:18.336941-05:00] INFO/WEP-PROXY WorkshopDownloader: disconnected user_initiated=true authenticated=false download_in_progress=false is_reconnecting_for_fallback=true
+[2026-10-23T21:09:18.336989-05:00] INFO/WEP-PROXY WorkshopDownloader: disconnect from fallback's connect() — keeping callback thread alive (isReconnectingForFallback=true)
+[2026-10-23T21:09:18.337016-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=DisconnectedCallback job_id=9223372036854775807
+[2026-10-23T21:09:18.473441-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Connected to cmp2-ord1.steamserver.net:443 level=INFO throwable=null
+[2026-10-23T21:09:25.340851-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=10 is_running=true authenticated=false steam_connected=false
+[2026-10-23T21:09:30.32651-05:00] INFO/WEP-PROXY SteamCredentialsStore: credentials saved username=Kirbsuki
+[2026-10-23T21:09:30.326575-05:00] INFO/WEP-LIFE SettingsScreen: Steam credentials saved username=Kirbsuki
+[2026-10-23T21:09:32.486252-05:00] INFO/WEP-LIFE MainActivity.onPause
+[2026-10-23T21:09:33.474392-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Watchdog: No response for 15 seconds level=INFO throwable=null
+[2026-10-23T21:09:35.34663-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=20 is_running=true authenticated=false steam_connected=false
+[2026-10-23T21:09:35.561699-05:00] INFO/WEP-LIFE MainActivity.onResume
+[2026-10-23T21:09:37.935305-05:00] INFO/WEP-LIFE MainActivity.onPause
+[2026-10-23T21:09:38.2446-05:00] INFO/WEP-LIFE MainActivity.onDestroy
+[2026-10-23T21:09:38.475267-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Watchdog: No response for 20 seconds level=INFO throwable=null
+[2026-10-23T21:09:38.814657-05:00] INFO/WEP-LIFE MainActivity.onCreate intent=null
+[2026-10-23T21:09:38.815879-05:00] INFO/WEP-LIFE Auto-started pairing proxy
+[2026-10-23T21:09:38.818471-05:00] INFO/WEP-LIFE MainActivity.onResume
+[2026-10-23T21:09:38.821624-05:00] INFO/WEP-PROXY PairingService.onStartCommand flags=0
+[2026-10-23T21:09:38.822436-05:00] INFO/WEP-PROXY Pairing server stop requested
+[2026-10-23T21:09:38.822978-05:00] INFO/WEP-PROXY Discovery broadcaster stopped
+[2026-10-23T21:09:38.823009-05:00] INFO/WEP-PROXY Starting pairing servers pin=1234
+[2026-10-23T21:09:38.823093-05:00] INFO/WEP-PROXY Generating RSA keypair (1024 bits)
+[2026-10-23T21:09:38.824476-05:00] INFO/WEP-PROXY Pairing server stopped
+[2026-10-23T21:09:38.838009-05:00] INFO/WEP-PROXY Pairing server starting port=7889 pin=1234 rsa_key_size=1024
+[2026-10-23T21:09:38.838141-05:00] INFO/WEP-PROXY Discovery broadcaster starting hostname=WepWawet udp_port=7884 multicast_group=239.100.0.1
+[2026-10-23T21:09:38.838573-05:00] INFO/WEP-PROXY Pairing server listening on TCP 7889
+[2026-10-23T21:09:38.839143-05:00] INFO/WEP-PROXY Discovery broadcaster listening on UDP 7884 payload=WallpaperEngine/Ping:07889:WepWawet:4:A99B943A-AB0E-484B-9943-99BE24E42757
+[2026-10-23T21:09:38.858689-05:00] INFO/WEP-WS WorkshopBrowserScreen first composition — startBrowse
+[2026-10-23T21:09:38.858723-05:00] INFO/WEP-WS loadNextPage start page=1 sort=mostsubscribed tag=none query=none
+[2026-10-23T21:09:38.858795-05:00] INFO/WEP-WS filter/sort changed — restarting browse sort=mostsubscribed tag=all
+[2026-10-23T21:09:38.85881-05:00] INFO/WEP-WS clearSearch
+[2026-10-23T21:09:38.859001-05:00] INFO/WEP-STEAM browseWorkshop start sort=mostsubscribed page=1 tags=
+[2026-10-23T21:09:40.116841-05:00] INFO/WEP-WS re-browse failed exception=androidx.compose.runtime.LeftCompositionCancellationException
+[2026-10-23T21:09:40.418233-05:00] WARN/WEP-WS loadNextPage exception page=0 exception=androidx.compose.runtime.LeftCompositionCancellationException
+[2026-10-23T21:09:41.003802-05:00] INFO/WEP-LIFE SettingsScreen: testing Steam login...
+[2026-10-23T21:09:41.004507-05:00] INFO/WEP-PROXY WorkshopDownloader.testLogin START username=Kirbsuki has_guard=false
+[2026-10-23T21:09:41.005375-05:00] INFO/WEP-PROXY WorkshopDownloader: subscribed to CallbackMsg (base) for verbose dispatch logging
+[2026-10-23T21:09:41.005397-05:00] INFO/WEP-PROXY WorkshopDownloader: connecting to Steam...
+[2026-10-23T21:09:41.005456-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Querying SteamDirectory for a fresh server list level=INFO throwable=null
+[2026-10-23T21:09:41.576019-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Resolved 86 servers from SteamDirectory level=INFO throwable=null
+[2026-10-23T21:09:41.576422-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Next server candidate: ext2-lim1.steamserver.net/155.133.244.50:27038 (WEB_SOCKET) level=INFO throwable=null
+[2026-10-23T21:09:41.576542-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=Connecting to ext2-lim1.steamserver.net/155.133.244.50:27038 with protocol [WEB_SOCKET], and with connection impl WebSocketConnection level=INFO throwable=null
+[2026-10-23T21:09:41.576892-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Trying connection to ext2-lim1.steamserver.net:27038 level=INFO throwable=null
+[2026-10-23T21:09:42.095734-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Connected to ext2-lim1.steamserver.net:27038 level=INFO throwable=null
+[2026-10-23T21:09:42.096053-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=EventHandler `connected` called level=INFO throwable=null
+[2026-10-23T21:09:42.096148-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-lim1.steamserver.net/155.133.244.50:27038 - WEB_SOCKET as GOOD level=INFO throwable=null
+[2026-10-23T21:09:42.097345-05:00] INFO/WEP-PROXY WorkshopDownloader: connected — authenticating as Kirbsuki
+[2026-10-23T21:09:42.09741-05:00] INFO/WEP-PROXY WorkshopDownloader: Connected to Steam — authenticating...
+[2026-10-23T21:09:42.097446-05:00] INFO/WEP-PROXY WorkshopDownloader.testLogin: Connected to Steam — authenticating...
+[2026-10-23T21:09:42.097907-05:00] INFO/WEP-PROXY WorkshopDownloader: checking for saved refresh token has_token=false has_account_name=false token_length=0 account_name=null
+[2026-10-23T21:09:42.097955-05:00] INFO/WEP-PROXY WorkshopDownloader: starting modern auth session has_guard_code=false
+[2026-10-23T21:09:42.098794-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=ConnectedCallback job_id=9223372036854775807
+[2026-10-23T21:09:42.098897-05:00] INFO/WEP-PROXY WorkshopDownloader: waiting for auth session...
+[2026-10-23T21:09:42.098953-05:00] INFO/WEP-PROXY WorkshopDownloader: Waiting for Steam auth session...
+[2026-10-23T21:09:42.098971-05:00] INFO/WEP-PROXY WorkshopDownloader.testLogin: Waiting for Steam auth session...
+[2026-10-23T21:09:42.58822-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=ServiceMethodResponse job_id=721703593312257
+[2026-10-23T21:09:42.699524-05:00] INFO/WEP-PROXY JavaSteam: CryptoHelper msg=Using security provider: BC level=INFO throwable=null
+[2026-10-23T21:09:43.305468-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=ServiceMethodResponse job_id=721703593312258
+[2026-10-23T21:09:43.305845-05:00] INFO/WEP-PROXY WorkshopDownloader: polling auth session (may request 2FA)...
+[2026-10-23T21:09:43.305879-05:00] INFO/WEP-PROXY WorkshopDownloader: Authenticating with Steam (using 2FA code if needed)...
+[2026-10-23T21:09:43.305891-05:00] INFO/WEP-PROXY WorkshopDownloader.testLogin: Authenticating with Steam (using 2FA code if needed)...
+[2026-10-23T21:09:43.306012-05:00] INFO/WEP-PROXY WorkshopDownloader: device confirmation — auto-accepting (user approves on Steam mobile app)
+[2026-10-23T21:09:43.306043-05:00] INFO/WEP-PROXY WorkshopDownloader: Check your Steam mobile app — tap 'Approve' to authorize WepWawet (one-time only)
+[2026-10-23T21:09:43.306056-05:00] INFO/WEP-PROXY WorkshopDownloader.testLogin: Check your Steam mobile app — tap 'Approve' to authorize WepWawet (one-time only)
+[2026-10-23T21:09:43.475741-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Watchdog: No response for 25 seconds level=INFO throwable=null
+[2026-10-23T21:09:43.895704-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=ServiceMethodResponse job_id=721703593312259
+[2026-10-23T21:09:44.377224-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=ServiceMethodResponse job_id=721703593312260
+[2026-10-23T21:09:44.9429-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=ServiceMethodResponse job_id=721703593312261
+[2026-10-23T21:09:45.356098-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=30 is_running=true authenticated=false steam_connected=false
+[2026-10-23T21:09:45.413504-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=ServiceMethodResponse job_id=721703593312262
+[2026-10-23T21:09:45.913857-05:00] INFO/WEP-PROXY WorkshopDownloader: auth SUCCESS account=kirbsuki has_refresh_token=true
+[2026-10-23T21:09:45.913857-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=ServiceMethodResponse job_id=721703593312263
+[2026-10-23T21:09:45.913986-05:00] INFO/WEP-PROXY WorkshopDownloader: refresh token + account name saved ✓ (survives app updates) account_name=kirbsuki
+[2026-10-23T21:09:47.914941-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=10 is_running=true authenticated=false steam_connected=true
+[2026-10-23T21:09:48.476211-05:00] ERROR/WEP-PROXY JavaSteam ERROR: WebSocketConnection msg=Watchdog: No response for 30 seconds. Disconnecting from steam exception=null
+[2026-10-23T21:09:48.476447-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Disconnect called: false level=INFO throwable=null
+[2026-10-23T21:09:48.478226-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Websocket cancelling: StandaloneCoroutine was cancelled level=INFO throwable=null
+[2026-10-23T21:09:52.651797-05:00] INFO/WEP-LIFE MainActivity.onPause
+[2026-10-23T21:09:54.09455-05:00] INFO/WEP-LIFE MainActivity.onResume
+[2026-10-23T21:09:55.262235-05:00] INFO/WEP-WS WorkshopBrowserScreen first composition — startBrowse
+[2026-10-23T21:09:55.262369-05:00] INFO/WEP-WS loadNextPage start page=1 sort=mostsubscribed tag=none query=none
+[2026-10-23T21:09:55.262521-05:00] INFO/WEP-WS filter/sort changed — restarting browse sort=mostsubscribed tag=all
+[2026-10-23T21:09:55.262573-05:00] INFO/WEP-WS clearSearch
+[2026-10-23T21:09:55.262777-05:00] INFO/WEP-STEAM browseWorkshop start sort=mostsubscribed page=1 tags=
+[2026-10-23T21:09:55.366818-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=40 is_running=true authenticated=false steam_connected=false
+[2026-10-23T21:09:56.184744-05:00] INFO/WEP-WS re-browse failed exception=androidx.compose.runtime.LeftCompositionCancellationException
+[2026-10-23T21:09:56.490933-05:00] INFO/WEP-WS WorkshopBrowserScreen first composition — startBrowse
+[2026-10-23T21:09:56.490982-05:00] INFO/WEP-WS filter/sort changed — restarting browse sort=mostsubscribed tag=all
+[2026-10-23T21:09:56.490996-05:00] INFO/WEP-WS clearSearch
+[2026-10-23T21:09:57.473519-05:00] INFO/WEP-WS re-browse failed exception=androidx.compose.runtime.LeftCompositionCancellationException
+[2026-10-23T21:09:57.473665-05:00] INFO/WEP-WS startBrowse failed on first composition exception=androidx.compose.runtime.LeftCompositionCancellationException message=The coroutine scope left the composition
+[2026-10-23T21:09:57.923914-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=20 is_running=true authenticated=false steam_connected=true
+[2026-10-23T21:10:02.097161-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Watchdog: No response for 15 seconds level=INFO throwable=null
+[2026-10-23T21:10:03.887822-05:00] INFO/WEP-WS WorkshopBrowserScreen first composition — startBrowse
+[2026-10-23T21:10:03.887925-05:00] INFO/WEP-WS filter/sort changed — restarting browse sort=mostsubscribed tag=all
+[2026-10-23T21:10:03.887942-05:00] INFO/WEP-WS clearSearch
+[2026-10-23T21:10:04.82385-05:00] INFO/WEP-WS filter chip selected type=Scene
+[2026-10-23T21:10:04.836495-05:00] INFO/WEP-WS re-browse failed exception=androidx.compose.runtime.LeftCompositionCancellationException
+[2026-10-23T21:10:04.836632-05:00] INFO/WEP-WS filter/sort changed — restarting browse sort=mostsubscribed tag=Scene
+[2026-10-23T21:10:04.836669-05:00] INFO/WEP-WS clearSearch
+[2026-10-23T21:10:05.375536-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=50 is_running=true authenticated=false steam_connected=false
+[2026-10-23T21:10:07.097907-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Watchdog: No response for 20 seconds level=INFO throwable=null
+[2026-10-23T21:10:07.932147-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=30 is_running=true authenticated=false steam_connected=true
+[2026-10-23T21:10:12.098635-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Watchdog: No response for 25 seconds level=INFO throwable=null
+[2026-10-23T21:10:15.385683-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=60 is_running=true authenticated=false steam_connected=false
+[2026-10-23T21:10:17.099188-05:00] ERROR/WEP-PROXY JavaSteam ERROR: WebSocketConnection msg=Watchdog: No response for 30 seconds. Disconnecting from steam exception=null
+[2026-10-23T21:10:17.099511-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Disconnect called: false level=INFO throwable=null
+[2026-10-23T21:10:17.101743-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=EventHandler `disconnected` called. User Initiated: false, Expected Disconnection: false level=INFO throwable=null
+[2026-10-23T21:10:17.101982-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-lim1.steamserver.net/155.133.244.50:27038 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:17.102062-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-lim1.steamserver.net/155.133.244.50:27032 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:17.102088-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Websocket cancelling: StandaloneCoroutine was cancelled level=INFO throwable=null
+[2026-10-23T21:10:17.10211-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-lim1.steamserver.net/155.133.244.50:27025 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:17.102139-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-lim1.steamserver.net/155.133.244.50:27033 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:17.102236-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-lim1.steamserver.net/155.133.244.50:27037 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:17.1023-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-lim1.steamserver.net/155.133.244.50:27019 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:17.10233-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-lim1.steamserver.net/155.133.244.50:27029 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:17.102611-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=DisconnectedCallback job_id=9223372036854775807
+[2026-10-23T21:10:17.102681-05:00] INFO/WEP-PROXY WorkshopDownloader: disconnected user_initiated=false authenticated=false download_in_progress=false is_reconnecting_for_fallback=false
+[2026-10-23T21:10:19.103165-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Next server candidate: ext1-lim1.steamserver.net/155.133.244.34:27035 (WEB_SOCKET) level=INFO throwable=null
+[2026-10-23T21:10:19.103355-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=Connecting to ext1-lim1.steamserver.net/155.133.244.34:27035 with protocol [WEB_SOCKET], and with connection impl WebSocketConnection level=INFO throwable=null
+[2026-10-23T21:10:19.10351-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=40 is_running=true authenticated=false steam_connected=false
+[2026-10-23T21:10:19.103618-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Trying connection to ext1-lim1.steamserver.net:27035 level=INFO throwable=null
+[2026-10-23T21:10:20.515283-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Connected to ext1-lim1.steamserver.net:27035 level=INFO throwable=null
+[2026-10-23T21:10:20.51538-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=EventHandler `connected` called level=INFO throwable=null
+[2026-10-23T21:10:20.515446-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext1-lim1.steamserver.net/155.133.244.34:27035 - WEB_SOCKET as GOOD level=INFO throwable=null
+[2026-10-23T21:10:20.516106-05:00] INFO/WEP-PROXY WorkshopDownloader: connected — authenticating as Kirbsuki
+[2026-10-23T21:10:20.516141-05:00] INFO/WEP-PROXY WorkshopDownloader: Connected to Steam — authenticating...
+[2026-10-23T21:10:20.516154-05:00] INFO/WEP-PROXY WorkshopDownloader.testLogin: Connected to Steam — authenticating...
+[2026-10-23T21:10:20.516165-05:00] WARN/WEP-PROXY WorkshopDownloader: auth already in progress, skipping
+[2026-10-23T21:10:20.516227-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=ConnectedCallback job_id=9223372036854775807
+[2026-10-23T21:10:25.266556-05:00] WARN/WEP-PROXY fetchWorkshopIds failed exception=java.net.SocketTimeoutException
+[2026-10-23T21:10:25.267036-05:00] WARN/WEP-WS loadNextPage exception page=0 exception=androidx.compose.runtime.LeftCompositionCancellationException
+[2026-10-23T21:10:25.267178-05:00] INFO/WEP-WS loadNextPage start page=1 sort=mostsubscribed tag=none query=none
+[2026-10-23T21:10:25.267294-05:00] INFO/WEP-STEAM browseWorkshop start sort=mostsubscribed page=1 tags=
+[2026-10-23T21:10:25.391332-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=70 is_running=true authenticated=false steam_connected=false
+[2026-10-23T21:10:28.520332-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=50 is_running=true authenticated=false steam_connected=true
+[2026-10-23T21:10:31.045626-05:00] INFO/WEP-STEAM getPublishedFileDetails start id_count=30
+[2026-10-23T21:10:31.352874-05:00] INFO/WEP-STEAM getPublishedFileDetails done requested=30 returned=30
+[2026-10-23T21:10:31.352988-05:00] INFO/WEP-STEAM browseWorkshop done ids=30 items=30 page=1
+[2026-10-23T21:10:31.353209-05:00] INFO/WEP-WS loadNextPage done page=1 new_items=30 total_items=30
+[2026-10-23T21:10:31.353583-05:00] INFO/WEP-WS loadNextPage start page=1 sort=mostsubscribed tag=Scene query=none
+[2026-10-23T21:10:31.353785-05:00] INFO/WEP-STEAM browseWorkshop start sort=mostsubscribed page=1 tags=Scene
+[2026-10-23T21:10:32.421944-05:00] INFO/WEP-STEAM getPublishedFileDetails start id_count=30
+[2026-10-23T21:10:32.6071-05:00] INFO/WEP-STEAM getPublishedFileDetails done requested=30 returned=30
+[2026-10-23T21:10:32.607219-05:00] INFO/WEP-STEAM browseWorkshop done ids=30 items=30 page=1
+[2026-10-23T21:10:32.619785-05:00] INFO/WEP-WS loadNextPage done page=1 new_items=30 total_items=30
+[2026-10-23T21:10:35.398117-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=80 is_running=true authenticated=false steam_connected=false
+[2026-10-23T21:10:35.516228-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Watchdog: No response for 15 seconds level=INFO throwable=null
+[2026-10-23T21:10:38.527343-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=60 is_running=true authenticated=false steam_connected=true
+[2026-10-23T21:10:40.51749-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Watchdog: No response for 20 seconds level=INFO throwable=null
+[2026-10-23T21:10:45.408908-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=90 is_running=true authenticated=false steam_connected=false
+[2026-10-23T21:10:45.518568-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Watchdog: No response for 25 seconds level=INFO throwable=null
+[2026-10-23T21:10:48.536472-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=70 is_running=true authenticated=false steam_connected=true
+[2026-10-23T21:10:50.519513-05:00] ERROR/WEP-PROXY JavaSteam ERROR: WebSocketConnection msg=Watchdog: No response for 30 seconds. Disconnecting from steam exception=null
+[2026-10-23T21:10:50.519821-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Disconnect called: false level=INFO throwable=null
+[2026-10-23T21:10:50.522581-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=EventHandler `disconnected` called. User Initiated: false, Expected Disconnection: false level=INFO throwable=null
+[2026-10-23T21:10:50.522816-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext1-lim1.steamserver.net/155.133.244.34:27035 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:50.522875-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext1-lim1.steamserver.net/155.133.244.34:27030 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:50.522903-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext1-lim1.steamserver.net/155.133.244.34:27033 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:50.522923-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext1-lim1.steamserver.net/155.133.244.34:27024 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:50.522946-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext1-lim1.steamserver.net/155.133.244.34:27031 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:50.522958-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Websocket cancelling: StandaloneCoroutine was cancelled level=INFO throwable=null
+[2026-10-23T21:10:50.522968-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext1-lim1.steamserver.net/155.133.244.34:27037 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:50.523084-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext1-lim1.steamserver.net/155.133.244.34:27034 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:50.523102-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext1-lim1.steamserver.net/155.133.244.34:27038 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:50.523124-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext1-lim1.steamserver.net/155.133.244.34:27032 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:50.523175-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext1-lim1.steamserver.net/155.133.244.34:27023 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:50.523197-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext1-lim1.steamserver.net/155.133.244.34:27022 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:50.523215-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext1-lim1.steamserver.net/155.133.244.34:27028 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:10:50.523476-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=DisconnectedCallback job_id=9223372036854775807
+[2026-10-23T21:10:50.523541-05:00] INFO/WEP-PROXY WorkshopDownloader: disconnected user_initiated=false authenticated=false download_in_progress=false is_reconnecting_for_fallback=false
+[2026-10-23T21:10:52.524403-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Next server candidate: /155.133.244.50:27017 (TCP) level=INFO throwable=null
+[2026-10-23T21:10:52.525245-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=Connecting to /155.133.244.50:27017 with protocol [TCP], and with connection impl EnvelopeEncryptedConnection level=INFO throwable=null
+[2026-10-23T21:10:52.525388-05:00] INFO/WEP-PROXY JavaSteam: TcpConnection msg=Connecting to /155.133.244.50:27017... level=INFO throwable=null
+[2026-10-23T21:10:55.418004-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=100 is_running=true authenticated=false steam_connected=false
+[2026-10-23T21:10:57.531504-05:00] INFO/WEP-PROXY JavaSteam: TcpConnection msg=Socket exception while completing connection request to /155.133.244.50:27017 level=INFO throwable=java.net.SocketTimeoutException
+[2026-10-23T21:10:57.531672-05:00] INFO/WEP-PROXY JavaSteam: TcpConnection msg=Timed out while connecting to /155.133.244.50:27017 level=INFO throwable=null
+[2026-10-23T21:10:57.531912-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=EventHandler `disconnected` called. User Initiated: false, Expected Disconnection: false level=INFO throwable=null
+[2026-10-23T21:10:57.532084-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking /155.133.244.50:27017 - TCP as BAD level=INFO throwable=null
+[2026-10-23T21:10:57.532132-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking /155.133.244.50:27017 - UDP as BAD level=INFO throwable=null
+[2026-10-23T21:10:57.5325-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=DisconnectedCallback job_id=9223372036854775807
+[2026-10-23T21:10:57.532611-05:00] INFO/WEP-PROXY WorkshopDownloader: disconnected user_initiated=false authenticated=false download_in_progress=false is_reconnecting_for_fallback=false
+[2026-10-23T21:10:59.533043-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Next server candidate: ext2-scl1.steamserver.net/155.133.249.164:27031 (WEB_SOCKET) level=INFO throwable=null
+[2026-10-23T21:10:59.5332-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=Connecting to ext2-scl1.steamserver.net/155.133.249.164:27031 with protocol [WEB_SOCKET], and with connection impl WebSocketConnection level=INFO throwable=null
+[2026-10-23T21:10:59.533406-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Trying connection to ext2-scl1.steamserver.net:27031 level=INFO throwable=null
+[2026-10-23T21:11:00.870047-05:00] INFO/WEP-WS workshop card tap id=3823357259 title=Talia Yang / Cyberpunk Edgerunners 2 (X-ray Interactive)
+[2026-10-23T21:11:00.893474-05:00] INFO/WEP-LIFE NavHost navigate to detail item_id=3823357259
+[2026-10-23T21:11:00.902317-05:00] INFO/WEP-WS WallpaperDetailScreen load id=3823357259
+[2026-10-23T21:11:01.257716-05:00] INFO/WEP-LIFE NavHost navigate to detail item_id=3823357259
+[2026-10-23T21:11:01.271073-05:00] INFO/WEP-LIFE NavHost navigate to detail item_id=3823357259
+[2026-10-23T21:11:03.089861-05:00] INFO/WEP-WS WorkshopDownloadJob: launching debug download id=3823357259 title=Talia Yang / Cyberpunk Edgerunners 2 (X-ray Interactive) pkg_cache_path=/data/user/0/com.wepwawet/cache/3823357259_1792807863089_debug.pkg
+[2026-10-23T21:11:03.09028-05:00] INFO/WEP-WS WorkshopDownloadJob: coroutine STARTED id=3823357259 thread=DefaultDispatcher-worker-9
+[2026-10-23T21:11:03.090643-05:00] INFO/WEP-PROXY WorkshopDownloader START workshop_id=3823357259 username=Kirbsuki has_guard_code=false
+[2026-10-23T21:11:03.090686-05:00] INFO/WEP-PROXY WorkshopDownloader: Connecting to Steam...
+[2026-10-23T21:11:03.090714-05:00] INFO/WEP-WS WorkshopDownloadJob: status update status=Connecting to Steam...
+[2026-10-23T21:11:03.092029-05:00] INFO/WEP-PROXY WorkshopDownloader: subscribed to CallbackMsg (base) for verbose dispatch logging
+[2026-10-23T21:11:03.092129-05:00] INFO/WEP-PROXY WorkshopDownloader: connecting to Steam...
+[2026-10-23T21:11:03.092299-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Querying SteamDirectory for a fresh server list level=INFO throwable=null
+[2026-10-23T21:11:05.425449-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=110 is_running=true authenticated=false steam_connected=false
+[2026-10-23T21:11:05.544505-05:00] ERROR/WEP-PROXY JavaSteam ERROR: WebSocketConnection msg=An error occurred setting up the web socket client exception=java.nio.channels.UnresolvedAddressException
+[2026-10-23T21:11:05.545122-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Disconnect called: false level=INFO throwable=null
+[2026-10-23T21:11:05.545713-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=EventHandler `disconnected` called. User Initiated: false, Expected Disconnection: false level=INFO throwable=null
+[2026-10-23T21:11:05.545973-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-scl1.steamserver.net/155.133.249.164:27031 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:11:05.546181-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-scl1.steamserver.net/155.133.249.164:27035 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:11:05.546265-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-scl1.steamserver.net/155.133.249.164:27019 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:11:05.546301-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-scl1.steamserver.net/155.133.249.164:27021 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:11:05.546338-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-scl1.steamserver.net/155.133.249.164:27022 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:11:05.546365-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-scl1.steamserver.net/155.133.249.164:27038 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:11:05.546458-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-scl1.steamserver.net/155.133.249.164:27020 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:11:05.546534-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-scl1.steamserver.net/155.133.249.164:27029 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:11:05.546595-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-scl1.steamserver.net/155.133.249.164:27034 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:11:05.546621-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-scl1.steamserver.net/155.133.249.164:27037 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:11:05.54665-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext2-scl1.steamserver.net/155.133.249.164:443 - WEB_SOCKET as BAD level=INFO throwable=null
+[2026-10-23T21:11:05.547158-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=DisconnectedCallback job_id=9223372036854775807
+[2026-10-23T21:11:05.547678-05:00] INFO/WEP-PROXY WorkshopDownloader: disconnected user_initiated=false authenticated=false download_in_progress=false is_reconnecting_for_fallback=false
+[2026-10-23T21:11:07.454484-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Resolved 45 servers from SteamDirectory level=INFO throwable=null
+[2026-10-23T21:11:07.455032-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Next server candidate: cmp1-lax1.steamserver.net/162.254.195.69:443 (WEB_SOCKET) level=INFO throwable=null
+[2026-10-23T21:11:07.455178-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=Connecting to cmp1-lax1.steamserver.net/162.254.195.69:443 with protocol [WEB_SOCKET], and with connection impl WebSocketConnection level=INFO throwable=null
+[2026-10-23T21:11:07.455524-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Trying connection to cmp1-lax1.steamserver.net:443 level=INFO throwable=null
+[2026-10-23T21:11:07.548178-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Next server candidate: ext1-scl1.steamserver.net/155.133.249.180:27031 (WEB_SOCKET) level=INFO throwable=null
+[2026-10-23T21:11:07.548377-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=Connecting to ext1-scl1.steamserver.net/155.133.249.180:27031 with protocol [WEB_SOCKET], and with connection impl WebSocketConnection level=INFO throwable=null
+[2026-10-23T21:11:07.548542-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=80 is_running=true authenticated=false steam_connected=false
+[2026-10-23T21:11:07.54855-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Trying connection to ext1-scl1.steamserver.net:27031 level=INFO throwable=null
+[2026-10-23T21:11:08.260714-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Connected to cmp1-lax1.steamserver.net:443 level=INFO throwable=null
+[2026-10-23T21:11:08.260783-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=EventHandler `connected` called level=INFO throwable=null
+[2026-10-23T21:11:08.260861-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking cmp1-lax1.steamserver.net/162.254.195.69:443 - WEB_SOCKET as GOOD level=INFO throwable=null
+[2026-10-23T21:11:08.261245-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=ConnectedCallback job_id=9223372036854775807
+[2026-10-23T21:11:08.261293-05:00] INFO/WEP-PROXY WorkshopDownloader: connected — authenticating as Kirbsuki
+[2026-10-23T21:11:08.261307-05:00] INFO/WEP-PROXY WorkshopDownloader: Connected to Steam — authenticating...
+[2026-10-23T21:11:08.26137-05:00] INFO/WEP-WS WorkshopDownloadJob: status update status=Connected to Steam — authenticating...
+[2026-10-23T21:11:08.261638-05:00] INFO/WEP-PROXY WorkshopDownloader: checking for saved refresh token has_token=true has_account_name=true token_length=501 account_name=kirbsuki
+[2026-10-23T21:11:08.261661-05:00] INFO/WEP-PROXY WorkshopDownloader: trying saved refresh token account_name=kirbsuki user_entered=Kirbsuki
+[2026-10-23T21:11:08.735815-05:00] INFO/WEP-PROXY JavaSteam: WebSocketConnection msg=Connected to ext1-scl1.steamserver.net:27031 level=INFO throwable=null
+[2026-10-23T21:11:08.736001-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=EventHandler `connected` called level=INFO throwable=null
+[2026-10-23T21:11:08.736063-05:00] INFO/WEP-PROXY JavaSteam: SmartCMServerList msg=Marking ext1-scl1.steamserver.net/155.133.249.180:27031 - WEB_SOCKET as GOOD level=INFO throwable=null
+[2026-10-23T21:11:08.736782-05:00] INFO/WEP-PROXY WorkshopDownloader: connected — authenticating as Kirbsuki
+[2026-10-23T21:11:08.736808-05:00] INFO/WEP-PROXY WorkshopDownloader: Connected to Steam — authenticating...
+[2026-10-23T21:11:08.73682-05:00] INFO/WEP-PROXY WorkshopDownloader.testLogin: Connected to Steam — authenticating...
+[2026-10-23T21:11:08.736829-05:00] WARN/WEP-PROXY WorkshopDownloader: auth already in progress, skipping
+[2026-10-23T21:11:08.736861-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=ConnectedCallback job_id=9223372036854775807
+[2026-10-23T21:11:08.847677-05:00] INFO/WEP-PROXY JavaSteam: CMClient msg=handleLogOnResponse got response: OK, extended: Invalid level=INFO throwable=null
+[2026-10-23T21:11:08.848101-05:00] INFO/WEP-PROXY WorkshopDownloader: logged on to Steam ✓
+[2026-10-23T21:11:08.848124-05:00] INFO/WEP-PROXY WorkshopDownloader: Logged in to Steam ✓ — fetching licenses...
+[2026-10-23T21:11:08.848496-05:00] INFO/WEP-WS WorkshopDownloadJob: status update status=Logged in to Steam ✓ — fetching licenses...
+[2026-10-23T21:11:08.848533-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=LoggedOnCallback job_id=9223372036854775807
+[2026-10-23T21:11:08.848681-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=AccountInfoCallback job_id=9223372036854775807
+[2026-10-23T21:11:08.854718-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=EmailAddrInfoCallback job_id=9223372036854775807
+[2026-10-23T21:11:08.859935-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=FriendsListCallback job_id=9223372036854775807
+[2026-10-23T21:11:08.860054-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=NicknameListCallback job_id=9223372036854775807
+[2026-10-23T21:11:08.861842-05:00] INFO/WEP-PROXY WorkshopDownloader: got licenses count=131
+[2026-10-23T21:11:08.861875-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=LicenseListCallback job_id=9223372036854775807
+[2026-10-23T21:11:08.862054-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=GuestPassListCallback job_id=9223372036854775807
+[2026-10-23T21:11:08.862404-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=WalletInfoCallback job_id=9223372036854775807
+[2026-10-23T21:11:08.86273-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=GameConnectTokensCallback job_id=9223372036854775807
+[2026-10-23T21:11:08.862836-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=10 is_running=true authenticated=true steam_connected=true
+[2026-10-23T21:11:08.862953-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=VACStatusCallback job_id=9223372036854775807
+[2026-10-23T21:11:08.955853-05:00] INFO/WEP-WS WorkshopDownloadJob: status update status=Fetching Steam licenses...
+[2026-10-23T21:11:08.955966-05:00] INFO/WEP-PROXY WorkshopDownloader: got 131 licenses
+[2026-10-23T21:11:08.955991-05:00] INFO/WEP-WS WorkshopDownloadJob: status update status=Downloading workshop item via Steam protocol...
+[2026-10-23T21:11:08.957239-05:00] INFO/WEP-PROXY WorkshopDownloader: install dir prepared path=/data/user/0/com.wepwawet/cache/workshop_downloads/3823357259 exists=true mkdirs_returned=false is_directory=true can_write=true cache_dir=/data/user/0/com.wepwawet/cache parent_exists=true
+[2026-10-23T21:11:08.957294-05:00] INFO/WEP-PROXY WorkshopDownloader: constructing DepotDownloader steam_client_connected=true licenses_count=131 install_dir=/data/user/0/com.wepwawet/cache/workshop_downloads/3823357259
+[2026-10-23T21:11:08.958084-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=DepotDownloader launched with 131 for account level=INFO throwable=null
+[2026-10-23T21:11:08.958297-05:00] INFO/WEP-PROXY WorkshopDownloader: DepotDownloader constructed downloader_class=in.dragonbra.javasteam.depotdownloader.DepotDownloader
+[2026-10-23T21:11:08.95842-05:00] INFO/WEP-PROXY WorkshopDownloader: listener registered listener_class=com.wepwawet.pairing.WorkshopDownloader$downloadWorkshopPkg$2$listener$1 downloader_class=in.dragonbra.javasteam.depotdownloader.DepotDownloader
+[2026-10-23T21:11:08.958559-05:00] INFO/WEP-PROXY WorkshopDownloader: adding PubFileItem app_id=431960 pub_file_id=3823357259 install_dir=/data/user/0/com.wepwawet/cache/workshop_downloads/3823357259 pub_item_install_dir=/data/user/0/com.wepwawet/cache/workshop_downloads/3823357259 install_dir_exists=true install_dir_writable=true licenses_count=131 steam_client_connected=true steam_client_class=in.dragonbra.javasteam.steam.steamclient.SteamClient
+[2026-10-23T21:11:08.958749-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Downloading PUB File for 431960 level=INFO throwable=null
+[2026-10-23T21:11:08.958758-05:00] INFO/WEP-PROXY WorkshopDownloader: PubFileItem added — calling finishAdding
+[2026-10-23T21:11:08.958799-05:00] INFO/WEP-PROXY WorkshopDownloader: items queued, finishAdding done
+[2026-10-23T21:11:08.958821-05:00] INFO/WEP-WS WorkshopDownloadJob: status update status=Downloading... this may take a few minutes for large wallpapers
+[2026-10-23T21:11:08.958885-05:00] INFO/WEP-PROXY WorkshopDownloader: item added app_id=431960 install_dir=/data/user/0/com.wepwawet/cache/workshop_downloads/3823357259
+[2026-10-23T21:11:08.958983-05:00] INFO/WEP-PROXY WorkshopDownloader: heartbeat thread started interval_ms=3000
+[2026-10-23T21:11:08.9591-05:00] INFO/WEP-PROXY WorkshopDownloader: download started app_id=431960
+[2026-10-23T21:11:08.959179-05:00] INFO/WEP-WS WorkshopDownloadJob: status update status=Download started — fetching chunks from Steam CDN...
+[2026-10-23T21:11:08.959317-05:00] INFO/WEP-PROXY WorkshopDownloader: file-watcher thread started interval_ms=2000 install_dir=/data/user/0/com.wepwawet/cache/workshop_downloads/3823357259
+[2026-10-23T21:11:08.959342-05:00] INFO/WEP-PROXY WorkshopDownloader: registered abort callback with JavaSteamLogBridge
+[2026-10-23T21:11:08.959365-05:00] INFO/WEP-PROXY WorkshopDownloader: calling awaitCompletion (with 600s timeout) thread=DefaultDispatcher-worker-9 downloader_class=in.dragonbra.javasteam.depotdownloader.DepotDownloader
+[2026-10-23T21:11:08.959644-05:00] INFO/WEP-PROXY WorkshopDownloader: awaitCompletion thread ENTERED thread=JavaSteam-DepotCompletion
+[2026-10-23T21:11:09.061938-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.062117-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.062208-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.062333-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.062466-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.062596-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.062819-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.062951-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.063082-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.063136-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=20 is_running=true authenticated=true steam_connected=true
+[2026-10-23T21:11:09.0632-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.063359-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.063482-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.063618-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.063743-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.063873-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.064017-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.064166-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.064447-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PersonaStateCallback job_id=9223372036854775807
+[2026-10-23T21:11:09.987853-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=ServiceMethodResponse job_id=721703679295489
+[2026-10-23T21:11:09.98795-05:00] INFO/WEP-PROXY JavaSteam: Steam3Session msg=requestUGCDetails(431960, 3823357259) result: OK level=INFO throwable=null
+[2026-10-23T21:11:09.987987-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=30 is_running=true authenticated=true steam_connected=true
+[2026-10-23T21:11:09.988254-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=processPublishedFile appId=431960 pubFile=3823357259 fileType=First (0) fileUrl='' filename='' hcontentFile=8676480858434602198 children=0 level=INFO throwable=null
+[2026-10-23T21:11:10.576099-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PICSTokensCallback job_id=721703679295490
+[2026-10-23T21:11:10.852726-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PICSProductInfoCallback job_id=721703679295491
+[2026-10-23T21:11:10.852896-05:00] INFO/WEP-PROXY JavaSteam: Steam3Session msg=requestAppInfo(431960, false) with 
+1 appTokens, 
+0 appTokensDenied, 
+0 packageTokens, and 
+[] packageTokensDenied. 
+picsGetProductInfo result size: 1 level=INFO throwable=null
+[2026-10-23T21:11:10.853173-05:00] INFO/WEP-PROXY JavaSteam: Steam3Session msg=requestPackageInfo() invoked with 131 packageIds level=INFO throwable=null
+[2026-10-23T21:11:10.961793-05:00] INFO/WEP-PROXY WorkshopDownloader: file-watcher NEW file tick=1 file=depot.config size=77 path=/data/user/0/com.wepwawet/cache/workshop_downloads/3823357259/.DepotDownloader/depot.config parent=.DepotDownloader
+[2026-10-23T21:11:10.96186-05:00] INFO/WEP-PROXY WorkshopDownloader: file-watcher NEW file tick=1 file=431960_8676480858434602198.manifest size=0 path=/data/user/0/com.wepwawet/cache/workshop_downloads/3823357259/.DepotDownloader/431960_8676480858434602198.manifest parent=.DepotDownloader
+[2026-10-23T21:11:11.050219-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=PICSProductInfoCallback job_id=721703679295492
+[2026-10-23T21:11:11.050359-05:00] INFO/WEP-PROXY JavaSteam: Steam3Session msg=requestPackageInfo() picsGetProductInfo result size: 1  level=INFO throwable=null
+[2026-10-23T21:11:11.051786-05:00] INFO/WEP-PROXY JavaSteam: Steam3Session msg=requestAppInfo already has 431960 or is aborting level=INFO throwable=null
+[2026-10-23T21:11:11.051889-05:00] INFO/WEP-PROXY JavaSteam: Steam3Session msg=requestPackageInfo() invoked with 131 packageIds level=INFO throwable=null
+[2026-10-23T21:11:11.260605-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=DepotKeyCallback job_id=721703679295493
+[2026-10-23T21:11:11.260647-05:00] INFO/WEP-PROXY JavaSteam: Steam3Session msg=requestDepotKey(431960, 431960) Got depot key for 431960 result: OK level=INFO throwable=null
+[2026-10-23T21:11:11.432357-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=ServiceMethodResponse job_id=721703679295494
+[2026-10-23T21:11:11.432993-05:00] INFO/WEP-PROXY JavaSteam: CDNClientPool msg=Found 23 Servers level=INFO throwable=null
+[2026-10-23T21:11:11.433178-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Processing depot 431960 level=INFO throwable=null
+[2026-10-23T21:11:11.434511-05:00] ERROR/WEP-PROXY JavaSteam ERROR: Util msg= exception=java.io.FileNotFoundException
+[2026-10-23T21:11:11.434664-05:00] INFO/WEP-PROXY JavaSteam: Util msg=Manifest 8676480858434602198 on disk did not match the expected checksum. level=INFO throwable=null
+[2026-10-23T21:11:11.434696-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Downloading depot 431960 manifest level=INFO throwable=null
+[2026-10-23T21:11:11.434792-05:00] INFO/WEP-PROXY JavaSteam: CDNClientPool msg=Getting connection cache12-ord1.steamcontent.com:443 (SteamCache) level=INFO throwable=null
+[2026-10-23T21:11:11.434969-05:00] INFO/WEP-PROXY WorkshopDownloader: depot status msg=Downloading manifest for depot 431960
+[2026-10-23T21:11:11.43505-05:00] INFO/WEP-WS WorkshopDownloadJob: status update status=Downloading manifest for depot 431960
+[2026-10-23T21:11:11.959959-05:00] INFO/WEP-PROXY WorkshopDownloader: heartbeat #1 elapsed_s=3 silent_s=0 last_status=Downloading manifest for depot 431960 last_pct=-1 files_done=0 chunks_done=0 depots_done=0 chunk_bytes=0 steam_connected=true dir_file_count=2 dir_total_bytes=77 dir_largest_file=depot.config dir_largest_size=77
+[2026-10-23T21:11:11.96018-05:00] INFO/WEP-WS WorkshopDownloadJob: status update status=Downloading manifest for depot 431960 (3s elapsed, 2 files in cache, 77 B total)
+[2026-10-23T21:11:11.973663-05:00] INFO/WEP-PROXY WorkshopDownloader: callback dispatched class=ServiceMethodResponse job_id=721703679295495
+[2026-10-23T21:11:11.973853-05:00] INFO/WEP-PROXY JavaSteam: Steam3Session msg=Got manifest request code for depot 431960 from app 431960, manifest 8676480858434602198, result: 17803006675445091425 level=INFO throwable=null
+[2026-10-23T21:11:11.973933-05:00] INFO/WEP-PROXY JavaSteam: Steam3Session msg=getDepotManifestRequestCode(431960, 431960, 8676480858434602198, public) got request code 17803006675445091425 level=INFO throwable=null
+[2026-10-23T21:11:11.974036-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Downloading manifest 8676480858434602198 from cache12-ord1.steamcontent.com:443 (SteamCache) with no proxy level=INFO throwable=null
+[2026-10-23T21:11:11.974406-05:00] INFO/WEP-PROXY JavaSteam: Client msg=Request URL is: Request{method=GET, url=https://cache12-ord1.steamcontent.com/depot/431960/manifest/8676480858434602198/5/17803006675445091425} level=INFO throwable=null
+[2026-10-23T21:11:14.960901-05:00] INFO/WEP-PROXY WorkshopDownloader: heartbeat #2 elapsed_s=6 silent_s=3 last_status=Downloading manifest for depot 431960 last_pct=-1 files_done=0 chunks_done=0 depots_done=0 chunk_bytes=0 steam_connected=true dir_file_count=2 dir_total_bytes=77 dir_largest_file=depot.config dir_largest_size=77
+[2026-10-23T21:11:14.96113-05:00] INFO/WEP-WS WorkshopDownloadJob: status update status=Downloading manifest for depot 431960 (6s elapsed, 2 files in cache, 77 B total)
+[2026-10-23T21:11:15.197981-05:00] INFO/WEP-PROXY JavaSteam: CDNClientPool msg=Returning connection: cache12-ord1.steamcontent.com:443 (SteamCache) level=INFO throwable=null
+[2026-10-23T21:11:15.20104-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Manifest 8676480858434602198 (Thu Oct 22 01:36:26 CDT 2026) level=INFO throwable=null
+[2026-10-23T21:11:15.202105-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Downloading depot 431960 level=INFO throwable=null
+[2026-10-23T21:11:15.202674-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Pre-allocating: /data/user/0/com.wepwawet/cache/workshop_downloads/3823357259/scene.pkg level=INFO throwable=null
+[2026-10-23T21:11:15.202761-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Pre-allocating: /data/user/0/com.wepwawet/cache/workshop_downloads/3823357259/preview.jpg level=INFO throwable=null
+[2026-10-23T21:11:15.202793-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Pre-allocating: /data/user/0/com.wepwawet/cache/workshop_downloads/3823357259/project.json level=INFO throwable=null
+[2026-10-23T21:11:15.202938-05:00] INFO/WEP-PROXY WorkshopDownloader: depot status msg=Allocating file: scene.pkg
+[2026-10-23T21:11:15.202977-05:00] INFO/WEP-PROXY WorkshopDownloader: depot status msg=Allocating file: preview.jpg
+[2026-10-23T21:11:15.203-05:00] INFO/WEP-PROXY WorkshopDownloader: depot status msg=Allocating file: project.json
+[2026-10-23T21:11:15.203014-05:00] INFO/WEP-WS WorkshopDownloadJob: status update status=Allocating file: preview.jpg
+[2026-10-23T21:11:15.203027-05:00] INFO/WEP-WS WorkshopDownloadJob: status update status=Allocating file: scene.pkg
+[2026-10-23T21:11:15.203057-05:00] INFO/WEP-WS WorkshopDownloadJob: status update status=Allocating file: project.json
+[2026-10-23T21:11:15.203091-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Waiting for 9 pending chunks to complete for depot 431960 level=INFO throwable=null
+[2026-10-23T21:11:15.203477-05:00] INFO/WEP-PROXY JavaSteam: CDNClientPool msg=Getting connection cache6-ord1.steamcontent.com:443 (SteamCache) level=INFO throwable=null
+[2026-10-23T21:11:15.203485-05:00] INFO/WEP-PROXY JavaSteam: CDNClientPool msg=Getting connection cache7-ord1.steamcontent.com:443 (SteamCache) level=INFO throwable=null
+[2026-10-23T21:11:15.203486-05:00] INFO/WEP-PROXY JavaSteam: CDNClientPool msg=Getting connection cache2-ord1.steamcontent.com:443 (SteamCache) level=INFO throwable=null
+[2026-10-23T21:11:15.203518-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Downloading chunk 70006C7DED38FA150BF8DADCBE692F4B2ED7E171 from cache6-ord1.steamcontent.com:443 (SteamCache) with no proxy level=INFO throwable=null
+[2026-10-23T21:11:15.203523-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Downloading chunk A944F47508266C13AEF9CB12F0663A2C09E030E1 from cache2-ord1.steamcontent.com:443 (SteamCache) with no proxy level=INFO throwable=null
+[2026-10-23T21:11:15.203566-05:00] INFO/WEP-PROXY JavaSteam: CDNClientPool msg=Getting connection cache14-ord1.steamcontent.com:443 (SteamCache) level=INFO throwable=null
+[2026-10-23T21:11:15.203583-05:00] INFO/WEP-PROXY JavaSteam: CDNClientPool msg=Getting connection cache13-ord1.steamcontent.com:443 (SteamCache) level=INFO throwable=null
+[2026-10-23T21:11:15.203587-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Downloading chunk 2797F5DC6CFB16E8D0387DA91512317C0E1D35DA from cache14-ord1.steamcontent.com:443 (SteamCache) with no proxy level=INFO throwable=null
+[2026-10-23T21:11:15.203613-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Downloading chunk B4F038361FB12AAD29E1B520EEFDA35A384B19E2 from cache13-ord1.steamcontent.com:443 (SteamCache) with no proxy level=INFO throwable=null
+[2026-10-23T21:11:15.203662-05:00] INFO/WEP-PROXY JavaSteam: CDNClientPool msg=Getting connection cache1-ord1.steamcontent.com:443 (SteamCache) level=INFO throwable=null
+[2026-10-23T21:11:15.20368-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Downloading chunk F7A0CC2AE7583F115C4160736547A5FC1AF68890 from cache1-ord1.steamcontent.com:443 (SteamCache) with no proxy level=INFO throwable=null
+[2026-10-23T21:11:15.203698-05:00] INFO/WEP-PROXY JavaSteam: CDNClientPool msg=Getting connection cache5-ord1.steamcontent.com:443 (SteamCache) level=INFO throwable=null
+[2026-10-23T21:11:15.203719-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Downloading chunk BA017EF7C93038498FCD9A9FA2A6E205D177842E from cache5-ord1.steamcontent.com:443 (SteamCache) with no proxy level=INFO throwable=null
+[2026-10-23T21:11:15.203523-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Downloading chunk 8A84DF1489FBD943E38BD14B8D92588FF0E6291C from cache7-ord1.steamcontent.com:443 (SteamCache) with no proxy level=INFO throwable=null
+[2026-10-23T21:11:15.20394-05:00] INFO/WEP-PROXY JavaSteam: CDNClientPool msg=Getting connection cache8-ord1.steamcontent.com:443 (SteamCache) level=INFO throwable=null
+[2026-10-23T21:11:15.20396-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Downloading chunk EB6AFC9AA522F8196922DDC5AA1A60E2FE1207C3 from cache8-ord1.steamcontent.com:443 (SteamCache) with no proxy level=INFO throwable=null
+[2026-10-23T21:11:15.431738-05:00] INFO/WEP-PROXY WorkshopDownloader: callback thread heartbeat tick=120 is_running=true authenticated=false steam_connected=false
+[2026-10-23T21:11:15.54839-05:00] INFO/WEP-PROXY JavaSteam: CDNClientPool msg=Returning connection: cache6-ord1.steamcontent.com:443 (SteamCache) level=INFO throwable=null
+[2026-10-23T21:11:15.549724-05:00] INFO/WEP-PROXY JavaSteam: CDNClientPool msg=Getting connection cache11-ord1.steamcontent.com:443 (SteamCache) level=INFO throwable=null
+[2026-10-23T21:11:15.549771-05:00] INFO/WEP-PROXY JavaSteam: DepotDownloader msg=Downloading chunk 72936A7FC55416E06E007E54ABF385840F1380EA from cache11-ord1.steamcontent.com:443 (SteamCache) with no proxy level=INFO throwable=null
+[2026-10-23T21:11:15.549927-05:00] ERROR/WEP-PROXY JavaSteam ERROR: VZstdUtil msg=Missing implementation of com.github.luben:zstd-jni exception=null
+[2026-10-23T21:11:15.551393-05:00] ERROR/WEP-PROXY JavaSteam ERROR: Client msg=Failed to download a depot chunk https://cache7-ord1.steamcontent.com/depot/431960/chunk/8A84DF1489FBD943E38BD14B8D92588FF0E6291C: Parent job is Cancelling exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.551475-05:00] ERROR/WEP-PROXY JavaSteam ERROR: DepotDownloader msg=Cancellation exception in download depot file chunk exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.551615-05:00] ERROR/WEP-PROXY JavaSteam ERROR: Client msg=Failed to download a depot chunk https://cache5-ord1.steamcontent.com/depot/431960/chunk/BA017EF7C93038498FCD9A9FA2A6E205D177842E: Parent job is Cancelling exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.551836-05:00] ERROR/WEP-PROXY JavaSteam ERROR: DepotDownloader msg=Cancellation exception in download depot file chunk exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.552298-05:00] ERROR/WEP-PROXY JavaSteam ERROR: Client msg=Failed to download a depot chunk https://cache8-ord1.steamcontent.com/depot/431960/chunk/EB6AFC9AA522F8196922DDC5AA1A60E2FE1207C3: Parent job is Cancelling exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.552378-05:00] ERROR/WEP-PROXY JavaSteam ERROR: Client msg=Failed to download a depot chunk https://cache1-ord1.steamcontent.com/depot/431960/chunk/F7A0CC2AE7583F115C4160736547A5FC1AF68890: Parent job is Cancelling exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.552477-05:00] ERROR/WEP-PROXY JavaSteam ERROR: DepotDownloader msg=Cancellation exception in download depot file chunk exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.552485-05:00] ERROR/WEP-PROXY JavaSteam ERROR: DepotDownloader msg=Cancellation exception in download depot file chunk exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.552624-05:00] ERROR/WEP-PROXY JavaSteam ERROR: DepotDownloader msg=Error downloading chunk: Parent job is Cancelling exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.552626-05:00] ERROR/WEP-PROXY JavaSteam ERROR: DepotDownloader msg=Error downloading chunk: Parent job is Cancelling exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.552778-05:00] ERROR/WEP-PROXY JavaSteam ERROR: Client msg=Failed to download a depot chunk https://cache14-ord1.steamcontent.com/depot/431960/chunk/2797F5DC6CFB16E8D0387DA91512317C0E1D35DA: Parent job is Cancelling exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.552824-05:00] ERROR/WEP-PROXY JavaSteam ERROR: DepotDownloader msg=Cancellation exception in download depot file chunk exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.552856-05:00] ERROR/WEP-PROXY JavaSteam ERROR: DepotDownloader msg=Error downloading chunk: Parent job is Cancelling exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.552969-05:00] ERROR/WEP-PROXY JavaSteam ERROR: Client msg=Failed to download a depot chunk https://cache13-ord1.steamcontent.com/depot/431960/chunk/B4F038361FB12AAD29E1B520EEFDA35A384B19E2: Parent job is Cancelling exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.552996-05:00] ERROR/WEP-PROXY JavaSteam ERROR: DepotDownloader msg=Cancellation exception in download depot file chunk exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.553022-05:00] ERROR/WEP-PROXY JavaSteam ERROR: DepotDownloader msg=Error downloading chunk: Parent job is Cancelling exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.553306-05:00] ERROR/WEP-PROXY JavaSteam ERROR: DepotDownloader msg=Error downloading chunk: Parent job is Cancelling exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.55348-05:00] ERROR/WEP-PROXY JavaSteam ERROR: DepotDownloader msg=Error downloading chunk: Parent job is Cancelling exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.553504-05:00] ERROR/WEP-PROXY JavaSteam ERROR: Client msg=Failed to download a depot chunk https://cache11-ord1.steamcontent.com/depot/431960/chunk/72936A7FC55416E06E007E54ABF385840F1380EA: Parent job is Cancelling exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.553533-05:00] ERROR/WEP-PROXY JavaSteam ERROR: DepotDownloader msg=Cancellation exception in download depot file chunk exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.553559-05:00] ERROR/WEP-PROXY JavaSteam ERROR: DepotDownloader msg=Error downloading chunk: Parent job is Cancelling exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.74694-05:00] ERROR/WEP-PROXY JavaSteam ERROR: DepotDownloader msg=Cancellation exception in download depot file chunk exception=kotlinx.coroutines.JobCancellationException
+[2026-10-23T21:11:15.747074-05:00] ERROR/WEP-PROXY JavaSteam ERROR: DepotDownloader msg=Error downloading chunk: Parent job is Cancelling exception=kotlinx.coroutines.JobCancellationException
 
 --- Thread dump (via /proc/self/task) ---
-(found 22 threads via /proc/self/task)
-  tid=22309 name=hwuiTask1
-  tid=22308 name=hwuiTask0
-  tid=22306 name=TracingMuxer
-  tid=22298 name=RenderThread
-  tid=22296 name=WM.task-3
-  tid=22295 name=WM.task-2
-  tid=22294 name=UIMonitorThread
-  tid=22287 name=WM.task-1
-  tid=22273 name=Profile Saver
-  tid=22271 name=IconPackUtil-Ba
-  tid=22270 name=oplus.view.bg
-  tid=22268 name=SurfaceSyncGrou
-  tid=22264 name=binder:22231_2
-  tid=22263 name=binder:22231_1
-  tid=22262 name=FinalizerWatchd
-  tid=22261 name=FinalizerDaemon
-  tid=22260 name=ReferenceQueueD
-  tid=22259 name=HeapTaskDaemon
-  tid=22258 name=Jit thread pool
-  tid=22250 name=perfetto_hprof_
+(found 93 threads via /proc/self/task)
+  tid=13208 name=K TaskRunner
+  tid=13206 name=DefaultDispatch
+  tid=13204 name=K TaskRunner
+  tid=13203 name=teamcontent.com
+  tid=13201 name=K TaskRunner
+  tid=13200 name=K TaskRunner
+  tid=13199 name=teamcontent.com
+  tid=13198 name=K TaskRunner
+  tid=13195 name=teamcontent.com
+  tid=13193 name=teamcontent.com
+  tid=13161 name=JavaSteam-Http
+  tid=13158 name=JavaSteam-Http
+  tid=13157 name=JavaSteam-Http
+  tid=13155 name=JavaSteam-Http
+  tid=13154 name=JavaSteam-Http
+  tid=13153 name=JavaSteam-Http
+  tid=13151 name=JavaSteam-Http
+  tid=13150 name=DefaultDispatch
+  tid=13022 name=JavaSteam-Http
+  tid=13010 name=UIMonitorThread
 
 --- /proc/self/maps (first 50 lines) ---
 02000000-22000000 rw-p 00000000 00:00 0                                  [anon:dalvik-main space]
@@ -140,8 +548,8 @@ Caused by: java.lang.IllegalStateException: TypeToken must be created with a typ
 42000000-44000000 r--s 00000000 00:01 1120                               /memfd:jit-zygote-cache (deleted)
 44000000-46000000 r-xs 02000000 00:01 1120                               [anon_shmem:dalvik-zygote-jit-code-cache]
 46000000-46004000 rw-p 00000000 00:00 0                                  [anon:dalvik-/data/misc/apexdata/...ork@com.android.location.provider.jar@classes.art]
-46004000-48004000 r--s 00000000 00:01 6331511                            /memfd:jit-cache (deleted)
-48004000-4a004000 r-xs 02000000 00:01 6331511                            [anon_shmem:dalvik-jit-code-cache]
+46004000-48004000 r--s 00000000 00:01 7410547                            /memfd:jit-cache (deleted)
+48004000-4a004000 r-xs 02000000 00:01 7410547                            [anon_shmem:dalvik-jit-code-cache]
 6fcbc000-71bfc000 rw-p 00000000 00:00 0                                  [anon:dalvik-/data/misc/apexdata/com.android.art/dalvik-cache/boot.art]
 71bfc000-7201c000 r--p 00000000 fe:4e 895397                             /data/misc/apexdata/com.android.art/dalvik-cache/arm64/boot.oat
 7201c000-72dbd000 r-xp 00420000 fe:4e 895397                             /data/misc/apexdata/com.android.art/dalvik-cache/arm64/boot.oat
@@ -157,32 +565,32 @@ Caused by: java.lang.IllegalStateException: TypeToken must be created with a typ
 72f59000-72f5c000 ---p 00000000 00:00 0                                  [anon:dalvik-Boot image reservation]
 72f5c000-73659000 rw-p 00000000 00:00 0                                  [anon:dalvik-zygote space]
 73659000-7365a000 rw-p 00000000 00:00 0                                  [anon:dalvik-non moving space]
-7365a000-7365f000 rw-p 00000000 00:00 0                                  [anon:dalvik-non moving space]
-7365f000-75f5d000 ---p 00000000 00:00 0                                  [anon:dalvik-non moving space]
+7365a000-7368b000 rw-p 00000000 00:00 0                                  [anon:dalvik-non moving space]
+7368b000-75f5d000 ---p 00000000 00:00 0                                  [anon:dalvik-non moving space]
 75f5d000-76f5c000 rw-p 00000000 00:00 0                                  [anon:dalvik-non moving space]
 ebad6000-ebad7000 ---p 00000000 00:00 0                                  [anon:dalvik-Sentinel fault page]
 64f5514000-64f5516000 r--p 00000000 00:83 7853758                        /system/bin/app_process64
 64f5518000-64f551a000 r-xp 00004000 00:83 7853758                        /system/bin/app_process64
 64f551c000-64f551d000 r--p 00008000 00:83 7853758                        /system/bin/app_process64
 64f5520000-64f5521000 rw-p 0000c000 00:83 7853758                        /system/bin/app_process64
-76bb000000-76bb1ac000 ---p 00000000 00:00 0 
-76bb1ac000-76bb1b0000 rw-p 00000000 00:00 0 
-76bb1b0000-76bcd20000 ---p 00000000 00:00 0 
-76bcd20000-76bcd24000 rw-p 00000000 00:00 0 
-76bcd24000-76bd938000 ---p 00000000 00:00 0 
-76bd938000-76bd93c000 rw-p 00000000 00:00 0 
-76bd93c000-76be98c000 ---p 00000000 00:00 0 
-76be98c000-76be990000 rw-p 00000000 00:00 0 
-76be990000-76bfe50000 ---p 00000000 00:00 0 
-76bfe50000-76bfe54000 rw-p 00000000 00:00 0 
-76bfe54000-76c0000000 ---p 00000000 00:00 0 
-76c0000000-7700000000 ---p 00000000 00:00 0                              [anon:dalvik-linear-alloc shadow map]
-7700000000-7740000000 rw-p 00000000 00:00 0                              [anon:dalvik-LinearAlloc]
-7740600000-7740800000 rw-p 00000000 00:00 0                              [anon:libc_malloc]
-7740800000-7740ed8000 ---p 00000000 00:00 0 
-7740ed8000-7740edc000 rw-p 00000000 00:00 0 
-7740edc000-774270c000 ---p 00000000 00:00 0 
-774270c000-7742710000 rw-p 00000000 00:00 0 
-7742710000-7743304000 ---p 00000000 00:00 0 
-7743304000-7743308000 rw-p 00000000 00:00 0 
-... (3517 more lines)
+7631aa4000-7632852000 rw-s 00000000 00:0a 2754566                        /dmabuf:VRI[MainActivity]#3(BLAST Consu
+7632852000-7633600000 rw-s 00000000 00:0a 2754564                        /dmabuf:VRI[MainActivity]#3(BLAST Consu
+7633600000-76338f0000 ---p 00000000 00:00 0 
+76338f0000-76338f4000 rw-p 00000000 00:00 0 
+76338f4000-7634fb0000 ---p 00000000 00:00 0 
+7634fb0000-7634fb4000 rw-p 00000000 00:00 0 
+7634fb4000-7635600000 ---p 00000000 00:00 0 
+76357e0000-76357e4000 ---p 00000000 00:00 0 
+76357e4000-76357e5000 ---p 00000000 00:00 0                              [anon:stack_and_tls:13208]
+76357e5000-7635bec000 rw-p 00000000 00:00 0                              [anon:stack_and_tls:13208]
+7635bec000-7635bf4000 ---p 00000000 00:00 0 
+7635bf4000-7635bf5000 ---p 00000000 00:00 0                              [anon:stack_and_tls:13206]
+7635bf5000-7635ffc000 rw-p 00000000 00:00 0                              [anon:stack_and_tls:13206]
+7635ffc000-7636000000 ---p 00000000 00:00 0 
+7636000000-7636010000 ---p 00000000 00:00 0 
+7636010000-7636014000 rw-p 00000000 00:00 0 
+7636014000-7637000000 ---p 00000000 00:00 0 
+76371f0000-76371f4000 ---p 00000000 00:00 0 
+76371f4000-76371f5000 ---p 00000000 00:00 0                              [anon:stack_and_tls:13204]
+76371f5000-76375fc000 rw-p 00000000 00:00 0                              [anon:stack_and_tls:13204]
+... (4338 more lines)

@@ -27,6 +27,13 @@ espresso = "3.6.1"
 # silently — causing awaitCompletion to hang forever.
 javasteam = "v1.8.0-wepwawet8"
 bouncycastle = "1.84"
+# zstd-jni — required by JavaSteam DepotDownloader for Zstd decompression of
+# depot chunks. Without this, the download crashes with NoClassDefFoundError
+# when trying to decompress downloaded chunks.
+# Version matches the JavaSteam fork's libs.versions.toml.
+zstdJni = "1.5.7-6"
+# XZ — required by JavaSteam for LZMA decompression of some depot chunks.
+xz = "1.11"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -62,6 +69,10 @@ androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-co
 javasteam-core = { group = "com.github.687meowmeow.JavaSteam", name = "javasteam", version.ref = "javasteam" }
 javasteam-depotdownloader = { group = "com.github.687meowmeow.JavaSteam", name = "javasteam-depotdownloader", version.ref = "javasteam" }
 bouncycastleProvider = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
+# zstd-jni — Zstd decompression for Steam depot chunks (required by JavaSteam)
+zstdJni = { group = "com.github.luben", name = "zstd-jni", version.ref = "zstdJni" }
+# XZ — LZMA decompression for some Steam depot chunks (required by JavaSteam)
+xz = { group = "org.tukaani", name = "xz", version.ref = "xz" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
