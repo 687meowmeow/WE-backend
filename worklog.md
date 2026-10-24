@@ -2946,3 +2946,80 @@ Stage Summary:
      steam3.getPublishedFileDetails() ourselves, extract the fileUrl, and
      download via HTTP (this requires a Steam Web API key for paid apps
      like Wallpaper Engine — the anonymous endpoint hides file_url)
+
+---
+Task ID: fix-sha1-bc-provider
+Agent: main
+Task: Fix SHA-1 NoSuchAlgorithmException on Android 14+ (BC provider issue)
+
+Work Log:
+- User uploaded logs (wepwawet-logs-20261023-202124.txt) from 0.1.8-alpha
+  showing MASSIVE PROGRESS:
+  * The fileType=0 (First) patch from the fork WORKED! The library now
+    treats fileType=0 as a regular file
+  * My diagnostic log revealed: fileType=First (0), fileUrl='', filename='',
+    hcontentFile=8676480858434602198 — so the item has a depot manifest
+    but no direct file URL
+  * The download ACTUALLY PROGRESSED:
+    - Got depot key ✓ (requestDepotKey result: OK)
+    - Found 23 CDN servers ✓ (CDNClientPool)
+    - Downloaded the manifest from Steam CDN ✓
+    - Wrote depot.config file ✓ (77 bytes)
+    - File watcher detected NEW file ✓
+  * BUT THEN a NEW error at 20:21:09.699:
+    "Error downloading item 431960: no such algorithm: SHA-1 for provider BC
+     exception=java.security.NoSuchAlgorithmException"
+
+- ROOT CAUSE: on Android 14+ (API 36), the BouncyCastle (BC) provider
+  doesn't have SHA-1 registered as an algorithm. The JavaSteam library
+  explicitly calls MessageDigest.getInstance("SHA-1", "BC") in two places:
+  1. CryptoHelper.java line 96: shaHash(byte[]) method
+  2. DepotManifest.kt line 412: sha1Digest instance creation
+
+  The SHA-1 call fails because BC on Android doesn't register SHA-1,
+  even though BC supports SHA-1 on other platforms. This is an Android-
+  specific BC provider issue (possibly because Android's BC is a stripped
+  version, or because the provider registration conflicts with Android's
+  security framework).
+
+- FIX: patched the JavaSteam fork (v1.8.0-wepwawet8) to remove the
+  explicit BC provider from SHA-1 MessageDigest calls:
+  1. CryptoHelper.java: MessageDigest.getInstance("SHA-1", SEC_PROV)
+     → MessageDigest.getInstance("SHA-1")
+  2. DepotManifest.kt: MessageDigest.getInstance("SHA-1", CryptoHelper.SEC_PROV)
+     → MessageDigest.getInstance("SHA-1")
+
+  SHA-1 is universally available in every JCE provider (Conscrypt,
+  AndroidOpenSSL, etc.) — we don't need BC for SHA-1. We DO still need
+  BC for:
+    - AES/ECB/NoPadding (DepotChunk.kt) — for chunk decryption
+    - AES/CBC/PKCS7Padding (DepotChunk.kt) — for chunk decryption
+    - RSA/None/OAEPWithSHA1AndMGF1Padding (RSACrypto.java) — for RSA
+  But NOT for plain SHA-1 hashing.
+
+- Updated WE-backend to use JavaSteam fork v1.8.0-wepwawet8
+- Bumped version to 0.1.9-alpha (versionCode 10)
+- Committed as 1507bbe, pushed, CI build 40051391816 SUCCEEDED
+- Final APK: /home/z/my-project/download/wepwawet-0.1.9-alpha-release.apk (16 MB)
+
+Stage Summary:
+- Three patches in the JavaSteam fork now:
+  1. v7: EWorkshopFileType.First in SupportedWorkshopFileTypes (fileType=0 fix)
+  2. v7: diagnostic log in processPublishedFile
+  3. v7: optional signing for JitPack
+  4. v8: SHA-1 without explicit BC provider (Android 14+ fix)
+- The download pipeline now works up to the point of:
+  * getting workshop item details ✓
+  * finding the depot manifest ID ✓
+  * getting the depot key ✓
+  * downloading the manifest from the CDN ✓
+  * writing depot.config ✓
+  * The NEXT step is processing the manifest (decompressing chunks)
+    — this is where the SHA-1 error was. With the fix, this should
+    now work.
+- After installing 0.1.9-alpha, the download should either:
+  (a) SUCCEED — the SHA-1 fix allows the manifest to be processed,
+      chunks to be downloaded and decrypted, and the .pkg file to
+      be written to the install directory
+  (b) Fail with a NEW error — at which point the diagnostic logs
+      will show exactly what went wrong next
