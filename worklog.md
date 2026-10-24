@@ -3023,3 +3023,68 @@ Stage Summary:
       be written to the install directory
   (b) Fail with a NEW error — at which point the diagnostic logs
       will show exactly what went wrong next
+
+---
+Task ID: add-zstd-xz-deps
+Agent: main
+Task: Fix NoClassDefFoundError crash — add zstd-jni + xz dependencies
+
+Work Log:
+- User uploaded crash report (crash-latest.txt) from 0.1.9-alpha.
+- The crash report showed the download pipeline progressed ALL THE WAY
+  to chunk decompression — further than ever before:
+  1. fileType=0 (First) → handled by our patch ✓
+  2. SHA-1 → handled by our patch ✓
+  3. Got depot key ✓
+  4. Downloaded the manifest from Steam CDN ✓
+  5. Pre-allocated scene.pkg, preview.jpg, project.json ✓
+  6. Started downloading 9 chunks from 8 different CDN servers ✓
+  7. CRASH: java.lang.NoClassDefFoundError: Failed resolution of:
+     Lcom/github/luben/zstd/Zstd;
+     at in.dragonbra.javasteam.util.VZstdUtil.decompress(SourceFile:13)
+     at in.dragonbra.javasteam.steam.cdn.DepotChunk.process(SourceFile:134)
+
+- ROOT CAUSE: the com.github.luben:zstd-jni library was missing from
+  the classpath. The JavaSteam DepotDownloader uses Zstd compression
+  to decompress depot chunks. Without zstd-jni, the decompression
+  crashes with NoClassDefFoundError.
+
+- The JavaSteam README explicitly says:
+  'Content Downloading: Add the following dependencies to your project:
+   XZ For Java and ZSTD JNI. ZSTD for android uses aar for the
+   library type.'
+
+- FIX: Added both required dependencies to WE-backend's
+  gradle/libs.versions.toml and app/build.gradle.kts:
+  - com.github.luben:zstd-jni:1.5.7-6 (Zstd decompression for chunks)
+  - org.tukaani:xz:1.11 (LZMA decompression for some chunk types)
+  Versions match the JavaSteam fork's libs.versions.toml.
+
+- The APK size increased from 16 MB to 18 MB — the extra 2 MB is from
+  the zstd-jni native libraries (which include .so files for multiple
+  platforms including Linux aarch64, which is compatible with Android
+  arm64-v8a).
+
+- Bumped version to 0.2.0-alpha (versionCode 11) — this is a major
+  milestone because all three blockers have now been fixed:
+  1. fileType=0 (First) → patched in JavaSteam fork v7
+  2. SHA-1 NoSuchAlgorithmException → patched in JavaSteam fork v8
+  3. zstd-jni missing → added in this commit (f8a8208)
+
+- CI build 40053578684 SUCCEEDED
+- Final APK: /home/z/my-project/download/wepwawet-0.2.0-alpha-release.apk (18 MB)
+
+Stage Summary:
+- The download pipeline now has ALL required dependencies:
+  * JavaSteam fork (fileType=0 fix + SHA-1 fix + diagnostic logging)
+  * BouncyCastle (AES/PKCS7Padding + RSA/OAEP for depot crypto)
+  * zstd-jni (Zstd decompression for depot chunks)
+  * XZ (LZMA decompression for some chunk types)
+- The crash report showed the download reached:
+  * Pre-allocating scene.pkg, preview.jpg, project.json
+  * Downloading 9 chunks from 8 CDN servers (cache1-14-ord1)
+  * Then crashed when trying to decompress the first chunk
+- With zstd-jni added, the chunks should now decompress successfully,
+  the .pkg file should be assembled, packed into .mpkg, and saved to
+  Downloads.
+- This should be THE fix that makes the download actually work.
