@@ -70,6 +70,9 @@ javasteam-core = { group = "com.github.687meowmeow.JavaSteam", name = "javasteam
 javasteam-depotdownloader = { group = "com.github.687meowmeow.JavaSteam", name = "javasteam-depotdownloader", version.ref = "javasteam" }
 bouncycastleProvider = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
 # zstd-jni — Zstd decompression for Steam depot chunks (required by JavaSteam)
+# MUST use the AAR (not JAR) on Android — the JAR only includes Linux/macOS/Windows
+# native libs (compiled with glibc), which don't load on Android (bionic libc).
+# The AAR includes Android-compatible .so files for arm64-v8a etc.
 zstdJni = { group = "com.github.luben", name = "zstd-jni", version.ref = "zstdJni" }
 # XZ — LZMA decompression for some Steam depot chunks (required by JavaSteam)
 xz = { group = "org.tukaani", name = "xz", version.ref = "xz" }

@@ -17,8 +17,8 @@ android {
         applicationId = "com.wepwawet"
         minSdk = 26  // Android 8.0 — matches Winlator v11.2 requirement
         targetSdk = 35
-        versionCode = 11
-        versionName = "0.2.0-alpha"
+        versionCode = 12
+        versionName = "0.2.1-alpha"
         // Docker image (35.0.0) — AGP 8.7.0 defaults to 34.0.0 which isn't
         // installed, and the builder user can't install it (no write access
         // to /opt/android-sdk/).
@@ -167,7 +167,11 @@ dependencies {
     implementation(libs.javasteam.core)
     implementation(libs.javasteam.depotdownloader)
     implementation(libs.bouncycastleProvider)  // required by JavaSteam for crypto
-    implementation(libs.zstdJni)  // required by JavaSteam for Zstd chunk decompression
+    // zstd-jni — required by JavaSteam for Zstd chunk decompression
+    // MUST use AAR (not JAR) — the JAR only has Linux/macOS/Windows .so files
+    // (compiled with glibc), which fail on Android with UnsatisfiedLinkError.
+    // The AAR includes Android-compatible .so files for arm64-v8a.
+    implementation(libs.zstdJni) { artifact { type = "aar" } }
     implementation(libs.xz)      // required by JavaSteam for LZMA chunk decompression
 
     // WorkManager (for log persistence + background tasks)
