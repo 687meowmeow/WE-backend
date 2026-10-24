@@ -3238,3 +3238,65 @@ Stage Summary:
   (installDir was deleted before the read code could execute).
 - Now the install directory survives until AFTER packFromPkg is done,
   so project.json and preview.jpg will be included in the .mpkg.
+
+---
+Task ID: fix-tex-png-to-rgba
+Agent: main
+Task: Fix yellow/black checkerboard — convert PNG-in-TEXB to raw RGBA8888
+
+Work Log:
+- User reported: wallpaper imported successfully but textures show
+  yellow/black checkerboard pattern (the "missing texture" pattern in WE).
+  The scene itself loaded (title shows, date/time display works, effects
+  render) but all textures are broken.
+
+- User provided the downloaded .mpkg (3823357259_debug.mpkg, 4.8 MB,
+  74 files) and a real .mpkg (2279314480.mpkg, 2.0 MB, 11 files) for
+  comparison.
+
+- Wrote scripts/compare_mpkg.py to parse both files. The comparison
+  showed:
+  * project.json ✓ (now included after the installDir fix)
+  * preview.jpg ✓ (now included after the installDir fix)
+  * All 4 .tex files contain PNG data inside the TEXB section
+  * The TEXI header declares format=0 (RGBA8888 = raw pixel data)
+  * But the actual data is PNG-encoded (TEXB format=13=PNG)
+
+- ROOT CAUSE: The Steam depot stores .tex files with PNG-encoded data
+  inside the TEXB section. The TEXI header declares format=0 (RGBA8888).
+  WE PC decodes the PNG at load time, but WE Android reads format=0 and
+  expects raw RGBA pixel data — interpreting PNG bytes as pixels produces
+  the yellow/black checkerboard pattern.
+
+  The .tex file structure:
+    TEXV0005\0TEXI0001\0 (18 bytes header)
+    format=0(RGBA8888) + mipmap_count + mipmap entries (w/h pairs)
+    TEXB0004\0 + fields(format=13=PNG, width, height, data_size) + PNG data
+    (multiple mipmaps: each with its own TEXB section + PNG)
+
+- FIX: Added convertTexPngToRgba() to MpkgPacker:
+  1. Find all PNG images inside each .tex file (by scanning for \x89PNG magic)
+  2. Decode each PNG to raw RGBA8888 using Android BitmapFactory
+  3. Swap Android's ARGB byte order to WE's RGBA byte order
+  4. Rebuild the .tex with raw RGBA data in the TEXB sections
+     (TEXB format changed from 13=PNG to 0=RGBA8888)
+
+  The conversion runs during packFromPkg, after reading .pkg entries
+  and before packing into .mpkg. Only .tex files containing PNG data
+  are converted; others pass through unchanged.
+
+- Bumped version to 0.2.4-alpha (versionCode 15)
+- CI build 40061420780 SUCCEEDED
+- Final APK: /home/z/my-project/download/wepwawet-0.2.4-alpha-release.apk (19 MB)
+
+Stage Summary:
+- All blockers fixed:
+  1. fileType=0 → patched JavaSteam fork v7
+  2. SHA-1 NoSuchAlgorithmException → patched JavaSteam fork v8
+  3. zstd-jni NoClassDefFoundError → added dependency (v0.2.0)
+  4. zstd-jni UnsatisfiedLinkError → switched to AAR (v0.2.1)
+  5. Missing project.json + preview.jpg → include from install dir (v0.2.2)
+  6. installDir deleted before packer reads → defer cleanup (v0.2.3)
+  7. PNG-in-TEXB → convert to raw RGBA8888 (v0.2.4)
+- The .tex files should now contain raw RGBA pixel data that the WE
+  Android app can render directly, fixing the yellow/black checkerboard.
