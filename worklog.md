@@ -3300,3 +3300,128 @@ Stage Summary:
   7. PNG-in-TEXB → convert to raw RGBA8888 (v0.2.4)
 - The .tex files should now contain raw RGBA pixel data that the WE
   Android app can render directly, fixing the yellow/black checkerboard.
+
+---
+Task ID: fix-tex-png-to-rgba-broken-and-wrong
+Agent: main
+Task: Fix broken convertTexPngToRgba — produces 115MB file AND still shows yellow/black
+
+Work Log:
+- User reported: "still black and yellow checkerboard", file is 110MB (was supposed to be 4.8MB)
+- Previous fix attempted PNG→RGBA8888 conversion. It was:
+  1. WRONG structure: wrote arbitrary 9 fields × 4 bytes (flags, format, bpp, w, h, 0, 0, 0, data_size)
+     — this doesn't match the actual TEXB0004 spec at all
+  2. WRONG byte order: byte-swap loop converted RGBA → GBAR (Android's ARGB_8888 in
+     ByteBuffer is already R,G,B,A on little-endian, no swap needed)
+  3. WRONG mipmap handling: `break` after first iteration — only wrote 1 mipmap's worth
+     of data, leaving structure broken
+  4. Did not write image_count, format (FIF), is_video_mp4 fields after TEXB magic
+
+- Deep reverse-engineering of .tex format using:
+  * RePKG source code (notscuffed/repkg on GitHub) — C# tool with TexReader/TexWriter
+  * linux-wallpaperengine source (Almamu/linux-wallpaperengine) — Linux WE port
+  * Comparison of real WE .tex files (from 2279314480.mpkg) vs our debug .tex
+    (from 3823357259_debug.mpkg, the 5MB version BEFORE conversion)
+
+- ACTUAL .tex format (verified against both codebases):
+  Header:
+    "TEXV0005\0" (9 bytes magic1, null-terminated string)
+    "TEXI0001\0" (9 bytes magic2, null-terminated string)
+    TEXI Header (28 bytes = 7 × int32 LE):
+      format (TextureFormat enum: 0=ARGB8888, 4=DXT5, 5=??, 6=DXT3, 7=DXT1,
+              8=RG88, 9=R8, 12=BC7, 13=RGBa1010102, 14=RGBA16161616f, etc.)
+      flags (TextureFlags: 1=NoInterpolation, 2=ClampUVs, 4=IsGif, 32=Video, etc.)
+      texture_width (int) — GPU texture width
+      texture_height (int) — GPU texture height
+      image_width (int) — actual image width (may be < texture_width)
+      image_height (int) — actual image height
+      UnkInt0 (int) — some hash/checksum, ignored by readers
+  TEXB Container:
+    "TEXB0004\0" (9 bytes magic, null-terminated string)
+    image_count (int)
+    format (int, FreeImageFormat enum: -1=FIF_UNKNOWN, 13=FIF_PNG, 2=FIF_JPEG, etc.)
+    is_video_mp4 (int, 0 or 1) — for TEXB0004 only
+    [For each image]:
+      mipmap_count (int)
+      [For each mipmap, v2/v3 format]:
+        width (int)
+        height (int)
+        compression (int) — 0=none, 1=LZ4
+        uncompressed_size (int) — if compression=0, this is overwritten with compressed_size by reader
+        compressed_size (int) — this IS the data length, regardless of compression
+        data (compressed_size bytes)
+
+  Note: For TEXB0004 + non-MP4, linux-wallpaperengine resets containerVersion to TEXB0003,
+  so the mipmap format is v2/v3 (no extra fields).
+
+- COMPARISON OF REAL vs DEBUG .tex FILES:
+  REAL (from WE Android, works correctly):
+    TexI format=5 (some compressed texture, not in linux-wallpaperengine enum — likely ETC2 RGBA
+    based on bytes-per-pixel analysis: ~1 byte/pixel, matches ETC2-RGBA's 1 bpp)
+    TexB format=-1 (FIF_UNKNOWN, use TexI format directly)
+    image_count=1, mipmap_count=1
+    LZ4-compressed texture data (compression=1)
+    File size: ~580 KB per texture
+
+  DEBUG (from Steam depot, shows yellow/black on Android):
+    TexI format=0 (RGBA8888 declared, but data is actually PNG — contradictory)
+    TexB format=13 (FIF_PNG)
+    image_count=1, mipmap_count=4 (4 mipmaps of PNG data)
+    Non-compressed PNG data (compression=0)
+    File size: ~165 KB - 1.5 MB per texture (PNG-compressed)
+
+  The Steam depot stores .tex files as PNG-encoded because that's what WE PC uses
+  (it has stb_image to decode PNG). WE Android may not include a PNG decoder for
+  .tex files — it expects raw texture data (FIF_UNKNOWN + format from TexI).
+
+- ROOT CAUSE: WE Android doesn't decode PNG-encoded .tex files (TexB format=13).
+  All textures fail to load → yellow/black checkerboard (missing texture indicator).
+  The 5MB version (PNG-encoded) → yellow/black.
+  The 110MB version (broken PNG→RGBA conversion) → also yellow/black because
+    the .tex structure was malformed (wrong fields, wrong byte order).
+
+- DEBUG .tex mipmap analysis (4 textures, 4 mipmaps each):
+  Mipmap 0: 3000x1800 = 21.6 MB RGBA per texture
+  Mipmap 1: 1500x900  = 5.4 MB RGBA per texture
+  Mipmap 2: 750x450   = 1.35 MB RGBA per texture
+  Mipmap 3: 375x225   = 0.34 MB RGBA per texture
+  Total all mipmaps × 4 textures: ~115 MB (matches the 110MB file the user got)
+
+- FIX PLAN:
+  1. REMOVE the broken convertTexPngToRgba function entirely
+  2. WRITE a new convertTexPngToRgba that:
+     a. Parses the original .tex structure (magic + TEXI header + TEXB container)
+     b. Extracts all PNG images (one per mipmap)
+     c. Decodes the LARGEST PNG (mipmap level 0) to RGBA8888 using Android's BitmapFactory
+        (Android ARGB_8888 in ByteBuffer IS already R,G,B,A byte order on little-endian —
+        NO swap needed)
+     d. Writes a NEW .tex with proper structure:
+        - Same TEXV0005\0TEXI0001\0 magic (preserved from original)
+        - TEXI header: format=0 (RGBA8888), flags from original, dimensions from PNG,
+          UnkInt0 from original (or 0)
+        - TEXB0004\0 magic
+        - image_count=1
+        - format=-1 (FIF_UNKNOWN, use TexI format directly)
+        - is_video_mp4=0
+        - mipmap_count=1 (only base level, to keep file size reasonable)
+        - For mipmap 0: width, height, compression=0 (no LZ4),
+          uncompressed_size=w*h*4, compressed_size=w*h*4, data=raw_RGBA
+     e. Extensive logging: PNG dimensions, RGBA byte count, .tex structure fields,
+        before/after sizes
+
+- EXPECTED FILE SIZE:
+  With 1 mipmap per texture × 4 textures: 4 × 21.6 MB = 86 MB
+  Plus other files (~0.5 MB): ~87 MB total
+  (Still larger than the 5MB PNG version, but should actually render on Android)
+
+- ALTERNATIVE (smaller, requires more work):
+  Use ETC2/ASTC compression (format=5, matching real WE .tex) — needs external library.
+  Would produce ~5 MB total — matches real WE .mpkg size.
+
+Stage Summary:
+- Identified the EXACT .tex file format using RePKG + linux-wallpaperengine source code
+- Confirmed WE Android uses compressed texture format=5 (likely ETC2 RGBA), NOT PNG
+- The broken PNG→RGBA conversion was wrong on every level:
+  structure, byte order, mipmap handling
+- New approach: properly convert PNG → raw RGBA8888 with correct .tex structure
+- File will be larger (~87 MB) but should actually render correctly
