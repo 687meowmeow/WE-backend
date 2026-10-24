@@ -727,7 +727,10 @@ class WorkshopDownloader(
                 "size" to outputFile.length(),
                 "total_elapsed_ms" to (System.currentTimeMillis() - downloadStartMs))
             onStatusUpdate("Downloaded ${formatBytes(outputFile.length())} .pkg")
-            try { installDir.deleteRecursively() } catch (_: Exception) {}
+            // === DON'T delete installDir here — WorkshopDownloadJob needs it
+            // to read standalone files (project.json, preview.jpg) for packing
+            // into the .mpkg. WorkshopDownloadJob will delete it after packing.
+            // try { installDir.deleteRecursively() } catch (_: Exception) {}
             outputFile
         } catch (e: Exception) {
             WepWawetLogger.proxyError("$TAG: exception", "exception" to e.javaClass.name, "message" to (e.message ?: ""))

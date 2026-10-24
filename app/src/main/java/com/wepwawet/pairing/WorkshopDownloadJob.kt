@@ -253,6 +253,13 @@ object WorkshopDownloadJob {
                 "uri" to (uri?.toString() ?: "null"))
             runCatching { downloadedPkg.delete() }
             runCatching { cacheMpkg.delete() }
+            // === Delete install directory (was deferred from WorkshopDownloader
+            // so packFromPkg could read standalone files like project.json and
+            // preview.jpg from it) ===
+            val installDir = File(appContext.cacheDir, "workshop_downloads/${item.id}")
+            runCatching { installDir.deleteRecursively() }
+            WepWawetLogger.workshop("WorkshopDownloadJob: install dir cleaned up",
+                "path" to installDir.absolutePath)
 
             if (uri != null) {
                 val msg = "Saved ${formatBytes(bytes.size.toLong())} to Downloads/WepWawet/$downloadsName"
