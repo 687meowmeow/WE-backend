@@ -19,7 +19,13 @@ junit = "4.13.2"
 androidxJunit = "1.2.1"
 espresso = "3.6.1"
 # JavaSteam — Java/Kotlin port of SteamKit2 for direct Steam protocol access
-javasteam = "1.8.0"
+# Using the WepWawet fork (com.github.687meowmeow:JavaSteam) instead of
+# the upstream in.dragonbra version because we patched the
+# SupportedWorkshopFileTypes set to include EWorkshopFileType.First.
+# Without this patch, Steam returns fileType=0 for some Wallpaper Engine
+# workshop items (e.g., 3823357259) and the library skips the file
+# silently — causing awaitCompletion to hang forever.
+javasteam = "v1.8.0-wepwawet7"
 bouncycastle = "1.84"
 
 [libraries]
@@ -51,8 +57,10 @@ androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "a
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
 
 # JavaSteam — downloads workshop items via Steam binary protocol (no PC required)
-javasteam-core = { group = "in.dragonbra", name = "javasteam", version.ref = "javasteam" }
-javasteam-depotdownloader = { group = "in.dragonbra", name = "javasteam-depotdownloader", version.ref = "javasteam" }
+# Using WepWawet fork on JitPack (com.github.687meowmeow) instead of upstream
+# in.dragonbra — see comment on the version declaration above for why.
+javasteam-core = { group = "com.github.687meowmeow.JavaSteam", name = "javasteam", version.ref = "javasteam" }
+javasteam-depotdownloader = { group = "com.github.687meowmeow.JavaSteam", name = "javasteam-depotdownloader", version.ref = "javasteam" }
 bouncycastleProvider = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
 
 [plugins]
