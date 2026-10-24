@@ -3198,3 +3198,43 @@ Stage Summary:
   4. zstd-jni UnsatisfiedLinkError → switched to AAR (v0.2.1)
   5. Missing project.json + preview.jpg → include from install dir (v0.2.2)
 - The .mpkg should now be importable by Wallpaper Engine.
+
+---
+Task ID: fix-installDir-deleted-before-packing
+Agent: main
+Task: Fix project.json + preview.jpg STILL missing from .mpkg (installDir race condition)
+
+Work Log:
+- User uploaded new .mpkg (3822043862_debug.mpkg, 6.0 MB, 9 files)
+- Comparison with real .mpkg (2279314480.mpkg, 2.0 MB, 11 files) showed:
+  * STILL MISSING project.json
+  * STILL MISSING preview.jpg
+  * Only 9 files (all from inside .pkg)
+
+- The v0.2.2 fix added code to READ project.json + preview.jpg from
+  installDir, but the install directory was ALREADY DELETED by the time
+  the code ran!
+
+- ROOT CAUSE: WorkshopDownloader.downloadWorkshopPkg() line 730:
+    try { installDir.deleteRecursively() } catch (_: Exception) {}
+
+  This was called AFTER copying the .pkg file but BEFORE returning.
+  So by the time WorkshopDownloadJob called MpkgPacker.packFromPkg()
+  with installDir, the directory was already gone.
+
+- FIX:
+  1. Removed installDir.deleteRecursively() from WorkshopDownloader
+     (commented out at line 730)
+  2. Added installDir cleanup in WorkshopDownloadJob AFTER packFromPkg
+     has finished reading standalone files from it
+
+- Bumped version to 0.2.3-alpha (versionCode 14)
+- CI build 40058341672 SUCCEEDED
+- Final APK: /home/z/my-project/download/wepwawet-0.2.3-alpha-release.apk (19 MB)
+
+Stage Summary:
+- This was a classic race condition: the fix was correct (add code to
+  read standalone files from installDir) but the cleanup order was wrong
+  (installDir was deleted before the read code could execute).
+- Now the install directory survives until AFTER packFromPkg is done,
+  so project.json and preview.jpg will be included in the .mpkg.
