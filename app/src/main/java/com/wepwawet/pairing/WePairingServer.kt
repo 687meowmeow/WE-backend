@@ -1,0 +1,929 @@
+package com.wepwawet.pairing
+
+import android.util.Log
+import com.google.gson.Gson
+import com.wepwawet.log.WepWawetLogger
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.math.BigInteger
+import java.net.ServerSocket
+import java.net.Socket
+import java.security.KeyPair
+import java.security.KeyPairGenerator
+import java.security.interfaces.RSAPublicKey
+import javax.crypto.Cipher
+import javax.crypto.SecretKey
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
+import kotlin.concurrent.thread
+
+/**
+ * WE Pairing Server — acts as the "PC" side of the WE pairing protocol.
+ *
+ * This is the heart of the new WepWawet architecture. Instead of running a
+ * PC client, this server NATIVELY speaks the WE pairing protocol. The official
+ * WE Android app discovers and pairs with this server exactly as it would pair
+ * with a real PC running Wallpaper Engine.
+ *
+ * Protocol (reverse-engineered from the WE Android APK decompiled with jadx):
+ *
+ * 1. DISCOVERY (UDP 7884):
+ *    - Server broadcasts "WallpaperEngine/Ping:<pid>:<hostname>:1:<ifaceId>"
+ *      via UDP multicast to 239.100.0.1:7884 every 5 seconds
+ *    - Phone's DiscoverService listens and finds the server
+ *
+ * 2. PAIRING (TCP 7889):
+ *    - Phone connects to server on TCP 7889
+ *    - Server sends RSA public key (exponent + modulus as BigInteger)
+ *    - Phone generates AES key + IV
+ *    - Phone encrypts AES key with server's RSA public key → sends to server
+ *    - Phone encrypts EncAuthRequest (JSON) with AES/CBC/PKCS5Padding → sends to server
+ *    - Server decrypts AES key with RSA private key
+ *    - Server decrypts EncAuthRequest with AES
+ *    - Server verifies PIN
+ *    - Server encrypts EncAuthResponse (JSON) with AES → sends to phone
+ *    - All subsequent communication is AES-encrypted
+ *
+ * 3. FILE TRANSFER:
+ *    - Phone requests wallpaper download
+ *    - Server sends .mpkg file via AES-encrypted ranged transfer
+ *    - Uses writeInt(length) + ciphertext format for all messages
+ *
+ * Wire format for encrypted messages:
+ *   writeInt(ciphertext_length)   // 4 bytes, LITTLE-ENDIAN (verified from decompiled
+ *                                 // TcpClient$Companion.writeInt — output.writeByte(value & 255)
+ *                                 // then >> 8, >> 16, >> 24 — that's little-endian!)
+ *   write(ciphertext)             // AES/CBC/PKCS5Padding encrypted JSON
+ *
+ * CRITICAL: The WE Android app's TcpClient$Companion.readInt/writeInt use
+ * LITTLE-ENDIAN byte order (ByteBuffer.order(LITTLE_ENDIAN) and shift-down
+ * writeByte calls). Java's DataInputStream.readInt() and DataOutputStream.writeInt()
+ * use BIG-ENDIAN. So we MUST use our own readLeInt()/writeLeInt() helpers
+ * for ALL length prefixes, otherwise the server misreads every message length
+ * and pairing fails silently.
+ *
+ * Heartbeat: After pairing succeeds, the phone's connector thread sends
+ * "heartbeat\n" (10 ASCII bytes, no length prefix) every ~3 seconds.
+ * The server must detect and skip these frames, otherwise readLeInt() would
+ * interpret 'h','e','a','r' as a 4-byte length and bail out.
+ *
+ * Constants from decompiled TcpClient.java:
+ *   MAX_SAFE_COMMAND_LENGTH = 4096
+ *   MAX_SAFE_DATA_LENGTH = 1048572  (1 MB)
+ */
+class WePairingServer {
+
+    private val gson = com.google.gson.Gson()
+
+    companion object {
+        private const val TAG = "WEP-PAIRING"
+        const val TCP_PORT = 7889
+        const val MAX_SAFE_COMMAND_LENGTH = 4096
+        const val MAX_SAFE_DATA_LENGTH = 1048592  // ~1 MiB
+        // VERIFIED from real capture: PC sent 128-byte modulus = RSA-1024
+        // (was 2048 in earlier code — WRONG)
+        private const val RSA_KEY_SIZE = 1024
+        private const val RSA_BLOCK_SIZE = 128  // bytes per RSA-1024 ciphertext
+        // AES key size — actual size confirmed by Frida hooks pending;
+        // AES supports 128/192/256-bit. Default 256.
+        private const val AES_KEY_SIZE = 256
+        private const val AES_IV_SIZE = 16
+        // VERIFIED from decompiled TransferService.java
+        private const val CONNECTION_PROTOCOL_VERSION = 4
+        private const val MPKG_SUPPORT_VERSION = "PKGM0020"
+    }
+
+    private var serverSocket: ServerSocket? = null
+    @Volatile private var running = false
+    private var rsaKeyPair: KeyPair? = null
+
+    // Current pairing state
+    private var currentPin: String = ""
+    private var currentAesKey: SecretKey? = null
+    private var currentIv: IvParameterSpec? = null
+    private var currentClient: Socket? = null
+
+    // Callbacks
+    var onPinRequested: (() -> String)? = null
+    var onPairingSuccess: ((String) -> Unit)? = null  // deviceName
+    var onPairingFailure: ((String) -> Unit)? = null  // errorMessage
+    var onWallpaperRequested: ((String) -> String?)? = null  // wallpaperId -> mpkgFilePath
+    var onConnected: (() -> Unit)? = null  // called when command loop starts
+
+    /**
+     * Generate an RSA keypair for pairing.
+     * The public key will be sent to the phone during pairing.
+     * The private key is used to decrypt the phone's AES key.
+     */
+    fun generateRsaKeyPair(): KeyPair {
+        WepWawetLogger.proxy("Generating RSA keypair ($RSA_KEY_SIZE bits)")
+        val generator = KeyPairGenerator.getInstance("RSA")
+        generator.initialize(RSA_KEY_SIZE)
+        val keyPair = generator.generateKeyPair()
+        rsaKeyPair = keyPair
+
+        // Log the public key components (for debugging)
+        val pubKey = keyPair.public as java.security.interfaces.RSAPublicKey
+        WepWawetLogger.proxyDebug("RSA keypair generated",
+            "modulus_bits" to pubKey.modulus.bitLength(),
+            "exponent" to pubKey.publicExponent.toString(16).take(16))
+
+        return keyPair
+    }
+
+    /**
+     * Get the RSA public key as BigInteger components.
+     * These are sent to the phone during pairing.
+     */
+    fun getRsaPublicKeyComponents(): Pair<BigInteger, BigInteger> {
+        val keyPair = rsaKeyPair ?: generateRsaKeyPair()
+        val pubKey = keyPair.public as java.security.interfaces.RSAPublicKey
+        return Pair(pubKey.modulus, pubKey.publicExponent)
+    }
+
+    /**
+     * Start the pairing server.
+     * Listens on TCP 7889 for incoming connections from the WE Android app.
+     */
+    fun start(pin: String) {
+        if (running) {
+            WepWawetLogger.proxyWarn("Pairing server already running")
+            return
+        }
+        running = true
+        currentPin = pin
+
+        // Generate RSA keypair
+        generateRsaKeyPair()
+
+        WepWawetLogger.proxy("Pairing server starting",
+            "port" to TCP_PORT,
+            "pin" to pin,
+            "rsa_key_size" to RSA_KEY_SIZE)
+
+        thread(start = true, name = "wep-pairing-server", isDaemon = true) {
+            try {
+                serverSocket = ServerSocket().apply {
+                    bind(java.net.InetSocketAddress(TCP_PORT))
+                    soTimeout = 0  // block forever
+                }
+                WepWawetLogger.proxy("Pairing server listening on TCP $TCP_PORT")
+
+                while (running) {
+                    val client = serverSocket?.accept() ?: break
+                    WepWawetLogger.proxy("Incoming connection",
+                        "remote" to (client.remoteSocketAddress.toString()))
+
+                    thread(start = true, name = "wep-pairing-conn", isDaemon = true) {
+                        handleConnection(client)
+                    }
+                }
+            } catch (e: Exception) {
+                if (running) {
+                    WepWawetLogger.proxyError("Pairing server error",
+                        "exception" to e.javaClass.name, exception = e)
+                }
+            } finally {
+                serverSocket?.close()
+                running = false
+                WepWawetLogger.proxy("Pairing server stopped")
+            }
+        }
+    }
+
+    fun stop() {
+        running = false
+        serverSocket?.close()
+        currentClient?.close()
+        currentClient = null
+        currentAesKey = null
+        currentIv = null
+        WepWawetLogger.proxy("Pairing server stop requested")
+    }
+
+    /**
+     * Write a 4-byte LITTLE-ENDIAN integer to the output stream.
+     *
+     * Mirrors the WE Android app's TcpClient$Companion.writeInt exactly:
+     *   output.writeByte(value & 255)
+     *   output.writeByte((value >> 8) & 255)
+     *   output.writeByte((value >> 16) & 255)
+     *   output.writeByte((value >> 24) & 255)
+     *
+     * If you use DataOutputStream.writeInt() instead, that uses BIG-ENDIAN,
+     * and the phone will misread every length prefix — pairing will fail
+     * silently with a 0 or huge bogus length.
+     */
+    private fun writeLeInt(output: DataOutputStream, value: Int) {
+        output.writeByte(value and 0xFF)
+        output.writeByte((value shr 8) and 0xFF)
+        output.writeByte((value shr 16) and 0xFF)
+        output.writeByte((value shr 24) and 0xFF)
+    }
+
+    /**
+     * Strip leading zero bytes from a BigInteger.toByteArray() result.
+     * The real protocol sends the modulus as raw bytes WITHOUT the sign byte
+     * that Java's BigInteger.toByteArray() prepends for positive numbers with
+     * the high bit set.
+     */
+    private fun stripLeadingZero(bytes: ByteArray): ByteArray {
+        var start = 0
+        while (start < bytes.size - 1 && bytes[start] == 0.toByte()) {
+            start++
+        }
+        return bytes.copyOfRange(start, bytes.size)
+    }
+
+    /**
+     * Read a length-prefixed message: 4-byte LE length + N bytes.
+     * Returns null on invalid length (caller should close the connection).
+     */
+    private fun readLengthPrefixed(input: DataInputStream, label: String): ByteArray? {
+        val length = readLeInt(input)
+        WepWawetLogger.proxy("Reading length-prefixed: $label", "length" to length)
+        if (length <= 0 || length > MAX_SAFE_DATA_LENGTH) {
+            WepWawetLogger.proxyError("Invalid $label length: $length")
+            return null
+        }
+        val data = ByteArray(length)
+        input.readFully(data)
+        return data
+    }
+
+    /**
+     * Read a 4-byte LITTLE-ENDIAN integer from the input stream.
+     *
+     * Mirrors the WE Android app's TcpClient$Companion.readInt exactly:
+     *   byte[] bArr = new byte[4];
+     *   input.read(bArr, 0, 4);
+     *   return ByteBuffer.wrap(bArr).order(LITTLE_ENDIAN).getInt();
+     *
+     * If you use DataInputStream.readInt() instead, that uses BIG-ENDIAN,
+     * and you'll misread every length prefix from the phone.
+     */
+    private fun readLeInt(input: DataInputStream): Int {
+        val b = ByteArray(4)
+        input.readFully(b)
+        return (b[0].toInt() and 0xFF) or
+               ((b[1].toInt() and 0xFF) shl 8) or
+               ((b[2].toInt() and 0xFF) shl 16) or
+               ((b[3].toInt() and 0xFF) shl 24)
+    }
+
+    /**
+     * Read a length-prefixed message, gracefully skipping 'heartbeat\n'
+     * keepalive frames that the phone's connector thread sends every ~3s
+     * after pairing. Without this, readLeInt() would read 'h','e','a','r'
+     * (0x68, 0x65, 0x61, 0x72) → little-endian 0x72616568 = 1,919,014,504,
+     * which exceeds MAX_SAFE_DATA_LENGTH and breaks the command loop.
+     *
+     * Strategy: peek the first 4 bytes. If they spell ASCII "hear",
+     * consume the remaining 6 bytes ("tbeat\n") and return a sentinel
+     * indicating a heartbeat was seen.
+     */
+    private fun readMessageOrHeartbeat(input: DataInputStream): Pair<String, ByteArray?> {
+        val header = ByteArray(4)
+        input.readFully(header)
+        // Check for 'h','e','a','r' = first 4 bytes of "heartbeat\n"
+        if (header[0] == 0x68.toByte() && header[1] == 0x65.toByte() &&
+            header[2] == 0x61.toByte() && header[3] == 0x72.toByte()) {
+            // Consume the remaining 6 bytes of "heartbeat\n": t,b,e,a,t,\n
+            val rest = ByteArray(6)
+            input.readFully(rest)
+            return "heartbeat" to null
+        }
+        // Otherwise treat as little-endian length prefix
+        val length = (header[0].toInt() and 0xFF) or
+                     ((header[1].toInt() and 0xFF) shl 8) or
+                     ((header[2].toInt() and 0xFF) shl 16) or
+                     ((header[3].toInt() and 0xFF) shl 24)
+        if (length <= 0 || length > MAX_SAFE_DATA_LENGTH) {
+            return "invalid" to null
+        }
+        val payload = ByteArray(length)
+        input.readFully(payload)
+        return "message" to payload
+    }
+
+    /**
+     * Handle a single pairing connection from the WE Android app.
+     *
+     * This implements the full pairing handshake:
+     * 1. Send RSA public key (modulus + exponent, length-prefixed LE)
+     * 2. Receive encrypted AES key (RSA-encrypted, length-prefixed LE)
+     * 3. Receive AES IV (16 raw bytes, length-prefixed LE)
+     * 4. Decrypt AES key with RSA private key (RSA/ECB/OAEPPadding)
+     *    VERIFIED from decompiled TcpClient line 541
+     * 5. Receive encrypted EncAuthRequest (AES/CBC/PKCS5Padding)
+     * 6. Decrypt with AES, parse JSON, verify PIN
+     * 7. Send encrypted EncAuthResponse (AES/CBC/PKCS5Padding)
+     * 8. Enter command loop (skips heartbeat frames)
+     */
+    private fun handleConnection(client: Socket) {
+        var pairingSuccess = false
+        try {
+            client.use {
+                // Set TCP keepalive + timeouts
+                it.keepAlive = true
+                it.soTimeout = 60000  // 60s timeout (phone blocks on commandQueue until PIN entered)
+
+                // CRITICAL: Use BufferedOutputStream to avoid TCP fragmentation.
+                // Without buffering, writeLeInt sends 4 individual bytes via writeByte,
+                // creating 4 tiny TCP segments. The phone may time out waiting for
+                // the complete length prefix.
+                val input = DataInputStream(java.io.BufferedInputStream(it.getInputStream()))
+                val output = DataOutputStream(java.io.BufferedOutputStream(it.getOutputStream()))
+
+                WepWawetLogger.proxy("Handling pairing connection",
+                    "remote" to it.remoteSocketAddress.toString())
+
+                // === PC → phone: Send RSA exponent FIRST (as 3-byte BE BigInteger) ===
+                // VERIFIED from real capture: Frame 0 = length=3 + bytes `01 00 01` = 65537
+                // (was modulus-first in earlier code — WRONG)
+                val (modulus, exponent) = getRsaPublicKeyComponents()
+                val expBytes = stripLeadingZero(exponent.toByteArray())
+                WepWawetLogger.proxy("Sending RSA exponent",
+                    "exponent" to exponent.toString(16),
+                    "wire_bytes" to expBytes.size,
+                    "wire_hex" to expBytes.joinToString("") { "%02x".format(it) })
+                writeLeInt(output, expBytes.size)
+                output.write(expBytes)
+                output.flush()
+
+                // === PC → phone: Send RSA modulus (128 raw BE bytes for RSA-1024) ===
+                // VERIFIED: 128 bytes, no sign byte (BigInteger.toByteArray may include
+                // a leading 0x00 sign byte — strip it).
+                val modBytes = stripLeadingZero(modulus.toByteArray())
+                // Pad to exactly 128 bytes if needed (left-pad with zeros)
+                val modPadded = if (modBytes.size < RSA_BLOCK_SIZE) {
+                    ByteArray(RSA_BLOCK_SIZE - modBytes.size) + modBytes
+                } else {
+                    modBytes
+                }
+                WepWawetLogger.proxy("Sending RSA modulus",
+                    "modulus_bits" to modulus.bitLength(),
+                    "wire_bytes" to modPadded.size,
+                    "wire_hex_first_16" to modPadded.take(16).joinToString("") { "%02x".format(it) })
+                writeLeInt(output, modPadded.size)
+                output.write(modPadded)
+                output.flush()
+
+                // === Phone → PC: Receive 3 RSA-encrypted frames (128B each) ===
+                // VERIFIED from decompiled TcpClient connector$lambda$2:
+                //   Frame 0: RSA-OAEP-encrypted deviceUUID (line 548-558)
+                //   Frame 1: RSA-OAEP-encrypted AES IV (line 578-586)
+                //   Frame 2: RSA-OAEP-encrypted AES key (line 588-596)
+                // The phone sends UUID FIRST, then IV, then AES key.
+                // (Our previous code read them as AES key → IV → third — WRONG!)
+                val encDeviceUUID = readLengthPrefixed(input, "RSA-encrypted deviceUUID")
+                    ?: return
+                val encIv = readLengthPrefixed(input, "RSA-encrypted AES IV")
+                    ?: return
+                val encAesKey = readLengthPrefixed(input, "RSA-encrypted AES key")
+                    ?: return
+
+                // Decrypt with RSA/ECB/OAEPPadding — VERIFIED from decompiled
+                // TcpClient.connector$lambda$2 line 541:
+                //   Cipher.getInstance("RSA/ECB/OAEPPadding")
+                // NOT PKCS1Padding — using the wrong padding = pairing failure!
+                val rsaCipher = Cipher.getInstance("RSA/ECB/OAEPPadding")
+                rsaCipher.init(Cipher.DECRYPT_MODE, rsaKeyPair!!.private)
+                val deviceUUIDBytes = rsaCipher.doFinal(encDeviceUUID)
+                val ivBytes = rsaCipher.doFinal(encIv)
+                val aesKeyBytes = rsaCipher.doFinal(encAesKey)
+
+                currentAesKey = SecretKeySpec(aesKeyBytes, "AES")
+                currentIv = IvParameterSpec(ivBytes)
+
+                WepWawetLogger.proxy("AES key exchange complete",
+                    "aes_key_bits" to (aesKeyBytes.size * 8),
+                    "iv_bytes" to ivBytes.size,
+                    "device_uuid" to String(deviceUUIDBytes, Charsets.UTF_8),
+                    "device_uuid_bytes" to deviceUUIDBytes.size)
+
+                // Step 4: Receive encrypted EncAuthRequest (length LITTLE-ENDIAN!)
+                val aesCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+                aesCipher.init(Cipher.DECRYPT_MODE, currentAesKey, currentIv)
+
+                val encAuthReqLen = readLeInt(input)
+                WepWawetLogger.proxyDebug("Received encrypted EncAuthRequest",
+                    "length" to encAuthReqLen)
+                if (encAuthReqLen <= 0 || encAuthReqLen > MAX_SAFE_DATA_LENGTH) {
+                    WepWawetLogger.proxyError("Invalid EncAuthRequest length: $encAuthReqLen")
+                    return
+                }
+                val encAuthReqBytes = ByteArray(encAuthReqLen)
+                input.readFully(encAuthReqBytes)
+
+                val authReqJson = String(aesCipher.doFinal(encAuthReqBytes), Charsets.UTF_8)
+                WepWawetLogger.proxy("Received EncAuthRequest",
+                    "json" to authReqJson)
+
+                // Step 5: Parse EncAuthRequest (JSON via Gson)
+                // Expected fields: pin, name, deviceUserName, displayWidth, displayHeight,
+                    // version, mpkgVersion, appVersion
+                val gson = com.google.gson.Gson()
+                val authReq = gson.fromJson(authReqJson, EncAuthRequest::class.java)
+
+                WepWawetLogger.proxy("EncAuthRequest parsed",
+                    "pin" to (authReq.pin ?: ""),
+                    "name" to (authReq.name ?: ""),
+                    "deviceUserName" to (authReq.deviceUserName ?: ""),
+                    "displayWidth" to (authReq.displayWidth ?: 0),
+                    "displayHeight" to (authReq.displayHeight ?: 0),
+                    "version" to (authReq.version ?: 0),
+                    "mpkgVersion" to (authReq.mpkgVersion ?: ""),
+                    "appVersion" to (authReq.appVersion ?: ""))
+
+                // Step 6: Verify PIN
+                val pinValid = authReq.pin == currentPin
+                WepWawetLogger.proxy("PIN verification",
+                    "received_pin" to (authReq.pin ?: ""),
+                    "expected_pin" to currentPin,
+                    "valid" to pinValid)
+
+                // Step 7: Send encrypted EncAuthResponse
+                val authResponse = EncAuthResponse()
+                // VERIFIED from decompiled TcpClient line 677:
+                //   if (encAuthResponse.getStatus().equals("AuthOK"))
+                // The success status is "AuthOK", NOT "ok"!
+                authResponse.status = if (pinValid) "AuthOK" else "AuthFailed"
+
+                val respJson = gson.toJson(authResponse)
+                WepWawetLogger.proxyDebug("Sending EncAuthResponse",
+                    "json" to respJson,
+                    "status" to authResponse.status)
+
+                // Re-init cipher for encryption (AES/CBC is stateful)
+                val encCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+                encCipher.init(Cipher.ENCRYPT_MODE, currentAesKey, currentIv)
+                val respBytes = encCipher.doFinal(respJson.toByteArray(Charsets.UTF_8))
+                // LITTLE-ENDIAN length prefix!
+                writeLeInt(output, respBytes.size)
+                output.write(respBytes)
+                output.flush()
+
+                if (!pinValid) {
+                    WepWawetLogger.proxyWarn("Pairing failed — invalid PIN")
+                    onPairingFailure?.invoke("Invalid PIN")
+                    return
+                }
+
+                // Step 8: Pairing successful!
+                pairingSuccess = true
+                currentClient = client
+                it.soTimeout = 0  // Remove timeout for command loop
+
+                val deviceName = authReq.deviceUserName ?: authReq.name ?: "Unknown"
+                WepWawetLogger.proxy("Pairing successful!",
+                    "device_name" to deviceName,
+                    "app_version" to (authReq.appVersion ?: ""),
+                    "mpkg_version" to (authReq.mpkgVersion ?: ""),
+                    "display" to "${authReq.displayWidth}x${authReq.displayHeight}")
+                onPairingSuccess?.invoke(deviceName)
+
+                // Step 9: Enter command loop (handle subsequent commands)
+                commandLoop(input, output)
+
+            }
+        } catch (e: Exception) {
+            WepWawetLogger.proxyError("Pairing connection error",
+                "exception" to e.javaClass.name,
+                "message" to (e.message ?: ""),
+                exception = e)
+            if (!pairingSuccess) {
+                onPairingFailure?.invoke(e.message ?: "Connection error")
+            }
+        }
+    }
+
+    // Pending wallpaper transfers (queue of (file, title) pairs)
+    private val pendingWallpapers = java.util.concurrent.LinkedBlockingQueue<Pair<java.io.File, String>>()
+
+    /**
+     * Queue a wallpaper .mpkg file to be sent to the phone.
+     * Called from the UI when the user selects a wallpaper to "send to phone".
+     * The file will be sent during the command loop.
+     */
+    fun sendWallpaper(mpkgFile: java.io.File, title: String) {
+        WepWawetLogger.proxy("Wallpaper queued for transfer",
+            "file" to mpkgFile.name,
+            "title" to title,
+            "size" to mpkgFile.length())
+        pendingWallpapers.add(mpkgFile to title)
+    }
+
+    /**
+     * Send an AES-encrypted JSON object to the phone.
+     * Mirrors TcpClient$Companion.sendEncryptedGSONObject:
+     *   writeLeInt(ciphertext_length) + AES_encrypted(JSON)
+     * Each call creates a FRESH cipher (the phone does the same on its read side).
+     */
+    private fun sendEncryptedJson(output: DataOutputStream, obj: Any) {
+        val json = gson.toJson(obj)
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(Cipher.ENCRYPT_MODE, currentAesKey, currentIv)
+        val ciphertext = cipher.doFinal(json.toByteArray(Charsets.UTF_8))
+        writeLeInt(output, ciphertext.size)
+        output.write(ciphertext)
+        output.flush()
+    }
+
+    /**
+     * Send AES-encrypted raw data (file chunk) to the phone.
+     * Mirrors TcpClient$Companion.sendEncryptedGSONObject but for raw bytes:
+     *   writeLeInt(ciphertext_length) + AES_encrypted(data)
+     *
+     * CRITICAL: Do NOT manually pad the data! AES/CBC/PKCS5Padding already
+     * handles PKCS5/PKCS7 padding internally. The previous version had a
+     * double-padding bug that corrupted every chunk — the phone would
+     * decrypt the data and get extra padding bytes appended to each chunk,
+     * making the .mpkg file invalid.
+     */
+    private fun sendEncryptedData(output: DataOutputStream, data: ByteArray) {
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(Cipher.ENCRYPT_MODE, currentAesKey, currentIv)
+        val ciphertext = cipher.doFinal(data)
+        writeLeInt(output, ciphertext.size)
+        output.write(ciphertext)
+        output.flush()
+    }
+
+    /**
+     * Send a .mpkg wallpaper file to the phone using the DownloadInfo transfer protocol.
+     *
+     * Protocol (VERIFIED from decompiled TcpClient.java command loop lines 727-926):
+     * 1. Send {"command":"beginUpload"} — encrypted JSON
+     * 2. Send {"command":"transmissionStart","title":"...","file":"wallpapers/X.mpkg","size":totalSize}
+     * 3. For each ~1MB chunk:
+     *    a. Send {"command":"transmissionContinue","size":1} — encrypted JSON (size>0 = data follows)
+     *    b. Send 4-byte LE length + AES-encrypted chunk — the actual file bytes
+     * 4. Send {"command":"transmissionContinue","size":0} — encrypted JSON (done)
+     * 5. Phone moves temp file to filesDir/downloads/wallpapers/X.mpkg
+     */
+    private fun transferWallpaper(
+        output: DataOutputStream,
+        mpkgFile: java.io.File,
+        title: String,
+    ) {
+        val totalSize = mpkgFile.length()
+        // Use just the filename without "wallpapers/" prefix.
+        // The phone prepends DOWNLOAD_FOLDER ("downloads/") to this path,
+        // so the final path is "downloads/<filename>". Using a shorter path
+        // reduces the directory depth that mkdirs() needs to create on the
+        // phone side, which helps avoid the file-move issue where mkdirs()
+        // creates the .mpkg filename as a directory.
+        val fileName = mpkgFile.name
+
+        WepWawetLogger.proxy("transferWallpaper START",
+            "file" to fileName,
+            "title" to title.take(80),
+            "size" to totalSize,
+            "size_mb" to "%.3f".format(totalSize / 1024.0 / 1024.0),
+            "file_exists" to mpkgFile.exists(),
+            "file_readable" to mpkgFile.canRead(),
+            "file_absolute_path" to mpkgFile.absolutePath)
+
+        // === Sanity check: verify the .mpkg file looks like a .mpkg ===
+        // (header_marker=8, magic starts with "PKGM") before sending.
+        // If this fails, the file is corrupt — abort the transfer so the
+        // user sees the error in the logs instead of WE silently rejecting it.
+        if (!verifyMpkgFile(mpkgFile)) {
+            WepWawetLogger.proxyError("transferWallpaper ABORT: .mpkg verification failed",
+                "file" to mpkgFile.name,
+                "size" to totalSize)
+            return
+        }
+
+        try {
+            // Step 1: beginUpload — phone removes any existing entry with
+            // this file path, creates a fresh WallpaperInfoSparse, adds to UI.
+            WepWawetLogger.proxy("transferWallpaper: sending beginUpload")
+            sendEncryptedJson(output, DownloadInfo(command = "beginUpload"))
+            WepWawetLogger.proxy("transferWallpaper: sent beginUpload")
+
+            // Step 2: transmissionStart — phone creates tempWriteFile and
+            // records the tempTransmissionInfo (file path, total size).
+            WepWawetLogger.proxy("transferWallpaper: sending transmissionStart",
+                "file" to fileName, "size" to totalSize)
+            sendEncryptedJson(output, DownloadInfo(
+                command = "transmissionStart",
+                title = title,
+                file = fileName,
+                size = totalSize,
+            ))
+            WepWawetLogger.proxy("transferWallpaper: sent transmissionStart",
+                "file" to fileName, "size" to totalSize)
+
+            // Step 3: send chunks
+            // Per the decompiled TcpClient.java command loop (lines 750-798):
+            //   - For each chunk: send {"command":"transmissionContinue","size":1}
+            //     (size>0 signals "data follows"), then 4-byte LE length + AES-
+            //     encrypted chunk bytes.
+            //   - When phone receives a chunk with size>0, it appends the data
+            //     to tempWriteFile and decrements tempTransmissionInfo.size.
+            //   - When tempTransmissionInfo.size reaches 0, phone moves the
+            //     tempWriteFile to <filesDir>/downloads/wallpapers/X.mpkg.
+            val chunkSize = 1024 * 1024  // 1 MB chunks
+            var bytesSent = 0L
+            var chunkNum = 0
+            val startTime = System.currentTimeMillis()
+            java.io.FileInputStream(mpkgFile).use { fis ->
+                val buffer = ByteArray(chunkSize)
+                while (true) {
+                    val read = fis.read(buffer)
+                    if (read <= 0) break
+                    val chunk = if (read < chunkSize) buffer.copyOf(read) else buffer
+
+                    WepWawetLogger.proxyDebug("transferWallpaper: sending chunk header",
+                        "chunk" to (chunkNum + 1),
+                        "chunk_size" to read,
+                        "bytes_so_far" to bytesSent)
+
+                    // Send transmissionContinue with size=1 (signals "data follows")
+                    sendEncryptedJson(output, DownloadInfo(
+                        command = "transmissionContinue",
+                        size = 1L,  // >0 means "read encrypted data next"
+                    ))
+
+                    // Send the AES-encrypted chunk data
+                    sendEncryptedData(output, chunk)
+
+                    bytesSent += read
+                    chunkNum++
+                    if (chunkNum % 10 == 0 || bytesSent == totalSize) {
+                        WepWawetLogger.proxy("transferWallpaper: chunk sent",
+                            "chunk" to chunkNum,
+                            "chunk_bytes" to read,
+                            "bytes_sent" to bytesSent,
+                            "total" to totalSize,
+                            "pct" to (bytesSent * 100 / totalSize).toInt())
+                    }
+                }
+            }
+            val transferMs = System.currentTimeMillis() - startTime
+            WepWawetLogger.proxy("transferWallpaper: all chunks sent",
+                "file" to fileName,
+                "chunks" to chunkNum,
+                "bytes_sent" to bytesSent,
+                "total" to totalSize,
+                "ms" to transferMs,
+                "kbps" to if (transferMs > 0) (bytesSent * 8 / transferMs) else 0)
+
+            // Step 4: transmissionContinue with size=0 (signals "done")
+            // Per decompiled code: when phone receives this, it converts it to
+            // "transmissionCancel" for UI callback purposes, then checks if the
+            // file exists at <filesDir>/downloads/wallpapers/X.mpkg.
+            //   - If file exists → entry stays in wallpaper list (SUCCESS)
+            //   - If file doesn't exist → entry is REMOVED (FAILURE)
+            WepWawetLogger.proxy("transferWallpaper: sending transmissionContinue (terminator, size=0)")
+            sendEncryptedJson(output, DownloadInfo(
+                command = "transmissionContinue",
+                size = 0L,  // 0 means "transfer complete"
+            ))
+            WepWawetLogger.proxy("transferWallpaper COMPLETE",
+                "file" to fileName,
+                "bytes_sent" to bytesSent,
+                "chunks" to chunkNum,
+                "ms" to transferMs)
+
+        } catch (e: Exception) {
+            WepWawetLogger.proxyError("transferWallpaper FAILED",
+                "file" to fileName,
+                "exception" to e.javaClass.name,
+                "message" to (e.message ?: ""),
+                "bytes_sent_so_far" to (mpkgFile.length() - 0),  // approximate
+                exception = e)
+            // Send cancel so the phone stops appending to tempWriteFile
+            try {
+                sendEncryptedJson(output, DownloadInfo(command = "transmissionCancel"))
+            } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Verify a .mpkg file looks correct before sending it. Catches issues like
+     * corrupt headers, wrong magic, or truncated files early — so we log the
+     * issue locally instead of WE silently rejecting the file on the phone side.
+     *
+     * Checks:
+     *   - File exists and is >= 16 bytes (minimum: header_marker(4) + magic(8) + entry_count(4))
+     *   - First 4 bytes (header_marker) = 8 (LE)
+     *   - Bytes 4-11 are ASCII "PKGM" + 4 digits
+     */
+    private fun verifyMpkgFile(file: java.io.File): Boolean {
+        try {
+            if (!file.exists() || file.length() < 16) {
+                WepWawetLogger.proxyWarn("verifyMpkgFile: file missing or too small",
+                    "exists" to file.exists(),
+                    "size" to file.length())
+                return false
+            }
+            val header = ByteArray(16)
+            java.io.RandomAccessFile(file, "r").use { raf ->
+                raf.readFully(header)
+            }
+            // header_marker = u32 LE
+            val headerMarker = (header[0].toInt() and 0xFF) or
+                ((header[1].toInt() and 0xFF) shl 8) or
+                ((header[2].toInt() and 0xFF) shl 16) or
+                ((header[3].toInt() and 0xFF) shl 24)
+            // magic = 8 ASCII chars starting at offset 4
+            val magic = String(header, 4, 8, Charsets.US_ASCII)
+            val startsWithPkgm = magic.startsWith("PKGM")
+            val hasValidVersion = magic.length == 8 &&
+                magic.substring(4).all { it.isDigit() }
+            // entry_count = u32 LE
+            val entryCount = (header[12].toInt() and 0xFF) or
+                ((header[13].toInt() and 0xFF) shl 8) or
+                ((header[14].toInt() and 0xFF) shl 16) or
+                ((header[15].toInt() and 0xFF) shl 24)
+            val ok = headerMarker == 8 && startsWithPkgm && hasValidVersion && entryCount in 1..4096
+            WepWawetLogger.proxy("verifyMpkgFile result",
+                "file" to file.name,
+                "header_marker" to headerMarker,
+                "magic" to magic,
+                "entry_count" to entryCount,
+                "starts_with_PKGM" to startsWithPkgm,
+                "has_valid_version" to hasValidVersion,
+                "verified" to ok)
+            return ok
+        } catch (e: Exception) {
+            WepWawetLogger.proxyWarn("verifyMpkgFile: exception",
+                "exception" to e.javaClass.name,
+                "message" to (e.message ?: ""))
+            return false
+        }
+    }
+
+    /**
+     * Command loop — handles subsequent commands after pairing.
+     * All messages are AES-encrypted with the established key.
+     *
+     * Wire format per message (LITTLE-ENDIAN length prefix — matches phone):
+     *   writeLeInt(ciphertext_length)  (4 bytes little-endian)
+     *   ciphertext                     (AES/CBC/PKCS5Padding encrypted JSON)
+     *
+     * Heartbeat: The phone sends "heartbeat\n" (10 ASCII bytes, no length prefix)
+     * every ~3 seconds. We must detect and skip these frames.
+     *
+     * The phone may send commands like:
+     *   - Request wallpaper download
+     *   - Request playlist
+     *   - Pause/stop wallpaper
+     *   - etc.
+     *
+     * For now, we log every received command for the RE effort.
+     */
+    private fun commandLoop(input: DataInputStream, output: DataOutputStream) {
+        WepWawetLogger.proxy("Entering command loop — waiting for commands from WE Android app")
+
+        val decCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        decCipher.init(Cipher.DECRYPT_MODE, currentAesKey, currentIv)
+
+        var heartbeatCount = 0
+        var messageCount = 0
+        while (running && currentClient?.isConnected == true) {
+            try {
+                val (kind, payload) = readMessageOrHeartbeat(input)
+                when (kind) {
+                    "heartbeat" -> {
+                        heartbeatCount++
+                        if (heartbeatCount % 10 == 1) {
+                            WepWawetLogger.proxy("Heartbeat received",
+                                "count" to heartbeatCount)
+                        }
+                        // Check for pending wallpaper transfers after every heartbeat
+                        val pending = pendingWallpapers.poll()
+                        if (pending != null) {
+                            WepWawetLogger.proxy("Processing pending wallpaper transfer (from heartbeat)")
+                            transferWallpaper(output, pending.first, pending.second)
+                        }
+                        continue
+                    }
+                    "invalid" -> {
+                        WepWawetLogger.proxyWarn("Invalid message length in command loop")
+                        break
+                    }
+                    else -> {
+                        val msgBytes = payload ?: continue
+                        messageCount++
+                        val decrypted = decCipher.doFinal(msgBytes)
+                        val commandJson = String(decrypted, Charsets.UTF_8)
+
+                        WepWawetLogger.proxy("Received command",
+                            "length" to msgBytes.size,
+                            "msg_index" to messageCount,
+                            "decrypted_json" to commandJson.take(500))
+
+                        // Check for pending wallpaper transfers
+                        val pending = pendingWallpapers.poll()
+                        if (pending != null) {
+                            WepWawetLogger.proxy("Processing pending wallpaper transfer")
+                            transferWallpaper(output, pending.first, pending.second)
+                        } else {
+                            // No pending wallpaper — send generic response
+                            val encCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+                            encCipher.init(Cipher.ENCRYPT_MODE, currentAesKey, currentIv)
+                            val respBytes = encCipher.doFinal("""{"status":"AuthOK"}""".toByteArray(Charsets.UTF_8))
+                            writeLeInt(output, respBytes.size)
+                            output.write(respBytes)
+                            output.flush()
+                        }
+                    }
+                }
+
+            } catch (e: java.net.SocketTimeoutException) {
+                // Normal — keep alive
+            } catch (e: Exception) {
+                if (running) {
+                    WepWawetLogger.proxyWarn("Command loop ended",
+                        "exception" to e.javaClass.name,
+                        "heartbeats_seen" to heartbeatCount,
+                        "messages_seen" to messageCount)
+                }
+                break
+            }
+        }
+        WepWawetLogger.proxy("Command loop ended",
+            "heartbeats_seen" to heartbeatCount,
+            "messages_seen" to messageCount)
+    }
+}
+
+/**
+ * EncAuthRequest — the phone sends this encrypted with AES to authenticate.
+ *
+ * Fields from decompiled TcpClient$EncAuthRequest:
+ *   pin: String              — 4-digit PIN shown on the "PC"
+ *   name: String             — device name
+ *   deviceUserName: String   — custom device name entered by user
+ *   displayWidth: Int        — phone screen width
+ *   displayHeight: Int       — phone screen height
+ *   version: Int              — protocol version (default 4)
+ *   mpkgVersion: String       — supported .mpkg version
+ *   appVersion: String        — WE Android app version
+ */
+data class EncAuthRequest(
+    val pin: String? = null,
+    val name: String? = null,
+    val deviceUserName: String? = null,
+    val displayWidth: Int? = null,
+    val displayHeight: Int? = null,
+    val version: Int? = null,
+    val mpkgVersion: String? = null,
+    val appVersion: String? = null,
+)
+
+/**
+ * EncAuthResponse — the "PC" sends this encrypted with AES.
+ *
+ * Fields from decompiled TcpClient$EncAuthResponse:
+ *   status: String — "ok" for success, anything else for failure
+ */
+data class EncAuthResponse(
+    var status: String = "",
+)
+
+/**
+ * DownloadInfo — the PC sends this to the phone to transfer wallpaper files.
+ *
+ * Fields from decompiled io.wallpaperengine.wedata.DownloadInfo:
+ *   command: String — "beginUpload", "transmissionStart", "transmissionContinue", "transmissionCancel"
+ *   title: String — wallpaper title
+ *   file: String — file path relative to downloads folder (e.g., "wallpapers/123.mpkg")
+ *   size: Long — total file size (for transmissionStart) or chunk flag (>0 = read data, 0 = done)
+ *   data: ByteArray — decrypted chunk data (phone-side only)
+ *   bytesRemaining: Long — bytes remaining (phone-side only)
+ *
+ * Transfer protocol (VERIFIED from decompiled TcpClient.java command loop):
+ * 1. PC sends {"command":"beginUpload"} — encrypted JSON
+ * 2. PC sends {"command":"transmissionStart","title":"...","file":"wallpapers/X.mpkg","size":totalSize}
+ * 3. For each chunk (~1MB):
+ *    a. PC sends {"command":"transmissionContinue","size":1} — encrypted JSON (size>0 = read data)
+ *    b. PC sends 4-byte LE length + AES-encrypted chunk_data — the actual file bytes
+ * 4. PC sends {"command":"transmissionContinue","size":0} — encrypted JSON (size=0 = done)
+ * 5. Phone moves temp file to filesDir/downloads/wallpapers/X.mpkg
+ */
+data class DownloadInfo(
+    var command: String = "",
+    var title: String = "",
+    var file: String = "",
+    var size: Long = 0L,
+    var data: ByteArray? = null,
+    var bytesRemaining: Long = 0L,
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is DownloadInfo) return false
+        return command == other.command && title == other.title && file == other.file && size == other.size
+    }
+    override fun hashCode(): Int {
+        var result = command.hashCode()
+        result = 31 * result + title.hashCode()
+        result = 31 * result + file.hashCode()
+        result = 31 * result + size.hashCode()
+        return result
+    }
+}

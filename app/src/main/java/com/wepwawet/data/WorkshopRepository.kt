@@ -1,0 +1,658 @@
+package com.wepwawet.data
+
+import com.wepwawet.WepWawetApplication
+import com.wepwawet.data.model.WallpaperType
+import com.wepwawet.data.model.WorkshopItemTyped
+import com.wepwawet.data.model.WorkshopTags
+import com.wepwawet.log.WepWawetLogger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+
+/**
+ * Single source of truth for workshop data in the UI.
+ *
+ * Responsibilities:
+ *   - Paginated browse with sort options (TRENDING / TOP_RATED / MOST_RECENT
+ *     + client-side MOST_SUBSCRIBED / MOST_FAVORITED / MOST_VIEWED / ALL_TIME)
+ *   - Browse a specific creator's workshop via [browseCreatorWorkshop]
+ *   - Search by free-text query
+ *   - Filter by required tags (AND logic) and excluded tags (NOT logic)
+ *   - Mobile-compatible filtering (auto-excludes Web/Application/Image/Playlist/Unknown)
+ *   - Get details by ID (cache-first)
+ *   - Resolve creator Steam ID64 → display name (with in-memory cache)
+ *   - In-memory cache of the current browse session AND a per-id detail cache
+ *   - Logs all operations via [WepWawetLogger] (WORKSHOP domain)
+ *
+ * Steam doesn't expose cursor-based pagination; we use page numbers (1, 2, …).
+ * When the user changes the filter (sort / tags / query / creator), we reset
+ * the session and start from page 1.
+ */
+class WorkshopRepository constructor(
+    private val steamApi: SteamApiService,
+) {
+
+    // ====== Browse state (single session — replaced when user changes filter) ======
+
+    private val _browseItems = MutableStateFlow<List<WorkshopItemTyped>>(emptyList())
+    val browseItems: StateFlow<List<WorkshopItemTyped>> = _browseItems.asStateFlow()
+
+    private val _browseState = MutableStateFlow<BrowseState>(BrowseState.Idle)
+    val browseState: StateFlow<BrowseState> = _browseState.asStateFlow()
+
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
+    private var currentFilter: Filter? = null
+    private var currentPage: Int = 0
+    @Volatile private var hasMore: Boolean = true
+
+    /** Mutex guards concurrent browse/search operations against each other. */
+    private val browseLock = Mutex()
+
+    // ====== Search state (separate from browse so user can switch back) ======
+
+    private val _searchItems = MutableStateFlow<List<WorkshopItemTyped>>(emptyList())
+    val searchItems: StateFlow<List<WorkshopItemTyped>> = _searchItems.asStateFlow()
+
+    private val _searchState = MutableStateFlow<BrowseState>(BrowseState.Idle)
+    val searchState: StateFlow<BrowseState> = _searchState.asStateFlow()
+
+    private var currentSearchQuery: String? = null
+    private var currentSearchPage: Int = 0
+    @Volatile private var searchHasMore: Boolean = true
+
+    // ====== In-memory detail cache (id → typed item) ======
+
+    private val detailCache = java.util.concurrent.ConcurrentHashMap<String, WorkshopItemTyped>()
+
+    // ====== Creator display names (steamId64 → displayName) ======
+
+    /**
+     * Resolved creator display names, exposed to the UI so wallpaper tiles can
+     * show "by Display Name" instead of the raw 17-digit Steam ID64.
+     *
+     * Populated by [resolveCreatorsForItems] as items are loaded — see the
+     * helper for the lookup logic. The SteamApiService itself also caches
+     * resolved names (so repeat lookups are no-ops); this StateFlow just
+     * mirrors that cache for UI consumption.
+     */
+    private val _creatorNames = MutableStateFlow<Map<String, String>>(emptyMap())
+    val creatorNames: StateFlow<Map<String, String>> = _creatorNames.asStateFlow()
+
+    /** Track which steam IDs we've already resolved (avoids re-dispatching). */
+    private val resolvingIds = mutableSetOf<String>()
+
+    // ====== Subscriptions (local mirror of what the user has subscribed to) ======
+
+    private val _subscribedIds = MutableStateFlow<Set<String>>(emptySet())
+    val subscribedIds: StateFlow<Set<String>> = _subscribedIds.asStateFlow()
+
+    // ====== Browse ======
+
+    /**
+     * Reset and start a new browse session with a different filter.
+     * Called when the user changes sort, tag, query, or creator.
+     */
+    suspend fun startBrowse(filter: Filter) {
+        browseLock.withLock {
+            currentFilter = filter
+            currentPage = 0
+            hasMore = true
+            _browseItems.value = emptyList()
+            _browseState.value = BrowseState.Idle
+            steamApi.resetQueryFilesCursor()
+            loadNextPageLocked()
+        }
+    }
+
+    /**
+     * Load the next page of the current browse session (or search session if active).
+     * Safe to call from UI — does nothing if a load is already in progress or there
+     * is no more data.
+     */
+    suspend fun loadNextPage() {
+        // If we're in search mode, delegate to search loadNextPage
+        if (currentSearchQuery != null) {
+            loadNextSearchPage()
+            return
+        }
+        browseLock.withLock {
+            loadNextPageLocked()
+        }
+    }
+
+    private suspend fun loadNextPageLocked() {
+        val filter = currentFilter ?: run {
+            WepWawetLogger.workshopWarn("loadNextPage: no filter set")
+            return
+        }
+        if (!hasMore) {
+            WepWawetLogger.workshopDebug("loadNextPage: no more pages")
+            return
+        }
+        val page = currentPage + 1
+        _browseState.value = BrowseState.Loading(page)
+        WepWawetLogger.workshop("loadNextPage start",
+            "page" to page,
+            "sort" to filter.sort.displayName,
+            "query_type" to filter.sort.queryType,
+            "tags" to filter.tags.joinToString(","),
+            "excluded_tags" to filter.excludedTags.joinToString(","),
+            "mobile_compatible" to filter.mobileCompatible,
+            "trend_days" to filter.sort.trendDays,
+            "creator_steam_id" to (filter.creatorSteamId ?: "none"),
+            "query" to (filter.query ?: "none"),
+            "api_key_set" to (steamApi.apiKey != null))
+
+        try {
+            val result = if (filter.creatorSteamId != null) {
+                // Browse a specific creator's workshop
+                steamApi.browseCreatorWorkshop(
+                    steamId = filter.creatorSteamId,
+                    page = page,
+                )
+            } else {
+                // Try IPublishedFileService/QueryFiles first (server-side sorting)
+                // Falls back to HTML scraping if no API key
+                val queryResult = steamApi.queryFiles(
+                    sort = filter.sort,
+                    page = page,
+                    tags = filter.tags,
+                    excludedTags = filter.excludedTags,
+                    mobileCompatible = filter.mobileCompatible,
+                    query = filter.query,
+                )
+                if (queryResult.isSuccess) {
+                    queryResult
+                } else {
+                    // Fallback to HTML scraping
+                    if (filter.query != null) {
+                        steamApi.searchWorkshop(
+                            query = filter.query,
+                            page = page,
+                            tags = filter.tags,
+                            excludedTags = filter.excludedTags,
+                            mobileCompatible = filter.mobileCompatible,
+                        )
+                    } else {
+                        steamApi.browseWorkshop(
+                            sort = filter.sort,
+                            page = page,
+                            tags = filter.tags,
+                            excludedTags = filter.excludedTags,
+                            mobileCompatible = filter.mobileCompatible,
+                        )
+                    }
+                }
+            }
+            val items = result.getOrElse { e ->
+                _browseState.value = BrowseState.Error(
+                    e.message ?: "Unknown error", page
+                )
+                WepWawetLogger.workshopWarn("loadNextPage failed",
+                    "page" to page,
+                    "exception" to e.javaClass.name,
+                    "message" to (e.message ?: ""))
+                return
+            }
+
+            if (items.isEmpty()) {
+                hasMore = false
+                _browseState.value = BrowseState.Done
+                WepWawetLogger.workshop("loadNextPage: end of results",
+                    "page" to page)
+                return
+            }
+
+            // Client-side filtering + sorting pipeline
+            val filteredItems = applyClientFilters(items, filter)
+
+            // Cache each item by id for fast detail-screen lookup
+            filteredItems.forEach { detailCache[it.id] = it }
+
+            _browseItems.value = (_browseItems.value + filteredItems).distinctBy { it.id }
+            currentPage = page
+            _browseState.value = BrowseState.Loaded(page, hasMore)
+
+            // Resolve creator display names — TRULY fire-and-forget.
+            // Launch on the application scope so it doesn't block the lock
+            // or delay showing items to the user.
+            WepWawetApplication.appScope.launch {
+                resolveCreatorsForItems(filteredItems)
+            }
+
+            WepWawetLogger.workshop("loadNextPage done",
+                "page" to page,
+                "new_items" to filteredItems.size,
+                "filtered_out" to (items.size - filteredItems.size),
+                "total_items" to _browseItems.value.size)
+        } catch (e: Exception) {
+            _browseState.value = BrowseState.Error(e.message ?: "Unknown error", currentPage)
+            WepWawetLogger.workshopWarn("loadNextPage exception",
+                "page" to currentPage,
+                "exception" to e.javaClass.name)
+        }
+    }
+
+    /**
+     * Pull-to-refresh: reload page 1 of the current session, replace all items.
+     */
+    suspend fun refresh() {
+        _isRefreshing.value = true
+        try {
+            val filter = currentFilter
+            val query = currentSearchQuery
+            if (query != null) {
+                // Refresh search
+                browseLock.withLock {
+                    currentSearchPage = 0
+                    searchHasMore = true
+                    _searchItems.value = emptyList()
+                    loadNextSearchPageLocked()
+                }
+            } else if (filter != null) {
+                // Refresh browse
+                browseLock.withLock {
+                    currentPage = 0
+                    hasMore = true
+                    steamApi.resetQueryFilesCursor()
+                    _browseItems.value = emptyList()
+                    loadNextPageLocked()
+                }
+            }
+        } finally {
+            _isRefreshing.value = false
+        }
+    }
+
+    // ====== Search ======
+
+    /**
+     * Start a new text search. Replaces the current search session.
+     * Search uses [SteamApiService.searchWorkshop] which scrapes the browse HTML
+     * with `searchtext=<query>`.
+     */
+    suspend fun startSearch(query: String) {
+        if (query.isBlank()) {
+            clearSearch()
+            return
+        }
+        browseLock.withLock {
+            currentSearchQuery = query
+            currentSearchPage = 0
+            searchHasMore = true
+            _searchItems.value = emptyList()
+            _searchState.value = BrowseState.Idle
+            loadNextSearchPageLocked()
+        }
+    }
+
+    /**
+     * Clear the active search session — UI falls back to showing browse items.
+     */
+    fun clearSearch() {
+        currentSearchQuery = null
+        currentSearchPage = 0
+        searchHasMore = false
+        _searchItems.value = emptyList()
+        _searchState.value = BrowseState.Idle
+        WepWawetLogger.workshop("clearSearch")
+    }
+
+    private suspend fun loadNextSearchPage() {
+        browseLock.withLock { loadNextSearchPageLocked() }
+    }
+
+    private suspend fun loadNextSearchPageLocked() {
+        val query = currentSearchQuery ?: return
+        if (!searchHasMore) return
+        val page = currentSearchPage + 1
+        _searchState.value = BrowseState.Loading(page)
+        WepWawetLogger.workshop("loadNextSearchPage start",
+            "query" to query, "page" to page)
+
+        try {
+            val filter = currentFilter
+            val tags = filter?.tags ?: emptyList()
+            val excludedTags = filter?.excludedTags ?: emptyList()
+            val items = steamApi.searchWorkshop(
+                query = query,
+                page = page,
+                tags = tags,
+                excludedTags = excludedTags,
+            ).getOrElse { e ->
+                _searchState.value = BrowseState.Error(
+                    e.message ?: "Unknown error", page
+                )
+                WepWawetLogger.workshopWarn("loadNextSearchPage failed",
+                    "page" to page, "exception" to e.javaClass.name)
+                return
+            }
+            if (items.isEmpty()) {
+                searchHasMore = false
+                _searchState.value = BrowseState.Done
+                return
+            }
+            // Apply the same client-side filtering + sorting pipeline as browse
+            val filteredItems = if (filter != null) {
+                applyClientFilters(items, filter)
+            } else {
+                // No filter context — still apply mobile-compatible filter by default
+                applyClientFilters(items, Filter())
+            }
+            filteredItems.forEach { detailCache[it.id] = it }
+
+            // Resolve creator names for the new search items too
+            resolveCreatorsForItems(filteredItems)
+
+            _searchItems.value = (_searchItems.value + filteredItems).distinctBy { it.id }
+            currentSearchPage = page
+            _searchState.value = BrowseState.Loaded(page, searchHasMore)
+            WepWawetLogger.workshop("loadNextSearchPage done",
+                "page" to page,
+                "new_items" to filteredItems.size,
+                "filtered_out" to (items.size - filteredItems.size),
+                "total_items" to _searchItems.value.size)
+        } catch (e: Exception) {
+            _searchState.value = BrowseState.Error(e.message ?: "Unknown error", currentSearchPage)
+            WepWawetLogger.workshopWarn("loadNextSearchPage exception",
+                "page" to currentSearchPage, "exception" to e.javaClass.name)
+        }
+    }
+
+    // ====== Subscriptions ======
+
+    /**
+     * Add a subscription locally — the actual Steam-side subscription is initiated by
+     * emulated Steam client via `steam://subscribe/<id>`.
+     */
+    suspend fun subscribe(itemId: String) {
+        _subscribedIds.value = _subscribedIds.value + itemId
+        WepWawetLogger.workshop("subscribe", "id" to itemId)
+    }
+
+    suspend fun unsubscribe(itemId: String) {
+        _subscribedIds.value = _subscribedIds.value - itemId
+        WepWawetLogger.workshop("unsubscribe", "id" to itemId)
+    }
+
+    fun isSubscribed(itemId: String): Boolean = itemId in _subscribedIds.value
+
+    // ====== Lookup ======
+
+    /**
+     * Get a single workshop item by ID.
+     * Cache-first: try the in-memory detail cache, then the current browse/search
+     * session, then fall back to a fresh API call.
+     */
+    suspend fun getById(id: String): WorkshopItemTyped? {
+        detailCache[id]?.let {
+            WepWawetLogger.workshopDebug("getById cache hit", "id" to id)
+            return it
+        }
+        _browseItems.value.firstOrNull { it.id == id }?.let {
+            detailCache[id] = it
+            return it
+        }
+        _searchItems.value.firstOrNull { it.id == id }?.let {
+            detailCache[id] = it
+            return it
+        }
+        // Fresh fetch
+        WepWawetLogger.workshop("getById fresh fetch", "id" to id)
+        return runCatching {
+            steamApi.getPublishedFileDetails(listOf(id)).getOrThrow().firstOrNull()
+        }.onSuccess { typed ->
+            if (typed != null) {
+                detailCache[id] = typed
+                // Resolve creator name for this item too
+                resolveCreatorsForItems(listOf(typed))
+            }
+        }.onFailure { e ->
+            WepWawetLogger.workshopWarn("getById failed",
+                "id" to id, "exception" to e.javaClass.name)
+        }.getOrNull()
+    }
+
+    // ====== Client-side filtering / sorting helpers ======
+
+    /**
+     * Apply client-side filters and sorts to a freshly-fetched page of items.
+     *
+     * Pipeline (applied in order):
+     *   1. **Mobile-compatible filter** — if [Filter.mobileCompatible] is true
+     *      (default), drop items whose [WorkshopType] is not mobile-compatible
+     *      (i.e. keep only Scene/Video; drop Web/Application/Image/Playlist/Unknown).
+     *   2. **Excluded-tags filter** — drop items whose tag list contains ANY
+     *      of [Filter.excludedTags]. (Steam's `excludedtags[]` URL param
+     *      applies server-side for browse/search, but creator-workshop URLs
+     *      don't support it, so we re-apply client-side to be safe.)
+     *   3. **Required-tags filter** — drop items that don't have ALL of
+     *      [Filter.tags]. (Steam already applies this server-side for
+     *      browse/search, but again, creator-workshop URLs don't support it.)
+     *   4. **Client-side sort** — if [SteamApiService.Sort.isClientSide] is
+     *      true, re-sort the result set by the appropriate metric descending.
+     */
+    private fun applyClientFilters(
+        items: List<WorkshopItemTyped>,
+        filter: Filter,
+    ): List<WorkshopItemTyped> {
+        var filtered = items
+
+        // 1. ALWAYS filter out Web and Application types (not mobile-compatible)
+        //    This happens regardless of the mobileCompatible toggle — Web and
+        //    Application wallpapers can never work on WE Android.
+        val beforeAll = filtered.size
+        filtered = filtered.filter {
+            it.type != WallpaperType.WEB && it.type != WallpaperType.APPLICATION
+        }
+        if (beforeAll != filtered.size) {
+            WepWawetLogger.workshopDebug("applyClientFilters web_app_excluded",
+                "before" to beforeAll,
+                "after" to filtered.size,
+                "dropped" to (beforeAll - filtered.size))
+        }
+
+        // 2. Mobile-compatible filtering (author permission flag)
+        if (filter.mobileCompatible) {
+            val before = filtered.size
+            filtered = filtered.filter {
+                WorkshopTags.isMobileCompatible(it.type, it.tags)
+            }
+            if (before != filtered.size) {
+                WepWawetLogger.workshopDebug("applyClientFilters mobile_compatible",
+                    "before" to before,
+                    "after" to filtered.size,
+                    "dropped" to (before - filtered.size))
+            }
+        }
+
+        // 2. Excluded-tags filtering (NOT logic)
+        if (filter.excludedTags.isNotEmpty()) {
+            val excludedLower = filter.excludedTags.map { it.lowercase() }.toSet()
+            val before = filtered.size
+            filtered = filtered.filter { typed ->
+                val tagSetLower = typed.tags.map { it.lowercase() }.toSet()
+                // Keep the item if NONE of its tags are in the excluded set
+                tagSetLower.intersect(excludedLower).isEmpty()
+            }
+            if (before != filtered.size) {
+                WepWawetLogger.workshopDebug("applyClientFilters excluded_tags",
+                    "before" to before,
+                    "after" to filtered.size,
+                    "dropped" to (before - filtered.size),
+                    "excluded" to filter.excludedTags.joinToString(","))
+            }
+        }
+
+        // 3. Required-tags filtering (AND logic) — only meaningful for
+        // creator-workshop fetches (browse/search already apply this server-side)
+        if (filter.creatorSteamId != null && filter.tags.isNotEmpty()) {
+            val requiredLower = filter.tags.map { it.lowercase() }.toSet()
+            val before = filtered.size
+            filtered = filtered.filter { typed ->
+                val tagSetLower = typed.tags.map { it.lowercase() }.toSet()
+                requiredLower.intersect(tagSetLower).size == requiredLower.size
+            }
+            if (before != filtered.size) {
+                WepWawetLogger.workshopDebug("applyClientFilters required_tags",
+                    "before" to before,
+                    "after" to filtered.size,
+                    "dropped" to (before - filtered.size),
+                    "required" to filter.tags.joinToString(","))
+            }
+        }
+
+        // 4. No client-side sorting — all sorting is server-side via
+        //    IPublishedFileService/QueryFiles (when API key is set) or
+        //    HTML browse (trend/toprated/mostrecent). The Sort enum no
+        //    longer has isClientSide — Most Up Votes and Most Subscriptions
+        //    use query_type=10 and 12 server-side.
+
+        return filtered
+    }
+
+    // ====== Creator name resolution ======
+
+    /**
+     * Resolve the display name for every distinct creator Steam ID64 found in
+     * [items]. Updates [creatorNames] as each lookup completes.
+     *
+     * - Uses [SteamApiService.resolveCreatorName], which has its own in-memory
+     *   cache, so repeat lookups for the same steam ID are no-ops.
+     * - Dispatches up to 8 lookups in parallel via [coroutineScope] + [async]
+     *   to keep total wall time reasonable when many distinct creators appear
+     *   on the same page.
+     * - Skips items whose `creator_steam_id` is null/blank.
+     */
+    private suspend fun resolveCreatorsForItems(items: List<WorkshopItemTyped>) {
+        // Use `creator` (the Steam ID64 returned by the API) — NOT `creatorSteamId`
+        // which is a different field that may not exist in the QueryFiles response.
+        val steamIds = items
+            .map { it.creator }
+            .filter { it.isNotBlank() && it.length >= 10 }
+            .distinct()
+        if (steamIds.isEmpty()) return
+
+        // Snapshot the currently-resolving set under the lock to dedupe
+        // concurrent calls — a steamId already in `resolvingIds` is in flight.
+        val toResolve = synchronized(resolvingIds) {
+            steamIds.filter { it !in resolvingIds }.also { newIds ->
+                resolvingIds.addAll(newIds)
+            }
+        }
+        if (toResolve.isEmpty()) {
+            WepWawetLogger.workshopDebug("resolveCreatorsForItems no new ids",
+                "ids" to steamIds.size)
+            return
+        }
+
+        WepWawetLogger.workshop("resolveCreatorsForItems start",
+            "total_distinct" to steamIds.size,
+            "to_resolve" to toResolve.size)
+        try {
+            // Cap parallelism at 8 concurrent HTTP lookups
+            val results = coroutineScope {
+                toResolve.chunked(8).flatMap { batch ->
+                    batch.map { steamId ->
+                        async(Dispatchers.IO) {
+                            val name = steamApi.resolveCreatorName(steamId).getOrNull()
+                            // Only return the pair if we got a real name (not the raw ID)
+                            if (name != null && name != steamId) {
+                                steamId to name
+                            } else {
+                                null
+                            }
+                        }
+                    }.map { it.await() }
+                }.filterNotNull()
+            }
+            // Merge results into the StateFlow snapshot
+            if (results.isNotEmpty()) {
+                val merged = _creatorNames.value.toMutableMap()
+                for ((steamId, name) in results) {
+                    merged[steamId] = name
+                }
+                _creatorNames.value = merged
+            }
+            WepWawetLogger.workshop("resolveCreatorsForItems done",
+                "looked_up" to toResolve.size,
+                "resolved" to results.size,
+                "fallback" to (toResolve.size - results.size),
+                "cache_size" to _creatorNames.value.size)
+        } finally {
+            // Clear the in-flight marker — the SteamApiService cache is the
+            // authoritative dedup; this local set just prevents re-dispatching
+            // the same ID during a long-running resolve.
+            synchronized(resolvingIds) {
+                resolvingIds.removeAll(toResolve.toSet())
+            }
+        }
+    }
+
+    // ====== Types ======
+
+    /**
+     * Active filter for the browse session.
+     *
+     * v0.5.1 OVERHAUL:
+     *   - **Removed** the `maturity` and `resolution` fields. They're now
+     *     expressed through `excludedTags` — the Filter bottom sheet shows
+     *     ALL tags (including maturity/resolution) as toggleable chips, all ON
+     *     by default. Toggling one OFF adds it to `excludedTags`.
+     *   - **Renamed** `mobileOnly` → `mobileCompatible`. Default still `true`.
+     *   - **Added** `creatorSteamId` to scope the browse to a single creator's
+     *     workshop page (used when the user taps a creator name on a tile).
+     *
+     * @param query optional free-text search query — if set, routes to searchWorkshop
+     * @param tags list of required tags (AND logic) — e.g. ["Scene", "Anime"].
+     *   Applied server-side via `requiredtags[]` for browse/search; client-side
+     *   for creator-workshop fetches.
+     * @param excludedTags list of tags to exclude — items with ANY of these
+     *   tags are hidden. Applied server-side via `excludedtags[]` for
+     *   browse/search; client-side for creator-workshop fetches.
+     * @param mobileCompatible if true, adds kvs[app_workshop_eula_version]=3
+     *   to the Steam query (author permission flag, NOT a type check).
+     *   Also excludes Application and Web tags. Default: true.
+     * @param sort browse sort mode. Default: MOST_POPULAR_YEAR (trend&days=365).
+     *   The [SteamApiService.Sort.trendDays] field is used for trend-based sorts.
+     *   [SteamApiService.Sort.isClientSide] sorts fetch using toprated and re-sort
+     *   client-side.
+     * @param creatorSteamId optional Steam ID64 — when set, fetches from creator's
+     *   /profiles/<id>/myworkshop/ page instead of the global browse.
+     */
+    data class Filter(
+        val query: String? = null,
+        val tags: List<String> = emptyList(),
+        val excludedTags: List<String> = emptyList(),
+        val mobileCompatible: Boolean = true,
+        val sort: SteamApiService.Sort = SteamApiService.Sort.MOST_POPULAR_YEAR,
+        val creatorSteamId: String? = null,
+    )
+
+    /**
+     * Browse/search state machine.
+     *
+     * - [Idle]: no session active
+     * - [Loading]: page N loading
+     * - [Loaded]: page N loaded, hasMore flag indicates if more pages exist
+     * - [Error]: page N errored (errorMessage)
+     * - [Done]: no more results (end of list)
+     */
+    sealed class BrowseState {
+        data object Idle : BrowseState()
+        data class Loading(val page: Int) : BrowseState()
+        data class Loaded(val page: Int, val hasMore: Boolean) : BrowseState()
+        data class Error(val message: String, val page: Int) : BrowseState()
+        data object Done : BrowseState()
+    }
+}

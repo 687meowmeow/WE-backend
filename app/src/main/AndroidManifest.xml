@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- ====== Permissions required for emulation + pairing + workshop ====== -->
+
+    <!-- Pairing proxy: bind TCP 7889 (foreground service) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+    <!-- Foreground service (post-Android 14 typed) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- The emulated Wine process is long-running — this is "specialUse" per Android 14 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Wake lock so the Wine process doesn't sleep mid-render -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Keep Wi-Fi alive for the (rare) LAN-pair fallback -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Multicast lock for UDP 7884 + 239.100.0.1 (if user enables mDNS discovery fallback) -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <!-- Notification permission (Android 13+) for the foreground service sticky notification -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Storage: read/write workshop wallpapers + .mpkg outbox -->
+    <!-- Scoped storage on Android 10+; we use app-specific external storage (no permission needed) -->
+    <!-- But for the official WE Android app to find the .mpkg outbox, we may need to expose via FileProvider -->
+
+    <!-- WRITE_EXTERNAL_STORAGE for Android 9 and below so we can write crash logs
+         and boot breadcrumbs to the public Downloads/WepWawet/ directory via legacy
+         File API. On Android 10+ we use MediaStore (no permission needed). -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <!-- Root detection: query SU binary — no permission needed but uses Runtime.exec -->
+    <!-- (no manifest declaration required) -->
+
+    <!-- ====== Hardware/features — declare so Play filters work (though we sideload) ====== -->
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="true" />
+    <!-- Vulkan 1.3 required (Adreno 740+ on SD8Gen2) — use android:version, NOT glEsVersion -->
+    <uses-feature android:name="android.hardware.vulkan.level" android:required="true" />
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="131072" android:required="true" />
+    <!-- Adreno 740+ Vulkan 1.3 — we can't enforce this at install time, but document it -->
+
+    <application
+        android:name=".WepWawetApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.WepWawet"
+        android:largeHeap="true"
+        android:hardwareAccelerated="true"
+        tools:targetApi="34">
+
+        <!-- ====== Main UI ====== -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode|density"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.WepWawet">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- ====== Steam login (WebView, separate Activity so it has its own back-stack) ====== -->
+        <!--
+            configChanges prevents the WebView from being destroyed on rotation,
+            which would lose the user's in-progress login. launchMode=singleTop
+            prevents stacking multiple SteamLoginActivity instances.
+        -->
+        <activity
+            android:name=".auth.SteamLoginActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode|density"
+            android:theme="@style/Theme.WepWawet" />
+
+        <!-- ====== Foreground services ====== -->
+
+        <!--
+            Pairing Proxy Service — owns UDP 7884 + TCP 7889.
+            
+            Type: specialUse — this is a long-running foreground service that
+            doesn't fit the standard types (dataSync would time out on
+            Android 14+ because the proxy is meant to run indefinitely while
+            the app is in use, not just for a single sync operation).
+            
+            Per Android 14+ (API 34+), we declare the use case in <property>.
+            Per Android docs: "For long-running services, use the specialUse
+            foreground service type" — exactly our case (a TCP server that
+            the WE Android app connects to for wallpaper pairing/transfer).
+        -->
+        <service
+            android:name=".pairing.PairingService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Runs a Wallpaper Engine pairing proxy (UDP 7884 discovery + TCP 7889 RSA/AES handshake + .mpkg wallpaper transfer) so the official Wallpaper Engine Android app can pair with this device and receive wallpapers." />
+        </service>
+
+        <!--
+            Wine Process Service — runs the emulated Steam+WE under Wine+Box64.
+            Type: specialUse — Wine is a long-running background process that doesn't fit standard types.
+            Per Android 14, we declare the use case in <property>.
+        -->
+        <service
+            android:name=".wine.WineProcessService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Runs an emulated Steam + Wallpaper Engine client under Wine+Box64 to provide local workshop content and pairing-compatible wallpaper files for the user's official Wallpaper Engine Android app." />
+        </service>
+
+        <!-- ====== FileProvider — expose the .mpkg outbox so the official WE app could read it if it needs to ====== -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- ====== WorkManager — log persistence ====== -->
+        <!-- Remove default WorkManager initializer since we use Configuration.Provider -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
+    </application>
+
+</manifest>

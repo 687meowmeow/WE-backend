@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Color resource aliases so the launcher icon can reference colors -->
+    <color name="ic_launcher_background">@color/wepwawet_primary</color>
+</resources>

@@ -1,0 +1,214 @@
+package com.wepwawet.data
+
+import com.wepwawet.data.model.WorkshopItemTyped
+import com.wepwawet.log.WepWawetLogger
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * Persistent download manager that tracks active and completed wallpaper downloads.
+ *
+ * v0.5.0: Replaces the ephemeral per-screen download state in WallpaperDetailScreen
+ * with a central, app-wide download tracker. The UI can observe [activeDownloads]
+ * and [completedDownloads] to show a download manager screen.
+ *
+ * State is held in-memory (StateFlow) for the active session. Completed downloads
+ * are also kept in-memory for the session (future: persist to SharedPreferences/DB).
+ */
+object DownloadManager {
+
+    // ====== Active downloads (in-progress) ======
+
+    private val _activeDownloads = MutableStateFlow<Map<String, DownloadProgress>>(emptyMap())
+    val activeDownloads: StateFlow<Map<String, DownloadProgress>> = _activeDownloads.asStateFlow()
+
+    // ====== Completed downloads (history) ======
+
+    private val _completedDownloads = MutableStateFlow<List<CompletedDownload>>(emptyList())
+    val completedDownloads: StateFlow<List<CompletedDownload>> = _completedDownloads.asStateFlow()
+
+    /** Lock for concurrent access to completed downloads list. */
+    private val completedLock = Any()
+
+    /**
+     * Start tracking a new download.
+     * Called when the user taps "Send to phone" on the detail screen.
+     */
+    fun startDownload(item: WorkshopItemTyped) {
+        val progress = DownloadProgress(
+            itemId = item.id,
+            title = item.title,
+            previewUrl = item.previewUrl,
+            creator = item.creator,
+            type = item.type,
+            status = DownloadStatus.CONNECTING,
+            progress = 0f,
+            statusMessage = "Connecting to Steam...",
+        )
+        _activeDownloads.update { it + (item.id to progress) }
+        WepWawetLogger.workshop("DownloadManager: started download",
+            "item_id" to item.id, "title" to item.title)
+    }
+
+    /**
+     * Update the progress of an active download.
+     */
+    fun updateProgress(
+        itemId: String,
+        progress: Float,
+        status: DownloadStatus,
+        statusMessage: String,
+    ) {
+        _activeDownloads.update { current ->
+            val existing = current[itemId] ?: return@update current
+            current + (itemId to existing.copy(
+                progress = progress,
+                status = status,
+                statusMessage = statusMessage,
+            ))
+        }
+    }
+
+    /**
+     * Mark a download as completed and move it to the completed list.
+     */
+    fun completeDownload(itemId: String, fileSizeBytes: Long, deviceName: String) {
+        val active = _activeDownloads.value[itemId]
+        synchronized(completedLock) {
+            val completed = CompletedDownload(
+                itemId = itemId,
+                title = active?.title ?: "Unknown",
+                previewUrl = active?.previewUrl,
+                creator = active?.creator ?: "",
+                type = active?.type ?: com.wepwawet.data.model.WallpaperType.UNKNOWN,
+                completedAt = System.currentTimeMillis(),
+                fileSizeBytes = fileSizeBytes,
+                deviceName = deviceName,
+                status = DownloadStatus.COMPLETED,
+            )
+            // Remove from completed if same item already exists (re-download)
+            _completedDownloads.update { existing ->
+                (listOf(completed) + existing.filter { it.itemId != itemId })
+            }
+        }
+        _activeDownloads.update { it - itemId }
+        WepWawetLogger.workshop("DownloadManager: completed download",
+            "item_id" to itemId, "size" to fileSizeBytes, "device" to deviceName)
+    }
+
+    /**
+     * Mark a download as failed.
+     */
+    fun failDownload(itemId: String, errorMessage: String) {
+        _activeDownloads.update { current ->
+            val existing = current[itemId] ?: return@update current
+            current + (itemId to existing.copy(
+                status = DownloadStatus.FAILED,
+                statusMessage = errorMessage,
+                progress = 0f,
+            ))
+        }
+        // Move failed downloads to completed after a short delay (or immediately)
+        val failed = _activeDownloads.value[itemId]
+        if (failed != null) {
+            synchronized(completedLock) {
+                val completed = CompletedDownload(
+                    itemId = itemId,
+                    title = failed.title,
+                    previewUrl = failed.previewUrl,
+                    creator = failed.creator,
+                    type = failed.type,
+                    completedAt = System.currentTimeMillis(),
+                    fileSizeBytes = 0,
+                    deviceName = "",
+                    status = DownloadStatus.FAILED,
+                    errorMessage = errorMessage,
+                )
+                _completedDownloads.update { existing ->
+                    (listOf(completed) + existing.filter { it.itemId != itemId })
+                }
+            }
+            _activeDownloads.update { it - itemId }
+        }
+        WepWawetLogger.workshopWarn("DownloadManager: failed download",
+            "item_id" to itemId, "error" to errorMessage)
+    }
+
+    /**
+     * Cancel an active download.
+     */
+    fun cancelDownload(itemId: String) {
+        _activeDownloads.update { it - itemId }
+        WepWawetLogger.workshop("DownloadManager: cancelled download",
+            "item_id" to itemId)
+    }
+
+    /**
+     * Remove a completed download from history.
+     */
+    fun removeCompleted(itemId: String) {
+        synchronized(completedLock) {
+            _completedDownloads.update { it.filter { c -> c.itemId != itemId } }
+        }
+    }
+
+    /**
+     * Clear all completed downloads from history.
+     */
+    fun clearCompleted() {
+        synchronized(completedLock) {
+            _completedDownloads.value = emptyList()
+        }
+    }
+
+    /**
+     * Check if an item is currently being downloaded.
+     */
+    fun isActive(itemId: String): Boolean = itemId in _activeDownloads.value
+
+    /**
+     * Check if an item has been downloaded before.
+     */
+    fun isCompleted(itemId: String): Boolean =
+        _completedDownloads.value.any { it.itemId == itemId }
+}
+
+// ====== Data classes ======
+
+data class DownloadProgress(
+    val itemId: String,
+    val title: String,
+    val previewUrl: String?,
+    val creator: String,
+    val type: com.wepwawet.data.model.WallpaperType,
+    val status: DownloadStatus,
+    val progress: Float,          // 0.0 .. 1.0
+    val statusMessage: String,
+)
+
+data class CompletedDownload(
+    val itemId: String,
+    val title: String,
+    val previewUrl: String?,
+    val creator: String,
+    val type: com.wepwawet.data.model.WallpaperType,
+    val completedAt: Long,        // epoch millis
+    val fileSizeBytes: Long,
+    val deviceName: String,
+    val status: DownloadStatus,
+    val errorMessage: String? = null,
+)
+
+enum class DownloadStatus {
+    CONNECTING,
+    DOWNLOADING,
+    PACKING,
+    QUEUING,
+    COMPLETED,
+    FAILED,
+    CANCELLED,
+    ;
+}
