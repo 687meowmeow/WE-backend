@@ -35,8 +35,7 @@ The repo also includes a foreground **pairing proxy** (`PairingProxyService`) th
 | `app/build.gradle.kts` | App gradle config (versionCode, ABI filters, packaging rules) |
 | `app/proguard-rules.pro` | R8 rules (keep Gson reflection targets) |
 | `app/debug.keystore` | Stable debug keystore so all CI builds are signed with the same key |
-| `.github/workflows/build.yml` | CI: per-component matrix builds → APK assembly → release |
-| `.github/workflows/docker-image.yml` | CI: builder Docker image (NDK + Wine + Box64 toolchains) |
+| `.github/workflows/build.yml` | CI: APK build → release |
 | `gradle/`, `build.gradle.kts`, `settings.gradle.kts`, `gradle.properties`, `gradlew*` | Gradle project files |
 | `ARCHITECTURE.md` | Architecture decisions, data flow |
 | `CHANGELOG.md` | Per-version changelog |
@@ -64,8 +63,6 @@ The release APK is signed with `app/debug.keystore` (committed to the repo so al
 ### CI build
 
 Push a `v*` tag (e.g. `v0.5.6-alpha`) and GitHub Actions will assemble the APK and attach it to a Release. See `.github/workflows/build.yml`.
-
-The builder image (~10 GB, with NDK + Wine + Box64 toolchains) is built weekly from `.github/workflows/docker-image.yml` and published to GHCR.
 
 ## Quick navigation for new contributors
 
