@@ -307,7 +307,8 @@ fun WallpaperDetailScreen(
                             onSendToPhoneClicked(context, current, scope,
                                 { isSending = true; statusMessage = it; sendProgress = 0f },
                                 { isSending = false; statusMessage = it },
-                                { progress -> sendProgress = progress })
+                                { progress -> sendProgress = progress },
+                                { statusMessage = it })
                         }
                     },
                     enabled = !isSending,
@@ -421,6 +422,7 @@ private fun onSendToPhoneClicked(
     onStart: (String) -> Unit,
     onEnd: (String) -> Unit,
     onProgress: (Float) -> Unit,
+    onStatusUpdate: (String) -> Unit = { _ -> },
 ) {
     WepWawetLogger.workshop("send-to-phone tapped",
         "id" to item.id,
@@ -491,23 +493,39 @@ private fun onSendToPhoneClicked(
                 "size" to downloadedPkg.length(),
                 "size_human" to formatBytes(downloadedPkg.length()))
 
-            // === Step 2: Detect file type — Steam .pkg starts with "PKGV0024" ===
+            // === Step 2: Log file type for debugging (do NOT abort on unknown) ===
+            // The PkgReader supports PKGV0001 through PKGV0024. The detectFileType
+            // function below checks for ALL of these. Even if the file type is
+            // "unknown", we proceed to step 3 — PkgReader.read() will throw
+            // a descriptive exception if the file is truly invalid, and the
+            // step 3 error handling will show it. This is better than aborting
+            // prematurely with a generic "unexpected file type" error.
             val fileType = detectFileType(downloadedPkg)
-            WepWawetLogger.workshop("send-to-phone: step 2/4 detected file type",
+            val firstBytes = runCatching {
+                val raf = java.io.RandomAccessFile(downloadedPkg, "r")
+                val buf = ByteArray(16)
+                raf.readFully(buf)
+                raf.close()
+                buf.joinToString("") { "%02x".format(it) }
+            }.getOrDefault("<unreadable>")
+            WepWawetLogger.workshop("send-to-phone: step 2/4 file type detected",
                 "file_type" to fileType,
-                "file_name" to downloadedPkg.name)
-            if (fileType != "PKGV0024") {
-                WepWawetLogger.workshopWarn("send-to-phone: step 2/4 unexpected file type",
-                    "expected" to "PKGV0024",
-                    "got" to fileType)
-                onEnd("Steam returned unexpected file type: $fileType (expected PKGV0024 .pkg)")
-                return@launch
+                "file_name" to downloadedPkg.name,
+                "file_size" to downloadedPkg.length(),
+                "first_16_bytes_hex" to firstBytes)
+            if (fileType == "unknown") {
+                WepWawetLogger.workshopWarn("send-to-phone: step 2/4 unknown file type — proceeding anyway",
+                    "first_16_bytes_hex" to firstBytes)
+                onStatusUpdate("Downloaded .pkg has unknown format — attempting to pack anyway…")
+            } else {
+                onStatusUpdate("Downloaded $fileType .pkg (${formatBytes(downloadedPkg.length())}) — packing…")
             }
 
             // === Step 3: Pack the .pkg into a .mpkg ===
             WepWawetLogger.workshop("send-to-phone: step 3/4 packing .pkg → .mpkg",
                 "pkg_file" to downloadedPkg.name,
                 "pkg_size" to downloadedPkg.length())
+            onStatusUpdate("Packing .pkg → .mpkg (${formatBytes(downloadedPkg.length())})…")
             onProgress(0.85f)
             val mpkgFile = java.io.File(context.cacheDir, "${item.id}_$sendId.mpkg")
             val mpkgSize = withContext(Dispatchers.IO) {
@@ -520,19 +538,23 @@ private fun onSendToPhoneClicked(
             if (mpkgSize == 0L || !mpkgFile.exists()) {
                 WepWawetLogger.workshopWarn("send-to-phone: step 3/4 packing failed",
                     "mpkg_exists" to mpkgFile.exists(),
-                    "mpkg_size" to mpkgSize)
-                onEnd("Failed to pack .pkg → .mpkg (see logs)")
+                    "mpkg_size" to mpkgSize,
+                    "pkg_file_type" to fileType,
+                    "pkg_first_16_bytes_hex" to firstBytes)
+                onEnd("Packing failed — the downloaded .pkg may not be a valid Steam Workshop .pkg. Check logs for details (file_type=$fileType, first_bytes=$firstBytes).")
                 return@launch
             }
             WepWawetLogger.workshop("send-to-phone: step 3/4 .mpkg ready",
                 "mpkg_file" to mpkgFile.name,
                 "mpkg_size" to mpkgSize,
                 "size_human" to formatBytes(mpkgSize))
+            onStatusUpdate("Packed .mpkg (${formatBytes(mpkgSize)}) — sending to phone…")
 
             // === Step 4: Queue for transfer ===
             WepWawetLogger.workshop("send-to-phone: step 4/4 queueing for transfer",
                 "file" to mpkgFile.name,
                 "size" to mpkgFile.length())
+            onStatusUpdate("Sending to phone — queued for transfer…")
             onProgress(0.95f)
             val deviceName = PairingService.pairedDeviceName ?: "phone"
             PairingService.queueWallpaper(mpkgFile, item.title)
@@ -582,15 +604,17 @@ private fun detectFileType(file: java.io.File): String {
         val header = ByteArray(12)
         raf.readFully(header)
         raf.close()
-        // Steam Workshop .pkg: starts with [08 00 00 00][PKGV0024]
+        // Steam Workshop .pkg: starts with [u32 LE magic_len][magic bytes]
+        // PkgReader supports PKGV0001 through PKGV0024. Check for ANY of them.
+        // The magic_len field is always 8 (the string "PKGV00XX" is 8 bytes).
         if (header.size >= 12 &&
             header[0] == 0x08.toByte() && header[1] == 0x00.toByte() &&
             header[2] == 0x00.toByte() && header[3] == 0x00.toByte() &&
             header[4] == 'P'.code.toByte() && header[5] == 'K'.code.toByte() &&
-            header[6] == 'G'.code.toByte() && header[7] == 'V'.code.toByte() &&
-            header[8] == '0'.code.toByte() && header[9] == '0'.code.toByte() &&
-            header[10] == '2'.code.toByte() && header[11] == '4'.code.toByte()) {
-            return "PKGV0024"
+            header[6] == 'G'.code.toByte() && header[7] == 'V'.code.toByte()) {
+            // Extract the version string (bytes 8-11: "00XX")
+            val verStr = String(header, 8, 4, Charsets.US_ASCII)
+            return "PKGV$verStr"
         }
         // GIF: starts with "GIF87a" or "GIF89a"
         if (header.size >= 6 && (header[0] == 'G'.code.toByte() && header[1] == 'I'.code.toByte() && header[2] == 'F'.code.toByte())) {
