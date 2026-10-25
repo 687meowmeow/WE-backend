@@ -61,6 +61,15 @@
     volatile <fields>;
 }
 
+# LZ4 (lz4-java, org.lz4:lz4-java) — used by MpkgPacker.convertTexPngToEtc2
+# for .tex compression (compression=1 format). LZ4Factory uses Class.forName
+# to load compressor implementations (LZ4JavaSafeCompressor, etc.). Without
+# this keep rule, R8 renames these classes and Class.forName throws
+# ClassNotFoundException at runtime.
+# See: https://github.com/lz4/lz4-java/issues/130
+-keep class net.jpountz.** { *; }
+-dontwarn net.jpountz.**
+
 # JavaSteam (SteamKit2 Java port) — keep all classes
 -keep class in.dragonbra.javasteam.** { *; }
 -dontwarn in.dragonbra.javasteam.**

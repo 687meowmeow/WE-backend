@@ -17,8 +17,8 @@ android {
         applicationId = "com.wepwawet"
         minSdk = 26  // Android 8.0 — required for the WE pairing protocol + ImageDecoderDecoder GIF path
         targetSdk = 35
-        versionCode = 46
-        versionName = "0.5.7-alpha"
+        versionCode = 47
+        versionName = "0.5.8-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {
             abiFilters += "arm64-v8a"

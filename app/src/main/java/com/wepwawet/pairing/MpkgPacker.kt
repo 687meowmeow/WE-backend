@@ -1427,13 +1427,31 @@ object MpkgPacker {
 
             // ---- Step 4: LZ4-compress the ETC2 bytes ----
             // Use raw LZ4 block format (no size prefix — uncompressed_size is in .tex header)
-            val lz4Factory = net.jpountz.lz4.LZ4Factory.safeInstance()
-            val compressor = lz4Factory.fastCompressor()
-            val lz4Compressed = compressor.compress(etc2Bytes)
-            WepWawetLogger.proxy("MpkgPacker.convertTexPngToEtc2: LZ4 compressed",
-                "name" to name,
-                "etc2_size" to etc2Bytes.size, "lz4_size" to lz4Compressed.size,
-                "lz4_ratio" to "%.2f%%".format(lz4Compressed.size.toDouble() * 100 / etc2Bytes.size))
+            // CRITICAL: Catch Throwable (not Exception) because LZ4Factory.safeInstance()
+            // uses Class.forName internally, and if R8 strips the LZ4 classes, it throws
+            // AssertionError wrapping ClassNotFoundException. AssertionError extends Error,
+            // not Exception — so a catch(Exception) block would NOT catch it.
+            // The proguard rule `-keep class net.jpountz.** { *; }` should prevent this,
+            // but the try-catch is a safety net in case the rule is missing.
+            // If LZ4 fails, fall back to compression=0 (uncompressed ETC2) — larger
+            // .tex file but still renders correctly on WE Android.
+            val lz4Compressed: ByteArray? = try {
+                val lz4Factory = net.jpountz.lz4.LZ4Factory.safeInstance()
+                val compressor = lz4Factory.fastCompressor()
+                val compressed = compressor.compress(etc2Bytes)
+                WepWawetLogger.proxy("MpkgPacker.convertTexPngToEtc2: LZ4 compressed",
+                    "name" to name,
+                    "etc2_size" to etc2Bytes.size, "lz4_size" to compressed.size,
+                    "lz4_ratio" to "%.2f%%".format(compressed.size.toDouble() * 100 / etc2Bytes.size))
+                compressed
+            } catch (t: Throwable) {
+                WepWawetLogger.proxyWarn("MpkgPacker.convertTexPngToEtc2: LZ4 compression FAILED — using uncompressed ETC2 (compression=0)",
+                    "name" to name,
+                    "exception" to t.javaClass.name,
+                    "message" to (t.message ?: ""),
+                    "cause" to (t.cause?.javaClass?.name ?: "none"))
+                null
+            }
 
             // ---- Step 5: Read original TEXI header fields (preserve flags + UnkInt0) ----
             if (texData.size < 46) {
@@ -1473,13 +1491,20 @@ object MpkgPacker {
             // 6d: Image 0
             writeLeIntToStream(out, 1)                              // mipmap_count = 1
 
-            // 6e: Mipmap 0 with ETC2 RGBA8 + LZ4 compression
+            // 6e: Mipmap 0 with ETC2 RGBA8 + LZ4 compression (or uncompressed fallback)
             writeLeIntToStream(out, largest.width)                 // width
             writeLeIntToStream(out, largest.height)                // height
-            writeLeIntToStream(out, 1)                              // compression = 1 (LZ4)
-            writeLeIntToStream(out, etc2Bytes.size)                // uncompressed_size
-            writeLeIntToStream(out, lz4Compressed.size)            // compressed_size
-            out.write(lz4Compressed)                                // LZ4-compressed ETC2 RGBA8 data
+            if (lz4Compressed != null) {
+                writeLeIntToStream(out, 1)                          // compression = 1 (LZ4)
+                writeLeIntToStream(out, etc2Bytes.size)            // uncompressed_size
+                writeLeIntToStream(out, lz4Compressed.size)        // compressed_size
+                out.write(lz4Compressed)                            // LZ4-compressed ETC2 RGBA8 data
+            } else {
+                writeLeIntToStream(out, 0)                          // compression = 0 (no LZ4 — fallback)
+                writeLeIntToStream(out, etc2Bytes.size)            // uncompressed_size
+                writeLeIntToStream(out, etc2Bytes.size)            // compressed_size = uncompressed_size
+                out.write(etc2Bytes)                                // raw ETC2 RGBA8 data (uncompressed)
+            }
 
             val result = out.toByteArray()
 
@@ -1505,7 +1530,7 @@ object MpkgPacker {
                 "selected_height" to largest.height,
                 "rgba_size" to largest.rgba.size,
                 "etc2_size" to etc2Bytes.size,
-                "lz4_size" to lz4Compressed.size,
+                "lz4_size" to (lz4Compressed?.size ?: etc2Bytes.size),
                 // Verification
                 "verify_magic1" to vMagic1, "verify_magic2" to vMagic2,
                 "verify_format" to vFormat, "verify_texture_width" to vTexW,
