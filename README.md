@@ -1,17 +1,16 @@
 # WepWawet
 
-> Steam Workshop browser & downloader for Android, with optional self-hosted SteamCMD backend for paid-app content.
+> Steam Workshop browser & downloader for Android. Browse 3M+ Wallpaper Engine workshop items, log in with your own Steam account (2FA / Steam Guard supported), and download `.pkg` wallpaper packs directly to your phone. **No PC required.**
 
-**Status: v0.5.6-alpha — functional beta.** Browse 3M+ Wallpaper Engine workshop items, log in with your own Steam account (2FA / Steam Guard supported), and download `.pkg` files directly to your phone. Pairing proxy is included for the official WE Android app.
+**Status: v0.5.6-alpha — functional beta.** Pairing proxy is included for the official WE Android app.
 
 [![Build APK](https://github.com/687meowmeow/WE-backend/actions/workflows/build.yml/badge.svg)](https://github.com/687meowmeow/WE-backend/actions/workflows/build.yml)
 
 ## What this is
 
-WepWawet is an Android app (Kotlin + Jetpack Compose, min Android 8.0 / API 26, target SDK 35) that lets you browse the Steam Workshop for Wallpaper Engine (app 431960), inspect items, and download the actual `.pkg` wallpaper packs to your device. Two download paths are supported:
+WepWawet is an Android app (Kotlin + Jetpack Compose, min Android 8.0 / API 26, target SDK 35) that lets you browse the Steam Workshop for Wallpaper Engine (app 431960), inspect items, and download the actual `.pkg` wallpaper packs to your device.
 
-1. **On-device JavaSteam download** — your Steam credentials live on your phone; JavaSteam talks directly to Steam's auth + content servers. Works for free workshop items. **No PC required.** Steam Guard 2FA codes are supported.
-2. **Self-hosted SteamCMD backend** — for paid-app workshop items where Steam hides the `file_url` even from authenticated sessions. You run the small Python service in [`backend/`](./backend) on your PC or a VPS; it uses SteamCMD (Valve's official CLI Steam client) to download the workshop content and exposes a tiny HTTP API the Android app calls. Anonymous SteamCMD does **not** work for paid apps, so the backend uses your own Steam account.
+The download path is **on-device JavaSteam** — your Steam credentials live on your phone; JavaSteam talks directly to Steam's auth + content servers. **No PC, no server, no third-party service required.** Steam Guard 2FA codes are supported. Refresh tokens are saved to skip 2FA on subsequent sessions.
 
 The repo also includes a foreground **pairing proxy** (`PairingProxyService`) that lets the official Wallpaper Engine Android app pair with this on-device "fake PC" — useful if you want WE's official UI to drive content served from WepWawet.
 
@@ -23,30 +22,24 @@ The repo also includes a foreground **pairing proxy** (`PairingProxyService`) th
 - **Creator names**: async resolution via profile-page scraping (`resolveCreatorName`), capped at 8 concurrent lookups, fire-and-forget so items render immediately.
 - **Steam login**: WebView-based login with transparent 2FA / Steam Guard handling (`SteamLoginActivity`).
 - **JavaSteam download**: on-device `.pkg` download via JavaSteam's modern auth flow (`WorkshopDownloader.kt`). Saves refresh tokens to skip 2FA on subsequent sessions. Handles `RateLimitExceeded` by clearing the stale token.
-- **SteamCMD backend**: optional self-hosted backend (`backend/`) with progress reporting.
 - **Download manager**: tracks active and completed downloads.
 - **Pairing proxy**: foreground service on UDP 7884 + TCP 7889 that implements the WE pairing protocol.
-- **Extensive logging**: structured logger (`WepWawetLogger`) with 6 levels, 7 domains, 2000-entry ring buffer, WorkManager daily flush, 14-day prune, and crash capture.
+- **Extensive logging**: structured logger (`WepWawetLogger`) with 6 levels, 7 domains, 2000-entry ring buffer, WorkManager daily flush, 14-day prune, and crash capture. **Download log button** in the Logs screen exports the full log buffer to the public Downloads/WepWawet/ folder.
 
 ## Repo layout
 
 | Path | Purpose |
 |------|---------|
 | `app/` | Android app module (Kotlin + Jetpack Compose) |
-| `app/src/main/java/com/wepwawet/` | App source — UI, data, pairing, wine (legacy), auth, log |
+| `app/src/main/java/com/wepwawet/` | App source — UI, data, pairing, auth, log |
 | `app/build.gradle.kts` | App gradle config (versionCode, ABI filters, packaging rules) |
 | `app/proguard-rules.pro` | R8 rules (keep Gson reflection targets) |
 | `app/debug.keystore` | Stable debug keystore so all CI builds are signed with the same key |
-| `backend/` | Self-hosted SteamCMD backend (Python + Docker) |
-| `backend/Dockerfile`, `backend/docker-compose.yml`, `backend/server.py` | Backend implementation |
 | `.github/workflows/build.yml` | CI: per-component matrix builds → APK assembly → release |
 | `.github/workflows/docker-image.yml` | CI: builder Docker image (NDK + Wine + Box64 toolchains) |
 | `gradle/`, `build.gradle.kts`, `settings.gradle.kts`, `gradle.properties`, `gradlew*` | Gradle project files |
-| `scripts/` | Build + RE helper scripts (`build_apk.sh`, `toolkit/`, `wallpaper_toolkit/`, etc.) |
-| `docs/` | Research findings (`RESEARCH_SUMMARY.md`, `RE_FINDINGS.md`, `RE_FINDINGS_VERIFIED.md`, `GHIDRA_ANALYSIS.md`, `MPKG_FORMAT_VERIFIED.md`) |
 | `ARCHITECTURE.md` | Architecture decisions, data flow |
 | `CHANGELOG.md` | Per-version changelog |
-| `Caddyfile` | Example Caddy reverse-proxy config for the backend |
 
 ## Device requirements
 
@@ -54,7 +47,7 @@ The repo also includes a foreground **pairing proxy** (`PairingProxyService`) th
 - **RAM:** 6 GB+ recommended
 - **Storage:** 1 GB+ free for the app + downloaded `.pkg` files
 - **Android:** 8.0 (API 26) or higher
-- **Network:** Internet access for Steam APIs; LAN access to your backend if using the SteamCMD path
+- **Network:** Internet access for Steam APIs
 
 ## Building
 
@@ -74,27 +67,12 @@ Push a `v*` tag (e.g. `v0.5.6-alpha`) and GitHub Actions will assemble the APK a
 
 The builder image (~10 GB, with NDK + Wine + Box64 toolchains) is built weekly from `.github/workflows/docker-image.yml` and published to GHCR.
 
-## Setting up the SteamCMD backend (optional — only for paid-app content)
-
-If you only download free workshop items, you can skip this — the on-device JavaSteam path is enough. For Wallpaper Engine workshop content specifically (a paid app), Steam hides `file_url` even from authenticated sessions, so you need the backend.
-
-```bash
-cd backend
-# Edit docker-compose.yml to set STEAM_USERNAME and STEAM_PASSWORD
-docker compose up -d
-# Verify:
-curl http://localhost:8080/health
-```
-
-In the WepWawet app, go to **Settings → Backend** and point it at your backend URL (e.g. `http://192.168.1.50:8080`). See `backend/README.md` for full setup.
-
 ## Quick navigation for new contributors
 
 1. Read `ARCHITECTURE.md` — explains what the system looks like end-to-end.
 2. Skim `app/src/main/java/com/wepwawet/data/` — Steam API service, repository, models.
-3. Skim `app/src/main/java/com/wepwawet/pairing/` — JavaSteam downloader, SteamCMD backend client, pairing proxy.
-4. Skim `app/src/main/java/com/wepwawet/ui/screens/` — Compose screens (browser, detail, downloads, settings, pairing).
-5. Read `docs/RESEARCH_SUMMARY.md` for the historical research context (some sections describe pre-v0.5 plans — read with that in mind).
+3. Skim `app/src/main/java/com/wepwawet/pairing/` — JavaSteam downloader, pairing proxy.
+4. Skim `app/src/main/java/com/wepwawet/ui/screens/` — Compose screens (browser, detail, downloads, settings, pairing, logs).
 
 ## Versioning
 
