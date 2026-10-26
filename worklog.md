@@ -720,3 +720,32 @@ Stage Summary:
 - 1 finding verified as false positive (M3).
 - 1 finding verified as already correct (H7).
 - Total: 34 findings from the audit, 100% addressed (fixed, deferred with rationale, or verified as N/A).
+
+---
+Task ID: 17
+Agent: external-implementer (via Z.ai CLI)
+Task: Push dev→main, fix creator browse HTTP 429 (use JavaSteam GetUserFiles RPC), make Creator row clickable in detail screen.
+
+Work Log:
+- Read user-provided log (wepwawet-logs-20261026-130206.txt, 175 entries).
+- Key finding: `browseCreatorWorkshop` uses HTML scraping of steamcommunity.com/profiles/<steamId>/myworkshop/ → HTTP 429 rate limit. The JavaSteam path (`queryFiles`) works perfectly for general browse but doesn't support filtering by creator Steam ID.
+- Solution: Use JavaSteam's `ISteamPublishedFile.GetUserFiles` service RPC (has a `steamid` field for filtering by creator) — same CM protocol, no rate limiting.
+- Pushed dev→main (b92ee41).
+- JavaSteam fork changes (687meowmeow/JavaSteam, v1.8.0-wepwawet12):
+  - NEW GetUserFilesDetails.kt: data class with steamId, appId, page, numPerPage, type, sortMethod, tags, return_* flags.
+  - MODIFIED SteamWorkshop.kt: added getUserFiles(details) method wrapping PublishedFile.getUserFiles() service RPC. Same pattern as queryFiles().
+  - Fixed proto field names: addAllRequiredtags (not addAllRequiredTags), addAllExcludedtags (not addAllExcludedTags), totalonly (not totalOnly).
+- WE-backend dev changes:
+  - gradle/libs.versions.toml: bumped javasteam to 1.8.0-wepwawet12.
+  - WorkshopBrowseSession.kt: added getUserFiles(context, details) method — same pattern as queryFiles() but calls workshop.getUserFiles() instead. Reuses mapPublishedFileDetails().
+  - SteamApiService.kt: added getUserFilesViaJavaSteam() method — converts creator Steam ID string to ULong, builds GetUserFilesDetails, delegates to WorkshopBrowseSession.getUserFiles().
+  - WorkshopRepository.kt: modified loadNextPageLocked() — creator browse now uses getUserFilesViaJavaSteam() as PRIMARY, falls back to browseCreatorWorkshop() (HTML) if JavaSteam session unavailable.
+  - WallpaperDetailScreen.kt: added onCreatorClick parameter + made Creator MetadataRow clickable (Row with clickable modifier, primary-colored underlined text). Navigates to creator/<steamId> route.
+  - WepWawetNavHost.kt: wired onCreatorClick = { steamId -> nav.navigate("creator/$steamId") } in the detail composable.
+  - app/build.gradle.kts: bumped versionCode 58→59, versionName 0.5.19-alpha→0.5.20-alpha.
+
+Stage Summary:
+- Creator browse now uses JavaSteam's GetUserFiles RPC → bypasses HTTP 429 rate limiting.
+- Creator row in WallpaperDetailScreen is now clickable (underlined, primary color) → navigates to creator's other creations.
+- HTML scraping (browseCreatorWorkshop) remains as fallback for when JavaSteam session is unavailable.
+- Dev pushed to main (b92ee41) — main is now up to date with dev.

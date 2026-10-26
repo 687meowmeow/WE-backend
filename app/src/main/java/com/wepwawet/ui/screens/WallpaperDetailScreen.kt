@@ -1,6 +1,7 @@
 package com.wepwawet.ui.screens
 
 import android.content.Context
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -48,6 +49,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.wepwawet.data.WorkshopRepository
@@ -109,6 +112,7 @@ fun WallpaperDetailScreen(
     itemId: String,
     onBack: () -> Unit,
     repo: WorkshopRepository,
+    onCreatorClick: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -247,7 +251,31 @@ fun WallpaperDetailScreen(
                     Column(modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         MetadataRow("Type", current.type.displayName)
-                        MetadataRow("Creator", creatorNames[current.creator] ?: current.creator.ifBlank { "Unknown" })
+                        val creatorName = creatorNames[current.creator] ?: current.creator.ifBlank { "Unknown" }
+                        if (current.creator.isNotBlank()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    WepWawetLogger.workshop("detail_creator_tap",
+                                        "id" to current.id, "creator_steam_id" to current.creator)
+                                    onCreatorClick(current.creator)
+                                },
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("Creator",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(creatorName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textDecoration = TextDecoration.Underline,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        } else {
+                            MetadataRow("Creator", creatorName)
+                        }
                         MetadataRow("Subscriptions", current.subscriptionsFormatted)
                         MetadataRow("Favorites", current.favorited.toString())
                         MetadataRow("Views", current.views.toString())

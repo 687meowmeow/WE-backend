@@ -151,6 +151,7 @@ fun WepWawetNavHost() {
                 itemId = itemId,
                 onBack = { nav.popBackStack() },
                 repo = repo,
+                onCreatorClick = { steamId -> nav.navigate("creator/$steamId") },
             )
         }
 

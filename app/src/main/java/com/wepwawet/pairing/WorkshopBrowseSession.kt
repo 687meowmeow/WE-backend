@@ -1,9 +1,11 @@
 package com.wepwawet.pairing
 
 import android.content.Context
+import `in`.dragonbra.javasteam.protobufs.steamclient.SteammessagesPublishedfileSteamclient.CPublishedFile_GetUserFiles_Response
 import `in`.dragonbra.javasteam.protobufs.steamclient.SteammessagesPublishedfileSteamclient.CPublishedFile_QueryFiles_Response
 import `in`.dragonbra.javasteam.protobufs.steamclient.SteammessagesPublishedfileSteamclient.PublishedFileDetails
 import `in`.dragonbra.javasteam.steam.handlers.steamunifiedmessages.callback.ServiceMethodResponse
+import `in`.dragonbra.javasteam.steam.handlers.steamworkshop.GetUserFilesDetails
 import `in`.dragonbra.javasteam.steam.handlers.steamworkshop.QueryFilesDetails
 import `in`.dragonbra.javasteam.steam.handlers.steamworkshop.SteamWorkshop
 import com.wepwawet.data.model.WallpaperType
@@ -229,6 +231,61 @@ object WorkshopBrowseSession {
      * The protobuf message has all the fields we need (publishedfileid, title, tags, etc.).
      * The type (Scene/Video/etc.) is derived from the tags via [WallpaperType.fromTags].
      */
+    /**
+     * Issue a `ISteamPublishedFile.GetUserFiles` service RPC to browse a specific
+     * creator's published workshop files. This bypasses HTTP 429 rate limiting
+     * that occurs when scraping steamcommunity.com/profiles/<steamId>/myworkshop/.
+     *
+     * Uses the same authenticated JavaSteam session as [queryFiles]. The response
+     * contains the same [PublishedFileDetails] protobuf, so the mapping logic is
+     * identical.
+     */
+    suspend fun getUserFiles(
+        context: Context,
+        details: GetUserFilesDetails,
+    ): Result<List<WorkshopItemTyped>> = withContext(Dispatchers.IO) {
+        try {
+            if (!ensureConnected(context)) {
+                return@withContext Result.failure(
+                    IllegalStateException("JavaSteam browse session not available — see logs")
+                )
+            }
+
+            val workshop: SteamWorkshop = downloader?.getSteamWorkshopHandler()
+                ?: return@withContext Result.failure(
+                    IllegalStateException("SteamWorkshop handler is null after auth")
+                )
+
+            val job = workshop.getUserFiles(details)
+            val response: ServiceMethodResponse<CPublishedFile_GetUserFiles_Response.Builder> =
+                withTimeoutOrNull(AUTH_TIMEOUT_MS) {
+                    job.await()
+                } ?: return@withContext Result.failure(
+                    IllegalStateException("ISteamPublishedFile.GetUserFiles timed out after $AUTH_TIMEOUT_MS ms")
+                )
+
+            val body = response.body.build()
+            val items = body.publishedfiledetailsList.map { mapPublishedFileDetails(it) }
+
+            WepWawetLogger.workshop(
+                "$TAG: getUserFiles OK",
+                "total" to body.total,
+                "returned" to items.size,
+                "steam_id" to details.steamId.toString(),
+                "page" to details.page,
+            )
+            Result.success(items)
+        } catch (e: Exception) {
+            WepWawetLogger.workshopWarn(
+                "$TAG: getUserFiles failed",
+                "exception" to e.javaClass.name,
+                "message" to (e.message ?: ""),
+            )
+            isAuthenticated = false
+            Result.failure(e)
+        }
+    }
+
     private fun mapPublishedFileDetails(details: PublishedFileDetails): WorkshopItemTyped {
         val tags = details.tagsList.map { it.tag }
         val item = WorkshopItem(

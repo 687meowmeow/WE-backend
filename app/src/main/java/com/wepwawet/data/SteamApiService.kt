@@ -18,6 +18,7 @@ import com.wepwawet.data.model.WorkshopItem
 import com.wepwawet.data.model.WorkshopItemTyped
 import com.wepwawet.log.WepWawetLogger
 import `in`.dragonbra.javasteam.protobufs.steamclient.Enums.EPublishedFileQueryType
+import `in`.dragonbra.javasteam.steam.handlers.steamworkshop.GetUserFilesDetails
 import `in`.dragonbra.javasteam.steam.handlers.steamworkshop.QueryFilesDetails
 import com.wepwawet.pairing.WorkshopBrowseSession
 import kotlinx.coroutines.CoroutineScope
@@ -511,6 +512,66 @@ class SteamApiService(
         )
 
         WorkshopBrowseSession.queryFiles(context, details)
+    }
+
+    /**
+     * Browse a specific creator's published workshop files via the JavaSteam
+     * `ISteamPublishedFile.GetUserFiles` service RPC. Bypasses HTTP 429 rate
+     * limiting that occurs when scraping steamcommunity.com/profiles/<id>/myworkshop/.
+     *
+     * @param creatorSteamId The creator's Steam ID64 string (17-digit number).
+     * @param page 1-indexed page number.
+     * @param tags Required tags.
+     * @param excludedTags Tags to exclude (Application and Web are ALWAYS added).
+     * @param mobileCompatible If true, adds required_kv_tags[app_workshop_eula_version]=3.
+     */
+    suspend fun getUserFilesViaJavaSteam(
+        creatorSteamId: String,
+        page: Int = 1,
+        tags: List<String> = emptyList(),
+        excludedTags: List<String> = emptyList(),
+        mobileCompatible: Boolean = true,
+    ): Result<List<WorkshopItemTyped>> = withContext(Dispatchers.IO) {
+        val context = appContext ?: return@withContext Result.failure(
+            SteamApiException.Network(
+                "getUserFilesViaJavaSteam",
+                IllegalStateException("SteamApiService constructed without appContext"),
+            )
+        )
+
+        val steamId = creatorSteamId.toULongOrNull()
+            ?: return@withContext Result.failure(
+                SteamApiException.Network(
+                    "getUserFilesViaJavaSteam",
+                    IllegalArgumentException("Invalid Steam ID64: $creatorSteamId"),
+                )
+            )
+
+        val allExcludedTags = excludedTags.toMutableList().apply {
+            if ("Application" !in this) add("Application")
+            if ("Web" !in this) add("Web")
+        }.toList()
+
+        val requiredKvTags: List<Pair<String, String>> =
+            if (mobileCompatible) listOf(MOBILE_COMPAT_KVS_KEY to MOBILE_COMPAT_KVS_VALUE)
+            else emptyList()
+
+        val details = GetUserFilesDetails(
+            steamId = steamId,
+            appId = WE_APP_ID.toInt(),
+            page = page,
+            numPerPage = PAGE_SIZE,
+            requiredTags = tags,
+            excludedTags = allExcludedTags,
+            requiredKvTags = requiredKvTags,
+            returnVoteData = true,
+            returnTags = true,
+            returnKvTags = true,
+            returnPreviews = true,
+            returnShortDescription = true,
+        )
+
+        WorkshopBrowseSession.getUserFiles(context, details)
     }
 
     /**

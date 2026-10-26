@@ -203,13 +203,29 @@ class WorkshopRepository constructor(
 
         try {
             val result = if (filter.creatorSteamId != null) {
-                // Browse a specific creator's workshop (HTML scraping — no API alternative
-                // for creator-specific queries, since JavaSteam's CPublishedFile_GetUserFiles
-                // would require a different service call we don't expose yet)
-                steamApi.browseCreatorWorkshop(
-                    steamId = filter.creatorSteamId,
+                // PRIMARY: JavaSteam GetUserFiles RPC (bypasses HTTP 429 on profile scraping)
+                val creatorResult = steamApi.getUserFilesViaJavaSteam(
+                    creatorSteamId = filter.creatorSteamId,
                     page = page,
+                    tags = filter.tags,
+                    excludedTags = filter.excludedTags,
+                    mobileCompatible = filter.mobileCompatible,
                 )
+                if (creatorResult.isSuccess) {
+                    creatorResult
+                } else {
+                    // FALLBACK: HTML scraping (may HTTP 429)
+                    WepWawetLogger.workshopWarn(
+                        "loadNextPage: JavaSteam getUserFiles failed — falling back to HTML",
+                        "page" to page,
+                        "creator_steam_id" to filter.creatorSteamId,
+                        "exception" to (creatorResult.exceptionOrNull()?.javaClass?.name ?: "unknown"),
+                    )
+                    steamApi.browseCreatorWorkshop(
+                        steamId = filter.creatorSteamId,
+                        page = page,
+                    )
+                }
             } else {
                 // PRIMARY PATH: JavaSteam native CM protocol (ISteamPublishedFile.QueryFiles
                 // service RPC) — byte-identical to what WE PC's steam_api64.dll sends.
