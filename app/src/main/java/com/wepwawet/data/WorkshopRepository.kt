@@ -484,7 +484,8 @@ class WorkshopRepository constructor(
      *   4. **Client-side sort** — if [SteamApiService.Sort.isClientSide] is
      *      true, re-sort the result set by the appropriate metric descending.
      *
-     * === v0.5.10-alpha REGRESSION FIX ===
+     * === v0.5.10-alpha REGRESSION FIX (re-applied in v0.5.11-alpha after
+     *     a parallel agent reset dev to v0.5.9-alpha state) ===
      * Previously this function ALSO applied a client-side "mobile-compatible"
      * filter (drop items where WorkshopTags.isMobileCompatible(type, tags)
      * returned false — i.e., everything except Scene/Video). That filter was
@@ -502,9 +503,10 @@ class WorkshopRepository constructor(
      * User report: "the browser is only showing 4. there is an issue.
      * there should be way more. it did not do this in previous versions."
      *
-     * Fix: remove the redundant client-side type filter. The mobileCompatible
-     * toggle now ONLY controls the API URL param (which is what the user
-     * means by "marked like the real wallpaper engine").
+     * Fix: REMOVE the client-side mobileCompatible type filter. The
+     * mobileCompatible toggle now ONLY controls the API URL param
+     * (which is what the user means by "marked like the real wallpaper
+     * engine").
      */
     private fun applyClientFilters(
         items: List<WorkshopItemTyped>,
@@ -590,12 +592,25 @@ class WorkshopRepository constructor(
      * Resolve the display name for every distinct creator Steam ID64 found in
      * [items]. Updates [creatorNames] as each lookup completes.
      *
-     * - Uses [SteamApiService.resolveCreatorName], which has its own in-memory
-     *   cache, so repeat lookups for the same steam ID are no-ops.
-     * - Dispatches up to 8 lookups in parallel via [coroutineScope] + [async]
-     *   to keep total wall time reasonable when many distinct creators appear
-     *   on the same page.
-     * - Skips items whose `creator_steam_id` is null/blank.
+     * === v0.5.11-alpha: switched from per-ID HTML scraping to batched
+     * GetPlayerSummaries API ===
+     *
+     * Previously: dispatched up to 8 PARALLEL HTTP calls to
+     * steamcommunity.com/profiles/<steamId> per page (one per creator).
+     * Steam rate-limited these HTML-scraping requests almost immediately
+     * (HTTP 429) when N > 4 — user's log showed EVERY creator name
+     * resolution failing with 429, cache_size=0, all creator names showing
+     * as raw steam IDs.
+     *
+     * Now: SINGLE API call to ISteamUser/GetPlayerSummaries/v2/ with up
+     * to 100 steam IDs per request. Steam's rate limit for this official
+     * API endpoint is much higher (~10 req/sec vs ~4 req/min for profile
+     * HTML scraping). The result is cached both in-memory (SteamApiService.
+     * creatorNameCache) AND persistently (SharedPreferences
+     * "wepwawet_creator_names") so future app launches don't need to
+     * re-resolve previously-seen creators.
+     *
+     * Falls back to per-ID HTML scraping if no API key is set.
      */
     private suspend fun resolveCreatorsForItems(items: List<WorkshopItemTyped>) {
         // Use `creator` (the Steam ID64 returned by the API) — NOT `creatorSteamId`
@@ -623,22 +638,9 @@ class WorkshopRepository constructor(
             "total_distinct" to steamIds.size,
             "to_resolve" to toResolve.size)
         try {
-            // Cap parallelism at 8 concurrent HTTP lookups
-            val results = coroutineScope {
-                toResolve.chunked(8).flatMap { batch ->
-                    batch.map { steamId ->
-                        async(Dispatchers.IO) {
-                            val name = steamApi.resolveCreatorName(steamId).getOrNull()
-                            // Only return the pair if we got a real name (not the raw ID)
-                            if (name != null && name != steamId) {
-                                steamId to name
-                            } else {
-                                null
-                            }
-                        }
-                    }.map { it.await() }
-                }.filterNotNull()
-            }
+            // v0.5.11-alpha: SINGLE batched API call (chunks of 100 IDs)
+            // instead of N parallel per-ID HTML scraping calls.
+            val results = steamApi.getPlayerSummaries(toResolve).getOrDefault(emptyMap())
             // Merge results into the StateFlow snapshot
             if (results.isNotEmpty()) {
                 val merged = _creatorNames.value.toMutableMap()

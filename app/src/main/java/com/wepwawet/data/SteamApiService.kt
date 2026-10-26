@@ -17,7 +17,10 @@ import com.wepwawet.data.model.WallpaperType
 import com.wepwawet.data.model.WorkshopItem
 import com.wepwawet.data.model.WorkshopItemTyped
 import com.wepwawet.log.WepWawetLogger
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
@@ -47,6 +50,18 @@ class SteamApiService(
     private val gson: Gson = defaultGson(),
     /** Steam Web API key for IPublishedFileService/QueryFiles (server-side sorting). */
     var apiKey: String? = null,
+    /**
+     * Android Context for the persistent creator-name cache (SharedPreferences).
+     * Nullable for backward compatibility — when null, only the in-memory
+     * cache is used (no persistence across app restarts).
+     *
+     * v0.5.11-alpha: added so creator names survive app restarts. The user's
+     * log showed EVERY resolveCreatorName call returning HTTP 429 (rate
+     * limit) on a fresh app launch — meaning the in-memory cache (which
+     * starts empty) was useless. The persistent cache lets us avoid
+     * re-resolving names the user has already seen in previous sessions.
+     */
+    private val appContext: android.content.Context? = null,
 ) {
 
     /**
@@ -58,6 +73,60 @@ class SteamApiService(
      * realistically a few hundred at most.
      */
     private val creatorNameCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /** SharedPreferences for persistent creator-name cache (v0.5.11-alpha). */
+    private val creatorNamesPrefs: android.content.SharedPreferences? by lazy {
+        appContext?.getSharedPreferences("wepwawet_creator_names", android.content.Context.MODE_PRIVATE)
+    }
+
+    /** True after we've loaded the persistent cache into memory (lazy on first read). */
+    @Volatile
+    private var persistentCacheLoaded: Boolean = false
+
+    /**
+     * Load the persistent creator-name cache into memory on first access.
+     * Idempotent — subsequent calls are no-ops.
+     */
+    private fun loadPersistentCacheIfNeeded() {
+        if (persistentCacheLoaded) return
+        persistentCacheLoaded = true
+        val prefs = creatorNamesPrefs ?: return
+        try {
+            val all = prefs.all
+            for ((steamId, name) in all) {
+                if (name is String && name.isNotBlank() && !creatorNameCache.containsKey(steamId)) {
+                    creatorNameCache[steamId] = name
+                }
+            }
+            if (all.isNotEmpty()) {
+                WepWawetLogger.steamDebug("creatorNameCache loaded from persistent storage",
+                    "count" to all.size)
+            }
+        } catch (e: Exception) {
+            WepWawetLogger.proxyWarn("creatorNameCache load persistent failed",
+                "exception" to e.javaClass.name, "message" to (e.message ?: ""))
+        }
+    }
+
+    /**
+     * Persist a single creator name to SharedPreferences (fire-and-forget on
+     * IO dispatcher — never blocks the UI).
+     */
+    private fun persistCreatorName(steamId: String, name: String) {
+        val prefs = creatorNamesPrefs ?: return
+        // Use a private CoroutineScope (not GlobalScope) — GlobalScope is
+        // deprecated for application-level use because it can leak across
+        // Activity lifecycles. A SupervisorScope with a single Job is the
+        // recommended pattern for fire-and-forget background work.
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            try {
+                prefs.edit().putString(steamId, name).apply()
+            } catch (e: Exception) {
+                WepWawetLogger.proxyWarn("persistCreatorName failed",
+                    "steam_id" to steamId, "exception" to e.javaClass.name)
+            }
+        }
+    }
 
     /** Cursor for IPublishedFileService/QueryFiles pagination. */
     @Volatile
@@ -469,7 +538,10 @@ class SteamApiService(
             if (steamId.isBlank()) {
                 return@withContext Result.success(steamId)
             }
-            // Cache hit
+            // Lazy-load the persistent cache on first access (v0.5.11-alpha).
+            // Subsequent calls are no-ops.
+            loadPersistentCacheIfNeeded()
+            // Cache hit (in-memory, possibly populated from persistent storage)
             creatorNameCache[steamId]?.let {
                 WepWawetLogger.steamDebug("resolveCreatorName cache hit",
                     "steam_id" to steamId, "name" to it)
@@ -490,8 +562,13 @@ class SteamApiService(
                 if (!response.isSuccessful) {
                     WepWawetLogger.proxyWarn("resolveCreatorName HTTP error",
                         "code" to response.code, "steam_id" to steamId)
-                    // Fall back to the raw ID — UI can still show something
-                    creatorNameCache[steamId] = steamId
+                    // Fall back to the raw ID — UI can still show something.
+                    // v0.5.11-alpha: DON'T cache the raw ID on HTTP error
+                    // (was previously pinned in the in-memory cache, which
+                    // permanently broke retries — even after Steam's rate
+                    // limit cleared, the cached raw ID would be returned
+                    // forever). Now: return the raw ID for THIS call only,
+                    // don't cache it. Future requests will retry.
                     return@withContext Result.success(steamId)
                 }
                 val html = response.body?.string().orEmpty()
@@ -511,6 +588,7 @@ class SteamApiService(
                 // (private profile, Steam rate limit, etc.)
                 if (name != null) {
                     creatorNameCache[steamId] = resolved
+                    persistCreatorName(steamId, resolved)  // v0.5.11-alpha: persistent
                 }
                 WepWawetLogger.steam("resolveCreatorName done",
                     "steam_id" to steamId,
@@ -527,6 +605,115 @@ class SteamApiService(
                 // future requests will retry the lookup.
                 Result.success(steamId)
             }
+        }
+
+    /**
+     * === v0.5.11-alpha (creator name fix) ===
+     *
+     * Batch-resolve display names for up to 100 Steam IDs in a SINGLE API
+     * call via ISteamUser/GetPlayerSummaries/v2/. This replaces the previous
+     * pattern of calling [resolveCreatorName] once per ID (which made N
+     * parallel HTTP requests to steamcommunity.com/profiles/<id> — Steam
+     * rate-limited these to HTTP 429 almost immediately when N > 4).
+     *
+     * User's log showed:
+     *   [WEP-PROXY] WARN: resolveCreatorName HTTP error code=429
+     *     steam_id=76561198077404589
+     *   ... (repeated for every creator on every page)
+     *   [WEP-WS] INFO: resolveCreatorsForItems done looked_up=4
+     *     resolved=0 fallback=4 cache_size=0
+     *
+     * cache_size=0 means the in-memory cache was empty (fresh app launch)
+     * AND no successful resolutions happened (all 429s). So every page
+     * loaded showed "by <raw steam ID>" instead of "by Display Name".
+     *
+     * The GetPlayerSummaries API:
+     *   - URL: https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/
+     *   - GET params: key=<API_KEY>&steamids=<comma-separated-list>
+     *   - Returns: { "response": { "players": [
+     *       { "steamid": "7656...", "personaname": "Display Name", ... }
+     *     ] } }
+     *   - Rate limit: ~10 requests/second (much higher than profile HTML scraping)
+     *   - Max IDs per request: 100
+     *
+     * When the API key is not set, falls back to per-ID HTML scraping via
+     * [resolveCreatorName] (which is rate-limited but works anonymously).
+     *
+     * @param steamIds list of Steam ID64 strings (will be chunked to 100s)
+     * @return Result.success(Map<steamId, displayName>) for the IDs that
+     *   successfully resolved; failed IDs are simply omitted from the map.
+     */
+    suspend fun getPlayerSummaries(steamIds: List<String>): Result<Map<String, String>> =
+        withContext(Dispatchers.IO) {
+            if (steamIds.isEmpty()) return@withContext Result.success(emptyMap())
+            loadPersistentCacheIfNeeded()
+
+            val key = apiKey
+            if (key.isNullOrBlank()) {
+                WepWawetLogger.proxyWarn("getPlayerSummaries: no API key set — falling back to per-ID HTML scraping",
+                    "id_count" to steamIds.size)
+                // Fall back to per-ID HTML scraping (slow, rate-limited, but
+                // works anonymously). Sequential (not parallel) to avoid
+                // triggering 429s.
+                val result = mutableMapOf<String, String>()
+                for (id in steamIds) {
+                    val name = resolveCreatorName(id).getOrNull()
+                    if (name != null && name != id) {
+                        result[id] = name
+                    }
+                }
+                return@withContext Result.success(result)
+            }
+
+            val allResults = mutableMapOf<String, String>()
+            for (chunk in steamIds.chunked(100)) {  // Steam max 100 IDs per request
+                try {
+                    val url = "$BASE_URL/ISteamUser/GetPlayerSummaries/v2/" +
+                        "?key=${java.net.URLEncoder.encode(key, "UTF-8")}" +
+                        "&steamids=${chunk.joinToString(",")}"
+                    WepWawetLogger.steamDebug("getPlayerSummaries GET",
+                        "url" to url.take(200), "id_count" to chunk.size)
+                    val request = Request.Builder().url(url)
+                        .header("User-Agent", USER_AGENT)
+                        .header("Accept-Language", "en-US,en;q=0.9")
+                        .build()
+                    val response = httpClient.newCall(request).execute()
+                    if (!response.isSuccessful) {
+                        WepWawetLogger.proxyWarn("getPlayerSummaries HTTP error",
+                            "code" to response.code, "chunk_size" to chunk.size)
+                        response.close()
+                        continue  // skip this chunk, try the next
+                    }
+                    val jsonStr = response.body?.string().orEmpty()
+                    if (jsonStr.isBlank()) continue
+
+                    val responseObj = gson.fromJson(jsonStr, JsonObject::class.java)
+                    val responseInner = responseObj?.getAsJsonObject("response")
+                    val playersArray = responseInner?.getAsJsonArray("players")
+                    if (playersArray == null) continue
+
+                    for (i in 0 until playersArray.size()) {
+                        val player = playersArray[i].asJsonObject
+                        val steamId = player.get("steamid")?.asString ?: continue
+                        val personaName = player.get("personaname")?.asString
+                        if (!steamId.isNullOrBlank() && !personaName.isNullOrBlank()) {
+                            allResults[steamId] = personaName
+                            creatorNameCache[steamId] = personaName
+                            persistCreatorName(steamId, personaName)
+                        }
+                    }
+                    WepWawetLogger.steam("getPlayerSummaries chunk done",
+                        "chunk_size" to chunk.size, "resolved" to playersArray.size(),
+                        "cache_size" to creatorNameCache.size)
+                } catch (e: Exception) {
+                    WepWawetLogger.proxyWarn("getPlayerSummaries chunk failed",
+                        "exception" to e.javaClass.name, "message" to (e.message ?: ""))
+                }
+                // Throttle between chunks to stay under Steam's rate limit
+                // (~10 req/sec — we sleep 100ms between chunks to be safe).
+                kotlinx.coroutines.delay(100)
+            }
+            Result.success(allResults)
         }
 
     /**
