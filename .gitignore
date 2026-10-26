@@ -78,6 +78,10 @@ node_modules/
 next-env.d.ts
 *.tsbuildinfo
 
+# Download dir (user-visible APK artifacts; never commit binaries — they
+# bloat the repo by 16MB per build and trigger GitHub LFS warnings).
+download/
+
 # Worklog (kept locally for agent reminders; CI doesn't need it)
 # (We DO commit worklog.md so future agents can read it.)
 

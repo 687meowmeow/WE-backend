@@ -226,6 +226,15 @@ fun WorkshopBrowserScreen(
         repo.updateSearchQueryText(newValue)
     }
     var sort by remember { mutableStateOf(SteamApiService.Sort.MOST_POPULAR_YEAR) }
+    // v0.5.10-alpha: KEEP mobileCompatible=true default (matches WE PC's
+    // canUploadWallpaperToMobileDevice logic — author permission flag).
+    // The actual fix for "only showing 4 items" is in
+    // WorkshopRepository.applyClientFilters: we REMOVED the redundant
+    // client-side type filter (which was dropping Image/Playlist/Unknown
+    // types that the AUTHOR had marked mobile-compatible via the
+    // required_kv_tags[app_workshop_eula_version]=3 URL param). The API
+    // already filters by author flag server-side — the client-side type
+    // check was over-aggressive and didn't match WE PC's logic.
     var mobileCompatible by remember { mutableStateOf(true) }
     var tileSize by remember { mutableStateOf(TileSize.MEDIUM) }
     // Default excluded tags — only the four non-mobile resolution sections
@@ -449,6 +458,28 @@ fun WorkshopBrowserScreen(
     val displayItems: List<WorkshopItemTyped> = if (inSearchMode) searchItems else items
 
     // === Infinite scroll: when last visible item is within 3 of the end, load more ===
+    // v0.5.10-alpha (browser filter fix): the LaunchedEffect keyset now
+    // includes `displayItems.size` so the effect RE-FIRES when a new page
+    // is appended but the user is still at the bottom of the list. Without
+    // `displayItems.size` as a key, `shouldLoadMore` stays `true` across
+    // the page-load (since the user is still at the last visible item after
+    // new items are appended below), and `LaunchedEffect(shouldLoadMore)`
+    // only fires on transition false→true — meaning the trigger fires ONCE
+    // and never re-fires, so the browser stops loading after the user
+    // reaches the bottom of the first page. User reported: "the browser
+    // is only showing 4. there is an issue. It should continue loading.
+    // there is way more than 4 wallpapers that meet the tags. it did not
+    // do this in previous versions."
+    //
+    // Adding `displayItems.size` as a key means: when new items are appended,
+    // the effect re-evaluates `shouldLoadMore` against the NEW total. If the
+    // user is still at the bottom (which they will be, since they were at
+    // the last visible item and new items got appended below), `shouldLoadMore`
+    // stays true and `loadNextPage` is called again. This continues until
+    // either (a) the user scrolls up (shouldLoadMore goes false), (b) the
+    // API returns no more items (hasMore=false), or (c) the loading state
+    // guards against duplicate calls (handled inside WorkshopRepository's
+    // browseLock mutex).
     val shouldLoadMore by remember(
         gridState, displayState, displayItems.size,
     ) {
@@ -458,7 +489,7 @@ fun WorkshopBrowserScreen(
             total > 0 && lastVisible >= total - 3
         }
     }
-    LaunchedEffect(shouldLoadMore) {
+    LaunchedEffect(shouldLoadMore, displayItems.size) {
         if (shouldLoadMore) {
             WepWawetLogger.workshop(
                 "infinite_scroll triggered loadNextPage",

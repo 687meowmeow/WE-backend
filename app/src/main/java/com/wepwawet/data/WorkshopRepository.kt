@@ -466,9 +466,14 @@ class WorkshopRepository constructor(
      * Apply client-side filters and sorts to a freshly-fetched page of items.
      *
      * Pipeline (applied in order):
-     *   1. **Mobile-compatible filter** — if [Filter.mobileCompatible] is true
-     *      (default), drop items whose [WorkshopType] is not mobile-compatible
-     *      (i.e. keep only Scene/Video; drop Web/Application/Image/Playlist/Unknown).
+     *   1. **Web/Application type filter** — ALWAYS drop Web and Application
+     *      types. These can never work on WE Android (Web uses HTML/CSS/JS
+     *      which the WE Android renderer doesn't support; Application is
+     *      interactive EXE-based which Android can't run). All other types
+     *      (Scene, Video, Image, Playlist, Unknown) are kept — they CAN be
+     *      packed into a .mpkg by MpkgPacker (Image-type gets packed as a
+     *      Scene wallpaper via packSceneWallpaper; Playlist/Unknown are
+     *      rare edge cases handled case-by-case).
      *   2. **Excluded-tags filter** — drop items whose tag list contains ANY
      *      of [Filter.excludedTags]. (Steam's `excludedtags[]` URL param
      *      applies server-side for browse/search, but creator-workshop URLs
@@ -478,6 +483,28 @@ class WorkshopRepository constructor(
      *      browse/search, but again, creator-workshop URLs don't support it.)
      *   4. **Client-side sort** — if [SteamApiService.Sort.isClientSide] is
      *      true, re-sort the result set by the appropriate metric descending.
+     *
+     * === v0.5.10-alpha REGRESSION FIX ===
+     * Previously this function ALSO applied a client-side "mobile-compatible"
+     * filter (drop items where WorkshopTags.isMobileCompatible(type, tags)
+     * returned false — i.e., everything except Scene/Video). That filter was
+     * OVER-AGGRESSIVE: the Steam API already filters by the AUTHOR's
+     * mobile-compatible permission flag via the
+     * `required_kv_tags[app_workshop_eula_version]=3` URL param (set when
+     * mobileCompatible=true). The author flag is the SAME logic WE PC uses
+     * (canUploadWallpaperToMobileDevice). The client-side type check was
+     * redundant AND wrong — it dropped Image-type wallpapers that the author
+     * had explicitly marked as mobile-compatible. Result: with
+     * mobileCompatible=true + 18 default-excluded resolution tags, only
+     * ~4 items survived per 30-item API page ("loadNextPage done page=1
+     * new_items=4 filtered_out=26 total_items=4" per the user's log).
+     *
+     * User report: "the browser is only showing 4. there is an issue.
+     * there should be way more. it did not do this in previous versions."
+     *
+     * Fix: remove the redundant client-side type filter. The mobileCompatible
+     * toggle now ONLY controls the API URL param (which is what the user
+     * means by "marked like the real wallpaper engine").
      */
     private fun applyClientFilters(
         items: List<WorkshopItemTyped>,
@@ -485,9 +512,13 @@ class WorkshopRepository constructor(
     ): List<WorkshopItemTyped> {
         var filtered = items
 
-        // 1. ALWAYS filter out Web and Application types (not mobile-compatible)
-        //    This happens regardless of the mobileCompatible toggle — Web and
-        //    Application wallpapers can never work on WE Android.
+        // 1. ALWAYS filter out Web and Application types (cannot work on WE Android)
+        //    This is independent of the mobileCompatible toggle — even if the
+        //    author marked them as mobile-compatible, the WE Android renderer
+        //    cannot run Web (HTML/CSS/JS) or Application (EXE-based) wallpapers.
+        //    All other types (Scene, Video, Image, Playlist, Unknown) are kept
+        //    — MpkgPacker.packSceneWallpaper can pack any of these into a
+        //    .mpkg the WE Android renderer can decode.
         val beforeAll = filtered.size
         filtered = filtered.filter {
             it.type != WallpaperType.WEB && it.type != WallpaperType.APPLICATION
@@ -499,19 +530,14 @@ class WorkshopRepository constructor(
                 "dropped" to (beforeAll - filtered.size))
         }
 
-        // 2. Mobile-compatible filtering (author permission flag)
-        if (filter.mobileCompatible) {
-            val before = filtered.size
-            filtered = filtered.filter {
-                WorkshopTags.isMobileCompatible(it.type, it.tags)
-            }
-            if (before != filtered.size) {
-                WepWawetLogger.workshopDebug("applyClientFilters mobile_compatible",
-                    "before" to before,
-                    "after" to filtered.size,
-                    "dropped" to (before - filtered.size))
-            }
-        }
+        // (v0.5.10-alpha: removed the redundant client-side mobileCompatible
+        //  type filter here — the API URL param required_kv_tags
+        //  [app_workshop_eula_version]=3 already filters by the AUTHOR's
+        //  mobile-compatible permission flag server-side. Re-applying a
+        //  stricter type check client-side dropped Image-type wallpapers
+        //  that the author had explicitly marked as mobile-compatible,
+        //  matching neither WE PC's logic nor the user's expectation.
+        //  See the function docstring above for full regression history.)
 
         // 2. Excluded-tags filtering (NOT logic)
         if (filter.excludedTags.isNotEmpty()) {
