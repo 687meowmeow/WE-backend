@@ -62,12 +62,20 @@
 }
 
 # LZ4 (lz4-java, org.lz4:lz4-java) — used by MpkgPacker.convertTexPngToEtc2
-# for .tex compression (compression=1 format). LZ4Factory uses Class.forName
-# to load compressor implementations (LZ4JavaSafeCompressor, etc.). Without
-# this keep rule, R8 renames these classes and Class.forName throws
-# ClassNotFoundException at runtime.
+# for .tex compression (compression=1 format).
+# CRITICAL: LZ4Factory.safeInstance() loads LZ4JavaSafeCompressor via reflection
+# (Class.forName). Without these keep rules, R8 strips the Java fallback class,
+# causing "ClassNotFoundException: net.jpountz.lz4.LZ4JavaSafeCompressor" when
+# the native lz4 library fails to load on Android (which is always, since the
+# bundled native libs are for x86_64 Linux/Mac/Windows, not Android arm64).
+# Result: "Failed to pack .pkg → .mpkg" during ETC2+LZ4 .tex conversion.
+# LZ4 is REQUIRED (compression=1) — falling back to compression=0 produces a
+# .tex the WE Android renderer does not decode correctly (black wallpaper).
+# Restored from v0.5.0-alpha after the v0.5.1 regression stripped these rules.
 # See: https://github.com/lz4/lz4-java/issues/130
--keep class net.jpountz.** { *; }
+-keep class net.jpountz.lz4.** { *; }
+-keep class net.jpountz.util.** { *; }
+-keepclassmembers class net.jpountz.** { *; }
 -dontwarn net.jpountz.**
 
 # JavaSteam (SteamKit2 Java port) — keep all classes

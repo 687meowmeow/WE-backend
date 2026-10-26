@@ -65,6 +65,36 @@ object WorkshopDownloadJob {
 
     private var job: Job? = null
 
+    // === v0.5.9-alpha (R8 fix): mirror state into DownloadManager so the
+    //     Downloads screen + WallpaperCard "Downloading…" overlay + "✓" badge
+    //     actually populate. Previously (v0.5.0-v0.5.8) WallpaperDetailScreen
+    //     used inline scope.launch coroutines and NEVER called
+    //     DownloadManager.start/complete/fail — the Downloads top-bar icon
+    //     navigated to an empty screen. Now that the screen delegates to
+    //     launchSendToPhone/launchDebugDownload (v0.4.14 pattern, restored
+    //     in R1 fix), we wire DownloadManager at these strategic points.
+    //     Progress mirroring is intentionally minimal (start/complete/fail/
+    //     cancel only) — the granular progress bar is already shown on the
+    //     detail screen via state.collectAsState(); the Downloads screen just
+    //     needs to know WHICH items are in flight vs done vs failed. ===
+    private fun onDownloadStarted(item: WorkshopItemTyped) {
+        com.wepwawet.data.DownloadManager.startDownload(item)
+    }
+
+    private fun onDownloadCompleted(item: WorkshopItemTyped, fileSizeBytes: Long, deviceName: String) {
+        com.wepwawet.data.DownloadManager.completeDownload(item.id, fileSizeBytes, deviceName)
+    }
+
+    private fun onDownloadFailed(item: WorkshopItemTyped, errorMessage: String) {
+        com.wepwawet.data.DownloadManager.failDownload(item.id, errorMessage)
+    }
+
+    private fun onDownloadCancelled(itemId: String?) {
+        if (itemId != null) {
+            com.wepwawet.data.DownloadManager.cancelDownload(itemId)
+        }
+    }
+
     /**
      * Start (or queue) the "Save .mpkg to Downloads (debug)" download.
      *
@@ -116,6 +146,9 @@ object WorkshopDownloadJob {
             savedFilePath = null,
             savedFileSize = 0L,
         ) }
+        // v0.5.9-alpha (R8): mirror the start into DownloadManager so the
+        // Downloads screen + WallpaperCard "Downloading…" overlay populate.
+        onDownloadStarted(item)
 
         WepWawetLogger.workshop("WorkshopDownloadJob: launching debug download",
             "id" to item.id,
@@ -172,6 +205,7 @@ object WorkshopDownloadJob {
                     errorMessage = err,
                     endedAt = System.currentTimeMillis(),
                 ) }
+                onDownloadFailed(item, err)
                 return@launchSafely
             }
 
@@ -229,6 +263,7 @@ object WorkshopDownloadJob {
                     errorMessage = err,
                     endedAt = System.currentTimeMillis(),
                 ) }
+                onDownloadFailed(item, err)
                 runCatching { downloadedPkg.delete() }
                 return@launchSafely
             }
@@ -250,6 +285,7 @@ object WorkshopDownloadJob {
                     errorMessage = err,
                     endedAt = System.currentTimeMillis(),
                 ) }
+                onDownloadFailed(item, err)
                 runCatching { downloadedPkg.delete() }
                 return@launchSafely
             }
@@ -268,6 +304,7 @@ object WorkshopDownloadJob {
                     errorMessage = err,
                     endedAt = System.currentTimeMillis(),
                 ) }
+                onDownloadFailed(item, err)
                 runCatching { downloadedPkg.delete(); cacheMpkg.delete() }
                 return@launchSafely
             }
@@ -308,6 +345,7 @@ object WorkshopDownloadJob {
                     savedFilePath = uri.toString(),
                     savedFileSize = bytes.size.toLong(),
                 ) }
+                onDownloadCompleted(item, bytes.size.toLong(), "Downloads")
             } else {
                 val err = "Failed to write .mpkg to Downloads (see logs)"
                 _state.update { s -> s.copy(
@@ -316,6 +354,7 @@ object WorkshopDownloadJob {
                     errorMessage = err,
                     endedAt = System.currentTimeMillis(),
                 ) }
+                onDownloadFailed(item, err)
             }
             } finally {
                 // === CRITICAL (v0.4.7): ALWAYS call cleanup() on the WorkshopDownloader,
@@ -408,6 +447,9 @@ object WorkshopDownloadJob {
             savedFilePath = null,
             savedFileSize = 0L,
         ) }
+        // v0.5.9-alpha (R8): mirror the start into DownloadManager so the
+        // Downloads screen + WallpaperCard "Downloading…" overlay populate.
+        onDownloadStarted(item)
 
         WepWawetLogger.workshop("WorkshopDownloadJob: launching send-to-phone",
             "id" to item.id,
@@ -459,6 +501,7 @@ object WorkshopDownloadJob {
                         errorMessage = err,
                         endedAt = System.currentTimeMillis(),
                     ) }
+                    onDownloadFailed(item, err)
                     return@launchSafely
                 }
 
@@ -525,6 +568,7 @@ object WorkshopDownloadJob {
                         errorMessage = err,
                         endedAt = System.currentTimeMillis(),
                     ) }
+                    onDownloadFailed(item, err)
                     runCatching { downloadedPkg.delete() }
                     return@launchSafely
                 }
@@ -544,6 +588,7 @@ object WorkshopDownloadJob {
                         errorMessage = err,
                         endedAt = System.currentTimeMillis(),
                     ) }
+                    onDownloadFailed(item, err)
                     runCatching { downloadedPkg.delete() }
                     return@launchSafely
                 }
@@ -593,6 +638,7 @@ object WorkshopDownloadJob {
                     savedFilePath = cacheMpkg.absolutePath,
                     savedFileSize = cacheMpkg.length(),
                 ) }
+                onDownloadCompleted(item, cacheMpkg.length(), deviceName)
             } finally {
                 // === CRITICAL (v0.4.7): ALWAYS call cleanup() on the WorkshopDownloader,
                 // even on success — otherwise the SteamClient's TCP connection to Steam
@@ -611,6 +657,10 @@ object WorkshopDownloadJob {
     fun cancel() {
         WepWawetLogger.workshop("WorkshopDownloadJob: cancelling",
             "id" to (_state.value.workshopId ?: "null"))
+        // v0.5.9-alpha (R8): mirror the cancel into DownloadManager so the
+        // Downloads screen "Cancel" button works (it calls WorkshopDownloadJob.cancel
+        // via the DownloadManagerScreen → activeDownloads subscription).
+        onDownloadCancelled(_state.value.workshopId)
         job?.cancel()
         job = null
         _state.update { s -> s.copy(
@@ -627,12 +677,21 @@ object WorkshopDownloadJob {
     fun markCrashed(message: String) {
         WepWawetLogger.workshopWarn("WorkshopDownloadJob: coroutine crashed",
             "msg" to message)
+        val crashedItemId = _state.value.workshopId
         _state.update { s -> s.copy(
             isRunning = false,
             status = message,
             errorMessage = message,
             endedAt = System.currentTimeMillis(),
         ) }
+        // v0.5.9-alpha (R8): mirror the crash into DownloadManager so the
+        // Downloads screen shows the failure instead of a stale "Downloading…".
+        // Only fire if we have a workshopId (otherwise the crash happened
+        // before any launch started, which shouldn't happen, but be safe).
+        if (crashedItemId != null) {
+            com.wepwawet.data.DownloadManager.failDownload(
+                crashedItemId, "Coroutine crashed: $message")
+        }
     }
 
     /** Reset to a clean idle state (called by UI when user dismisses the result). */

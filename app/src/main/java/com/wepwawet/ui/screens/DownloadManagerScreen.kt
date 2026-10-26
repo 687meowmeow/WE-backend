@@ -223,6 +223,11 @@ private fun ActiveDownloadCard(download: DownloadProgress) {
                     "download_manager cancel",
                     "item_id" to download.itemId,
                 )
+                // v0.5.9-alpha (R8): cancel the underlying WorkshopDownloadJob
+                // coroutine (running on WepWawetApplication.appScope) — otherwise
+                // the JavaSteam download keeps going in the background even
+                // after the user removes the entry from the active list.
+                com.wepwawet.pairing.WorkshopDownloadJob.cancel()
                 DownloadManager.cancelDownload(download.itemId)
             }) {
                 Icon(

@@ -199,7 +199,32 @@ fun WorkshopBrowserScreen(
 
     // === User-controlled filter state (initialized to defaults; overwritten
     //     by LaunchedEffect(Unit) if a saved value exists) ===
-    var query by remember { mutableStateOf("") }
+    // v0.4.7/v0.5.9-alpha: query is now hoisted into WorkshopRepository
+    // via `searchQueryText` StateFlow. The local `remember { mutableStateOf("") }`
+    // was destroyed on navigation to detail/{itemId} and back, causing:
+    //   1. query resets to ""
+    //   2. snapshotFlow { query } re-emits the empty value
+    //   3. debounce fires clearSearch() → search results wiped
+    // Now: query survives navigation because WorkshopRepository is a singleton
+    // held at the NavHost level. We use a local mutableState as a proxy for
+    // the text field (Compose requires State<String> for OutlinedTextField
+    // value), but we initialize it from the repo and write back to the repo
+    // on every change.
+    val repoQuery by repo.searchQueryText.collectAsState()
+    var query by remember { mutableStateOf(repoQuery) }
+    // Sync local state when the repo's query changes (e.g., after navigation
+    // back, or after clearSearch was called from elsewhere — sort/tag change
+    // LaunchedEffect below calls repo.clearSearch() which clears the repo
+    // value, so we need to mirror that into the local query).
+    LaunchedEffect(repoQuery) {
+        if (query != repoQuery) {
+            query = repoQuery
+        }
+    }
+    fun updateQuery(newValue: String) {
+        query = newValue
+        repo.updateSearchQueryText(newValue)
+    }
     var sort by remember { mutableStateOf(SteamApiService.Sort.MOST_POPULAR_YEAR) }
     var mobileCompatible by remember { mutableStateOf(true) }
     var tileSize by remember { mutableStateOf(TileSize.MEDIUM) }
@@ -355,7 +380,7 @@ fun WorkshopBrowserScreen(
             )
             // Clear search so we fall back to browse mode display
             if (query.isNotBlank()) {
-                query = ""
+                updateQuery("")
                 repo.clearSearch()
             }
             repo.startBrowse(currentFilter())
@@ -370,12 +395,37 @@ fun WorkshopBrowserScreen(
 
     // === Debounced search: when the user types, after 500 ms of quiet, fire startSearch ===
     // (Disabled in creator mode — no search box shown there)
+    // v0.4.7/v0.5.9-alpha: Skip the initial empty query emission if search
+    // results already exist (prevents the snapshotFlow from clearing a
+    // restored search on navigation back). We track this with a
+    // `firstEmission` flag.
     if (!isCreatorMode) {
         LaunchedEffect(Unit) {
+            var firstEmission = true
             snapshotFlow { query }
                 .debounce(500)
                 .distinctUntilChanged()
                 .collect { q ->
+                    if (firstEmission) {
+                        firstEmission = false
+                        // On first emission (screen just composed or recomposed):
+                        //   - If q is blank AND search items exist → DON'T clear
+                        //     (the user just navigated back to a previous search)
+                        //   - If q is blank AND no search items → no-op
+                        //   - If q has text → it's a restored query, search is already
+                        //     loaded, no need to re-trigger
+                        if (q.isBlank() && repo.searchItems.value.isNotEmpty()) {
+                            WepWawetLogger.workshop("first emission: preserving restored search",
+                                "search_items_count" to repo.searchItems.value.size)
+                            return@collect
+                        }
+                        if (q.isNotBlank()) {
+                            WepWawetLogger.workshop("first emission: restored query, no re-trigger",
+                                "query" to q.take(80))
+                            return@collect
+                        }
+                        // First emission with empty query and no search items — fall through
+                    }
                     if (q.isBlank()) {
                         if (repo.searchItems.value.isNotEmpty()) {
                             WepWawetLogger.workshop("query cleared — clearSearch")
@@ -556,7 +606,7 @@ fun WorkshopBrowserScreen(
             if (!isCreatorMode) {
                 OutlinedTextField(
                     value = query,
-                    onValueChange = { query = it },
+                    onValueChange = { updateQuery(it) },
                     placeholder = { Text("Search wallpapers…") },
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                     modifier = Modifier

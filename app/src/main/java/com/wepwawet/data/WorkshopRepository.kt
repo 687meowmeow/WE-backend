@@ -66,6 +66,34 @@ class WorkshopRepository constructor(
     private val _searchState = MutableStateFlow<BrowseState>(BrowseState.Idle)
     val searchState: StateFlow<BrowseState> = _searchState.asStateFlow()
 
+    /**
+     * === v0.4.7/v0.5.9-alpha: Hoisted query text (was a local `remember` in the
+     * WorkshopBrowserScreen composable, which was destroyed on navigation
+     * → recomposition → empty query → snapshotFlow fires clearSearch →
+     * search results wiped). Hoisting here means the query text survives
+     * navigation back from the detail screen.
+     *
+     * REGRESSION HISTORY:
+     *   - v0.4.14 had this hoisted state.
+     *   - v0.5.0 (regression #1) deleted it — query became local `remember`.
+     *   - v0.5.1+ (regression #2) replaced it with persistent SharedPreferences
+     *     for sort/tag/tile but kept query as local `remember`. The result:
+     *     navigating to detail/{itemId} → back wipes query AND search results.
+     *   - v0.5.9-alpha (this commit): RESTORED the v0.4.14 hoisted pattern.
+     * ===
+     */
+    private val _searchQueryText = MutableStateFlow("")
+    val searchQueryText: StateFlow<String> = _searchQueryText.asStateFlow()
+
+    /**
+     * Update the search query text (does NOT trigger a search — the UI's
+     * snapshotFlow debounce handles that). This is purely for state
+     * preservation across navigation.
+     */
+    fun updateSearchQueryText(query: String) {
+        _searchQueryText.value = query
+    }
+
     private var currentSearchQuery: String? = null
     private var currentSearchPage: Int = 0
     @Volatile private var searchHasMore: Boolean = true
@@ -292,6 +320,11 @@ class WorkshopRepository constructor(
             searchHasMore = true
             _searchItems.value = emptyList()
             _searchState.value = BrowseState.Idle
+            // v0.4.7/v0.5.9-alpha: keep _searchQueryText in sync (UI uses it
+            // to populate the search box after navigation back; if it's stale,
+            // the user sees an empty search box but the results are still
+            // showing — confusing).
+            _searchQueryText.value = query
             loadNextSearchPageLocked()
         }
     }
@@ -305,6 +338,10 @@ class WorkshopRepository constructor(
         searchHasMore = false
         _searchItems.value = emptyList()
         _searchState.value = BrowseState.Idle
+        // v0.4.7/v0.5.9-alpha: clear the hoisted query text so the search
+        // box is empty next time the user opens it (matches clearSearch
+        // semantics).
+        _searchQueryText.value = ""
         WepWawetLogger.workshop("clearSearch")
     }
 

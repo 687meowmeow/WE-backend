@@ -61,3 +61,23 @@ Thumbs.db
 .claude
 .z-ai-config
 .zscripts/
+
+# Agent-local scratch dirs (NEVER commit these — they're for the agent's
+# own research/diffing/tool-results, and the user has repeatedly told me
+# not to push them. v0.5.6-alpha cleanup deleted these from origin/main
+# but they kept coming back as untracked when I worked locally.)
+tool-results/
+upload/
+research/
+research-1b/
+research-cache/
+scripts/
+skills/
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+
+# Worklog (kept locally for agent reminders; CI doesn't need it)
+# (We DO commit worklog.md so future agents can read it.)
+

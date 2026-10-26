@@ -13,10 +13,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -39,10 +37,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,9 +54,6 @@ import com.wepwawet.data.WorkshopRepository
 import com.wepwawet.data.model.WorkshopItemTyped
 import com.wepwawet.log.WepWawetLogger
 import com.wepwawet.pairing.PairingService
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -69,12 +64,43 @@ import java.io.File
  * Shows:
  *   - Full preview image (16:9)
  *   - Title, description, tags (chips), type, resolution guess, subs count, file size
- *   - "Download" button — downloads the preview image to a local cache (the actual
- *     workshop content download is handled separately via JavaSteam;
- *     downloading the preview at least gives the user visible feedback)
- *   - "Send to Phone" button — if a phone is paired via [PairingService], queues the
- *     cached file for transfer via the pairing protocol
- *   - Progress indicator (linear) during download/transfer
+ *   - "Send to phone" button — calls [com.wepwawet.pairing.WorkshopDownloadJob.launchSendToPhone]
+ *     which:
+ *       1. Downloads the REAL .pkg via JavaSteam (SteamKit2 Java port — on-device,
+ *          no PC needed) using the user's stored Steam credentials.
+ *       2. Packs it to a .mpkg using [com.wepwawet.pairing.MpkgPacker.packFromPkg]
+ *          WITH `installDir` — passing the same installDir the debug download
+ *          uses, so send-to-phone produces a byte-identical .mpkg to debug
+ *          download. (v0.4.7 fix: previously the inline send-to-phone flow
+ *          did NOT pass installDir, producing a different/broken .mpkg that
+ *          rendered as a black wallpaper on the phone.)
+ *       3. Queues the .mpkg for transfer via [PairingService.queueWallpaper].
+ *   - "Save .mpkg to Downloads (debug)" button — calls
+ *     [com.wepwawet.pairing.WorkshopDownloadJob.launchDebugDownload] (same .mpkg
+ *     as send-to-phone, just saves to public Downloads instead of queueing
+ *     for transfer).
+ *   - Progress indicator (linear) during download/transfer.
+ *
+ * === Why we use the singleton WorkshopDownloadJob instead of rememberCoroutineScope ===
+ *
+ * v0.4.14 used `WepWawetApplication.appScope` (a singleton CoroutineScope tied
+ * to the Application — survives Activity destruction). The download/state lived
+ * in `WorkshopDownloadJob` (an `object`) and was observed via `state.collectAsState()`.
+ *
+ * v0.5.0-v0.5.1 regressed this: the screen was rewritten to use
+ * `rememberCoroutineScope()` (tied to the composable lifecycle) and inline the
+ * download flow. When the user navigated back from this screen mid-download,
+ * the coroutine was cancelled → silent failure + the resulting .mpkg was
+ * missing installDir → black wallpaper on phone.
+ *
+ * v0.5.9-alpha (this commit): RESTORED the v0.4.14 singleton pattern. The
+ * download is launched via `WorkshopDownloadJob.launchSendToPhone(context, item)`
+ * (and `launchDebugDownload` for debug) which:
+ *   - Runs on `WepWawetApplication.appScope` (survives Activity destruction)
+ *   - Exposes `state: StateFlow<State>` with progress / status / errorMessage /
+ *     resultMessage / hasChunkProgress / workshopId / isRunning — observed
+ *     here via `collectAsState()`.
+ *   - Passes `installDir` to `MpkgPacker.packFromPkg` — same as debug download.
  *
  * All actions are logged via [WepWawetLogger.workshop].
  *
@@ -88,20 +114,24 @@ fun WallpaperDetailScreen(
     repo: WorkshopRepository,
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
 
     var item by remember { mutableStateOf<WorkshopItemTyped?>(null) }
     var loading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isPaired by remember { mutableStateOf(PairingService.isPaired()) }
 
-    // Download / transfer state
-    var downloadProgress by remember { mutableStateOf(0f) }  // 0..1 for download progress bar
-    var isDownloading by remember { mutableStateOf(false) }
-    var downloadedFile by remember { mutableStateOf<File?>(null) }
-    var isSending by remember { mutableStateOf(false) }
-    var sendProgress by remember { mutableStateOf(0f) }  // progress for send-to-phone Steam download
-    var statusMessage by remember { mutableStateOf<String?>(null) }
+    // === Workshop download state — observed from a singleton so the download
+    //     survives the user navigating away from this screen. The previous
+    //     implementation used rememberCoroutineScope() which was cancelled when
+    //     the composable left composition, killing the download mid-flight. ===
+    val downloadState by com.wepwawet.pairing.WorkshopDownloadJob.state.collectAsState()
+    // True if THIS screen's item is the one currently being downloaded.
+    val isThisItemDownloading = downloadState.isRunning &&
+        downloadState.workshopId == itemId
+    // True if we've gotten at least one chunk-level progress callback. If false,
+    // show an indeterminate progress bar (determinate bar would sit at 0% and
+    // look broken for small downloads that arrive in a single chunk).
+    val hasChunkProgress = downloadState.hasChunkProgress
 
     // Track whether the user has Steam credentials set up (for JavaSteam direct download)
     var hasSteamCredentials by remember { mutableStateOf(com.wepwawet.pairing.SteamCredentialsStore.hasCredentials(context)) }
@@ -264,33 +294,63 @@ fun WallpaperDetailScreen(
             }
 
             // === Status message (download/send feedback) ===
+            // Shows the singleton download job's status/result/error for THIS
+            // item. Falls back to "" (no message) when this item has no
+            // recorded download activity.
             item {
-                statusMessage?.let {
+                val msg = if (isThisItemDownloading || downloadState.workshopId == itemId) {
+                    downloadState.status.ifBlank { null }
+                } else {
+                    null
+                }
+                val resultMsg = if (!isThisItemDownloading && downloadState.workshopId == itemId) {
+                    downloadState.resultMessage ?: downloadState.errorMessage
+                } else null
+                val text = resultMsg ?: msg
+                if (!text.isNullOrBlank()) {
                     Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        color = if (downloadState.errorMessage != null && downloadState.workshopId == itemId)
+                            MaterialTheme.colorScheme.errorContainer
+                        else MaterialTheme.colorScheme.secondaryContainer,
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
-                            it,
+                            text,
                             modifier = Modifier.padding(12.dp),
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            color = if (downloadState.errorMessage != null && downloadState.workshopId == itemId)
+                                MaterialTheme.colorScheme.onErrorContainer
+                            else MaterialTheme.colorScheme.onSecondaryContainer,
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
                 }
             }
 
-            // === Progress bar (shows during download + transfer) ===
-            if (isSending) {
+            // === Progress bar ===
+            // Shows during the singleton download job for THIS item. Uses an
+            // indeterminate bar when no chunk-level progress callbacks have
+            // fired yet — typical for small workshop items that arrive in a
+            // single chunk, where a determinate bar would otherwise sit at 0%
+            // the whole time and look broken (v0.4.14+ behavior).
+            if (isThisItemDownloading) {
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        LinearProgressIndicator(
-                            progress = { sendProgress },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        val progress = downloadState.progress
+                        // Show indeterminate bar when we're past the connect/auth
+                        // phase but still haven't seen any chunk progress.
+                        if (!hasChunkProgress && downloadState.progress < 1f) {
+                            LinearProgressIndicator(
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                progress = { progress },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                         Text(
-                            statusMessage ?: "Working...",
+                            downloadState.status.ifBlank { "Working..." },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -298,28 +358,39 @@ fun WallpaperDetailScreen(
                 }
             }
 
-            // === Send to phone button — downloads REAL .pkg via JavaSteam (no PC) ===
+            // === Send to phone button — calls WorkshopDownloadJob.launchSendToPhone ===
+            // v0.4.7+ CRITICAL: This uses the SAME code path as the debug download
+            // (with installDir!) just queues for transfer instead of saving to
+            // Downloads. This fixes the v0.5.0-v0.5.1 regression where send-to-phone
+            // was rewritten inline WITHOUT installDir → produced a different/broken
+            // .mpkg → black wallpaper on phone.
+            // User said: "send to phone should make the same thing the debug
+            // download makes and sends it perfectly" — this restores that.
             item {
                 Button(
                     onClick = {
-                        if (!isSending) {
-                            sendProgress = 0f
-                            onSendToPhoneClicked(context, current, scope,
-                                { isSending = true; statusMessage = it; sendProgress = 0f },
-                                { isSending = false; statusMessage = it },
-                                { progress -> sendProgress = progress },
-                                { statusMessage = it })
+                        if (!downloadState.isRunning) {
+                            // Use the singleton WorkshopDownloadJob — its state
+                            // flows into `downloadState` which we already observe.
+                            com.wepwawet.pairing.WorkshopDownloadJob.launchSendToPhone(context, current)
                         }
                     },
-                    enabled = !isSending,
+                    enabled = !downloadState.isRunning,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Filled.Send, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        if (isSending) "Sending…"
+                        if (isThisItemDownloading) {
+                            when {
+                                downloadState.progress > 0f -> "Sending… ${(downloadState.progress * 100).toInt()}%"
+                                else -> "Sending…"
+                            }
+                        }
                         else if (!isPaired) "Send to phone (pair first)"
                         else if (!hasSteamCredentials) "Send to phone (enter Steam login in Settings)"
+                        else if (downloadState.workshopId == itemId && downloadState.resultMessage != null) "Sent ✓ (tap again to re-send)"
+                        else if (downloadState.workshopId == itemId && downloadState.errorMessage != null) "Retry send to phone"
                         else "Send to phone"
                     )
                 }
@@ -352,24 +423,29 @@ fun WallpaperDetailScreen(
                 }
             }
 
-            // === Debug: Save .mpkg to Downloads — now downloads REAL .pkg via JavaSteam ===
+            // === Debug: Save .mpkg to Downloads — runs via WorkshopDownloadJob
+            //     (singleton, app-scoped) so the download survives the user
+            //     navigating away from this screen. ===
             item {
                 OutlinedButton(
                     onClick = {
-                        if (!isSending) {
-                            sendProgress = 0f
-                            onDownloadMpkgClicked(context, current, scope,
-                                { isSending = true; statusMessage = it; sendProgress = 0f },
-                                { isSending = false; statusMessage = it },
-                                { progress -> sendProgress = progress })
+                        if (!downloadState.isRunning) {
+                            com.wepwawet.pairing.WorkshopDownloadJob.launchDebugDownload(context, current)
                         }
                     },
-                    enabled = !isSending,
+                    enabled = !downloadState.isRunning,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Filled.Download, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Save .mpkg to Downloads (debug)")
+                    Text(
+                        when {
+                            isThisItemDownloading -> "Downloading…"
+                            downloadState.workshopId == itemId && downloadState.resultMessage != null -> "Saved ✓ (tap again to re-download)"
+                            downloadState.workshopId == itemId && downloadState.errorMessage != null -> "Retry download"
+                            else -> "Save .mpkg to Downloads (debug)"
+                        }
+                    )
                 }
             }
 
@@ -381,361 +457,19 @@ fun WallpaperDetailScreen(
 
 // ====== Composable sub-parts ======
 
-/**
- * Send-to-phone click handler. Extracted from the Button onClick lambda so it
- * can use early returns cleanly without label gymnastics.
- *
- * IMPORTANT: This is the LEGACY/BROKEN path that only sends the small
- * Steam Workshop preview thumbnail (192x192 GIF) packaged as a Scene .mpkg.
- * The actual workshop content is a multi-GB .pkg file that requires Steam
- * authentication to download. The WE Android app will display the thumbnail
- * as a static image — this is NOT the actual wallpaper.
- *
- * For REAL wallpaper content, use:
- *   - "Pick local .pkg file" button (best quality — needs user to download
- *     the .pkg from Steam on PC and copy it to the phone)
- *   - "Pick local image" button (Scene wallpaper from any JPEG/PNG)
- *   - "Pick local video" button (Video wallpaper from any MP4)
- *
- * We keep this button for backward compatibility but log a clear warning
- * explaining the limitation.
- *
- * Flow:
- *   1. Check paired state — abort with status if not paired
- *   2. Download the workshop preview image (cache hit if already downloaded)
- *   3. Pack the preview into a .mpkg file using MpkgPacker.packSceneWallpaper
- *      (builds a Scene wallpaper with the preview as the texture)
- *   4. Queue the .mpkg for transfer via PairingService.queueWallpaper
- *   5. The actual transfer happens on the next heartbeat in
- *      WePairingServer.commandLoop → transferWallpaper
- *
- * Every step is logged with structured key-value context so the user can
- * trace exactly where things go wrong in the Logs screen.
- *
- * @param onStart called when the operation begins (with a status message)
- * @param onEnd called when the operation ends (with a final status message)
- */
-private fun onSendToPhoneClicked(
-    context: Context,
-    item: WorkshopItemTyped,
-    scope: kotlinx.coroutines.CoroutineScope,
-    onStart: (String) -> Unit,
-    onEnd: (String) -> Unit,
-    onProgress: (Float) -> Unit,
-    onStatusUpdate: (String) -> Unit = { _ -> },
-) {
-    WepWawetLogger.workshop("send-to-phone tapped",
-        "id" to item.id,
-        "is_paired" to PairingService.isPaired(),
-        "title" to item.title.take(80),
-        "tags" to item.tags.joinToString(","),
-        "type" to item.type.displayName,
-        "has_steam_credentials" to com.wepwawet.pairing.SteamCredentialsStore.hasCredentials(context))
-
-    if (!PairingService.isPaired()) {
-        val msg = "Not paired — open the Pairing tab first."
-        WepWawetLogger.workshopWarn("send-to-phone: not paired, aborting", "id" to item.id)
-        onEnd(msg)
-        return
-    }
-
-    if (!com.wepwawet.pairing.SteamCredentialsStore.hasCredentials(context)) {
-        val msg = "Steam login not set. Open Settings → Steam account → enter your Steam username and password."
-        WepWawetLogger.workshopWarn("send-to-phone: no Steam credentials", "id" to item.id)
-        onEnd(msg)
-        return
-    }
-
-    val steamUser = com.wepwawet.pairing.SteamCredentialsStore.getUsername(context)!!
-    val steamPass = com.wepwawet.pairing.SteamCredentialsStore.getPassword(context)!!
-    val steamGuard = com.wepwawet.pairing.SteamCredentialsStore.getGuardCode(context)
-
-    onStart("Downloading real .pkg via Steam (no PC needed, this may take 1-2 minutes)…")
-    scope.launch {
-        try {
-            // Reset progress
-            onProgress(0f)
-
-            // === Step 1: Download the actual .pkg file via JavaSteam (direct on-device) ===
-            WepWawetLogger.workshop("send-to-phone: step 1/4 downloading .pkg via JavaSteam",
-                "workshop_id" to item.id,
-                "steam_user" to steamUser,
-                "has_guard_code" to !steamGuard.isNullOrBlank())
-
-            val sendId = System.currentTimeMillis()
-            val pkgFile = java.io.File(context.cacheDir, "${item.id}_$sendId.pkg")
-            val downloader = com.wepwawet.pairing.WorkshopDownloader(steamUser, steamPass, steamGuard)
-            val downloadedPkg = withContext(Dispatchers.IO) {
-                downloader.downloadWorkshopPkg(
-                    context = context,
-                    workshopId = item.id,
-                    outputFile = pkgFile,
-                    onProgress = { pct ->
-                        onProgress(pct * 0.8f)
-                    },
-                    onStatusUpdate = { status ->
-                        WepWawetLogger.workshop("send-to-phone: JavaSteam status",
-                            "status" to status)
-                    },
-                )
-            }
-
-            if (downloadedPkg == null || !downloadedPkg.exists() || downloadedPkg.length() == 0L) {
-                WepWawetLogger.workshopWarn("send-to-phone: step 1/4 JavaSteam download failed",
-                    "pkg_file" to pkgFile.absolutePath,
-                    "exists" to pkgFile.exists(),
-                    "size" to pkgFile.length())
-                onEnd("Failed to download .pkg via Steam (see logs)")
-                return@launch
-            }
-            WepWawetLogger.workshop("send-to-phone: step 1/4 .pkg downloaded",
-                "file" to downloadedPkg.absolutePath,
-                "size" to downloadedPkg.length(),
-                "size_human" to formatBytes(downloadedPkg.length()))
-
-            // === Step 2: Log file type for debugging (do NOT abort on unknown) ===
-            // The PkgReader supports PKGV0001 through PKGV0024. The detectFileType
-            // function below checks for ALL of these. Even if the file type is
-            // "unknown", we proceed to step 3 — PkgReader.read() will throw
-            // a descriptive exception if the file is truly invalid, and the
-            // step 3 error handling will show it. This is better than aborting
-            // prematurely with a generic "unexpected file type" error.
-            val fileType = detectFileType(downloadedPkg)
-            val firstBytes = runCatching {
-                val raf = java.io.RandomAccessFile(downloadedPkg, "r")
-                val buf = ByteArray(16)
-                raf.readFully(buf)
-                raf.close()
-                buf.joinToString("") { "%02x".format(it) }
-            }.getOrDefault("<unreadable>")
-            WepWawetLogger.workshop("send-to-phone: step 2/4 file type detected",
-                "file_type" to fileType,
-                "file_name" to downloadedPkg.name,
-                "file_size" to downloadedPkg.length(),
-                "first_16_bytes_hex" to firstBytes)
-            if (fileType == "unknown") {
-                WepWawetLogger.workshopWarn("send-to-phone: step 2/4 unknown file type — proceeding anyway",
-                    "first_16_bytes_hex" to firstBytes)
-                onStatusUpdate("Downloaded .pkg has unknown format — attempting to pack anyway…")
-            } else {
-                onStatusUpdate("Downloaded $fileType .pkg (${formatBytes(downloadedPkg.length())}) — packing…")
-            }
-
-            // === Step 3: Pack the .pkg into a .mpkg ===
-            WepWawetLogger.workshop("send-to-phone: step 3/4 packing .pkg → .mpkg",
-                "pkg_file" to downloadedPkg.name,
-                "pkg_size" to downloadedPkg.length())
-            onStatusUpdate("Packing .pkg → .mpkg (${formatBytes(downloadedPkg.length())})…")
-            onProgress(0.85f)
-            val mpkgFile = java.io.File(context.cacheDir, "${item.id}_$sendId.mpkg")
-            val mpkgSize = withContext(Dispatchers.IO) {
-                com.wepwawet.pairing.MpkgPacker.packFromPkg(
-                    item = item,
-                    pkgFile = downloadedPkg,
-                    outputFile = mpkgFile,
-                )
-            }
-            if (mpkgSize == 0L || !mpkgFile.exists()) {
-                WepWawetLogger.workshopWarn("send-to-phone: step 3/4 packing failed",
-                    "mpkg_exists" to mpkgFile.exists(),
-                    "mpkg_size" to mpkgSize,
-                    "pkg_file_type" to fileType,
-                    "pkg_first_16_bytes_hex" to firstBytes)
-                onEnd("Packing failed — the downloaded .pkg may not be a valid Steam Workshop .pkg. Check logs for details (file_type=$fileType, first_bytes=$firstBytes).")
-                return@launch
-            }
-            WepWawetLogger.workshop("send-to-phone: step 3/4 .mpkg ready",
-                "mpkg_file" to mpkgFile.name,
-                "mpkg_size" to mpkgSize,
-                "size_human" to formatBytes(mpkgSize))
-            onStatusUpdate("Packed .mpkg (${formatBytes(mpkgSize)}) — sending to phone…")
-
-            // === Step 4: Queue for transfer ===
-            WepWawetLogger.workshop("send-to-phone: step 4/4 queueing for transfer",
-                "file" to mpkgFile.name,
-                "size" to mpkgFile.length())
-            onStatusUpdate("Sending to phone — queued for transfer…")
-            onProgress(0.95f)
-            val deviceName = PairingService.pairedDeviceName ?: "phone"
-            PairingService.queueWallpaper(mpkgFile, item.title)
-            onProgress(1f)
-            WepWawetLogger.workshop("send-to-phone: QUEUED",
-                "file" to mpkgFile.name,
-                "size" to mpkgFile.length(),
-                "title" to item.title.take(80),
-                "device" to deviceName,
-                "next_action" to "WePairingServer will pick this up on next heartbeat (~3s) and transfer via AES-encrypted chunks")
-            onEnd("Queued for transfer to $deviceName (real .pkg content, ${formatBytes(mpkgFile.length())}). Transfer starts on next heartbeat (~3s).")
-
-            // Clean up the .pkg cache file
-            downloadedPkg.delete()
-        } catch (e: Exception) {
-            WepWawetLogger.workshopWarn("send-to-phone: unhandled exception",
-                "exception" to e.javaClass.name,
-                "message" to (e.message ?: ""))
-            onEnd("Error: ${e.message}")
-        }
-    }
-}
-
-/**
- * Format a byte count as a human-readable string (B, KB, MB, GB).
- */
-private fun formatBytes(bytes: Long): String {
-    return when {
-        bytes < 1024 -> "$bytes B"
-        bytes < 1024 * 1024 -> "%.1f KB".format(bytes / 1024.0)
-        bytes < 1024 * 1024 * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024))
-        else -> "%.2f GB".format(bytes / (1024.0 * 1024 * 1024))
-    }
-}
-
-/**
- * Detect file type from magic bytes.
- * Returns "GIF", "JPEG", "PNG", "MP4", "PKGV0024", or "unknown".
- */
-private fun detectFileType(file: java.io.File): String {
-    try {
-        val raf = java.io.RandomAccessFile(file, "r")
-        // PKGV0024 is 8 bytes + a 4-byte length prefix = 12 bytes minimum
-        // The .pkg format is: [u32 LE magic_len][magic bytes]...
-        // For "PKGV0024" the magic_len field = 8 (4 bytes LE: 08 00 00 00)
-        // followed by the 8 bytes "PKGV0024"
-        val header = ByteArray(12)
-        raf.readFully(header)
-        raf.close()
-        // Steam Workshop .pkg: starts with [u32 LE magic_len][magic bytes]
-        // PkgReader supports PKGV0001 through PKGV0024. Check for ANY of them.
-        // The magic_len field is always 8 (the string "PKGV00XX" is 8 bytes).
-        if (header.size >= 12 &&
-            header[0] == 0x08.toByte() && header[1] == 0x00.toByte() &&
-            header[2] == 0x00.toByte() && header[3] == 0x00.toByte() &&
-            header[4] == 'P'.code.toByte() && header[5] == 'K'.code.toByte() &&
-            header[6] == 'G'.code.toByte() && header[7] == 'V'.code.toByte()) {
-            // Extract the version string (bytes 8-11: "00XX")
-            val verStr = String(header, 8, 4, Charsets.US_ASCII)
-            return "PKGV$verStr"
-        }
-        // GIF: starts with "GIF87a" or "GIF89a"
-        if (header.size >= 6 && (header[0] == 'G'.code.toByte() && header[1] == 'I'.code.toByte() && header[2] == 'F'.code.toByte())) {
-            return "GIF"
-        }
-        // JPEG: starts with 0xFF 0xD8 0xFF
-        if (header.size >= 3 && header[0] == 0xFF.toByte() && header[1] == 0xD8.toByte() && header[2] == 0xFF.toByte()) {
-            return "JPEG"
-        }
-        // PNG: starts with 0x89 P N G \r \n 0x1A \n
-        if (header.size >= 8 && header[0] == 0x89.toByte() && header[1] == 'P'.code.toByte() && header[2] == 'N'.code.toByte() && header[3] == 'G'.code.toByte()) {
-            return "PNG"
-        }
-        // MP4: starts with "ftyp" at offset 4
-        if (header.size >= 8 && header[4] == 'f'.code.toByte() && header[5] == 't'.code.toByte() && header[6] == 'y'.code.toByte() && header[7] == 'p'.code.toByte()) {
-            return "MP4"
-        }
-        // WebP: starts with "RIFF" then ?? "WEBP"
-        if (header.size >= 12 && header[0] == 'R'.code.toByte() && header[1] == 'I'.code.toByte() && header[2] == 'F'.code.toByte() && header[3] == 'F'.code.toByte() &&
-            header[8] == 'W'.code.toByte() && header[9] == 'E'.code.toByte() && header[10] == 'B'.code.toByte() && header[11] == 'P'.code.toByte()) {
-            return "WebP"
-        }
-        return "unknown"
-    } catch (e: Exception) {
-        return "unknown (${e.message})"
-    }
-}
-
-/**
- * Debug download-.mpkg click handler. Generates the same .mpkg that
- * onSendToPhoneClicked would queue for transfer, but instead saves it
- * directly to the user's Downloads/WepWawet/ folder so they can inspect
- * the binary with `xxd`, `binwalk`, `strings`, etc.
- *
- * This is critical for debugging: if WE rejects the .mpkg, comparing our
- * output to a real .mpkg from a Windows PC will reveal exactly which bytes
- * are wrong (wrong magic, wrong project.json schema, missing fields, etc.).
- *
- * @param onStart called when the operation begins (with a status message)
- * @param onEnd called when the operation ends (with a final status message)
- */
-private fun onDownloadMpkgClicked(
-    context: Context,
-    item: WorkshopItemTyped,
-    scope: kotlinx.coroutines.CoroutineScope,
-    onStart: (String) -> Unit,
-    onEnd: (String) -> Unit,
-    onProgress: (Float) -> Unit,
-) {
-    WepWawetLogger.workshop("download-mpkg (debug) tapped",
-        "id" to item.id,
-        "title" to item.title.take(80))
-    
-    if (!com.wepwawet.pairing.SteamCredentialsStore.hasCredentials(context)) {
-        onEnd("Steam login not set. Open Settings → Steam account first.")
-        return
-    }
-    
-    val steamUser = com.wepwawet.pairing.SteamCredentialsStore.getUsername(context)!!
-    val steamPass = com.wepwawet.pairing.SteamCredentialsStore.getPassword(context)!!
-    
-    onStart("Downloading real .pkg via JavaSteam (debug)…")
-    scope.launch {
-        try {
-            val sendId = System.currentTimeMillis()
-            val pkgFile = java.io.File(context.cacheDir, "${item.id}_${sendId}_debug.pkg")
-            val downloader = com.wepwawet.pairing.WorkshopDownloader(steamUser, steamPass)
-            val downloadedPkg = withContext(Dispatchers.IO) {
-                downloader.downloadWorkshopPkg(
-                    context = context,
-                    workshopId = item.id,
-                    outputFile = pkgFile,
-                    onProgress = { pct -> onProgress(pct * 0.8f) },
-                    onStatusUpdate = { status ->
-                        WepWawetLogger.workshop("download-mpkg: JavaSteam status", "status" to status)
-                    },
-                )
-            }
-            if (downloadedPkg == null || !downloadedPkg.exists() || downloadedPkg.length() == 0L) {
-                onEnd("Failed to download .pkg via Steam (see logs)")
-                return@launch
-            }
-
-            // Pack the .pkg into a .mpkg
-            val cacheMpkg = java.io.File(context.cacheDir, "${item.id}_${sendId}_debug.mpkg")
-            val mpkgSize = withContext(Dispatchers.IO) {
-                com.wepwawet.pairing.MpkgPacker.packFromPkg(
-                    item = item,
-                    pkgFile = downloadedPkg,
-                    outputFile = cacheMpkg,
-                )
-            }
-            if (mpkgSize == 0L || !cacheMpkg.exists()) {
-                onEnd("Failed to pack .pkg → .mpkg")
-                return@launch
-            }
-
-            // Copy to public Downloads
-            val bytes = cacheMpkg.readBytes()
-            val downloadsName = "${item.id}_debug.mpkg"
-            val uri = com.wepwawet.log.PublicDownloadsWriter.writeBytes(
-                context, downloadsName, bytes)
-            if (uri != null) {
-                WepWawetLogger.workshop("download-mpkg: saved to Downloads",
-                    "file" to downloadsName,
-                    "size" to bytes.size,
-                    "uri" to uri.toString())
-                onEnd("Saved ${formatBytes(bytes.size.toLong())} to Downloads/WepWawet/$downloadsName")
-            } else {
-                onEnd("Failed to write .mpkg to Downloads (see logs)")
-            }
-            downloadedPkg.delete()
-            cacheMpkg.delete()
-        } catch (e: Exception) {
-            WepWawetLogger.workshopWarn("download-mpkg: failed",
-                "exception" to e.javaClass.name,
-                "message" to (e.message ?: ""))
-            onEnd("Error: ${e.message}")
-        }
-    }
-}
+// === v0.4.7+ pattern: All download/send flows delegate to the singleton
+//     WorkshopDownloadJob (launchSendToPhone / launchDebugDownload) which
+//     runs on WepWawetApplication.appScope, observes state via StateFlow,
+//     and passes installDir to MpkgPacker.packFromPkg.
+//     The previous inline onSendToPhoneClicked/onDownloadMpkgClicked functions
+//     (v0.5.0-v0.5.8) were REMOVED because:
+//       1. They used rememberCoroutineScope() — cancelled on navigation → silent failure
+//       2. They did NOT pass installDir to MpkgPacker.packFromPkg → black wallpaper
+//       3. They had no state observation → no "Sent ✓" / "Retry" / progress %
+//     All that logic lives (correctly) in WorkshopDownloadJob.kt and was
+//     unchanged from v0.4.14 through current main — only the call site
+//     was broken. Restoring the call site fixes all four regressions
+//     (R1, R2, R3, R6) at once. ===
 
 @Composable
 private fun MetadataRow(label: String, value: String) {
@@ -758,6 +492,9 @@ private fun MetadataRow(label: String, value: String) {
 }
 
 // ====== Side helper: download the preview image to a local cache ======
+// (Used by future iterations; currently the send-to-phone flow uses the
+//  JavaSteam direct download path inside WorkshopDownloadJob.launchSendToPhone,
+//  which produces the real .pkg rather than just the preview thumbnail.)
 
 private val downloadHttpClient = OkHttpClient.Builder().build()
 
@@ -767,7 +504,6 @@ private val downloadHttpClient = OkHttpClient.Builder().build()
  *
  * NOTE: This downloads the *preview thumbnail*, not the actual wallpaper content
  * (which is fetched separately via JavaSteam using the user's credentials).
- * For v1, we use the preview as a stand-in so the user gets visible feedback.
  *
  * @return the downloaded File, or `null` on failure
  */
@@ -775,7 +511,7 @@ private suspend fun downloadWallpaper(
     context: Context,
     item: WorkshopItemTyped,
     onProgress: (Float) -> Unit,
-): File? = withContext(Dispatchers.IO) {
+): File? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
     val url = item.previewUrl ?: return@withContext null
     try {
         val outDir = File(context.externalCacheDir, "wallpapers").apply { mkdirs() }
