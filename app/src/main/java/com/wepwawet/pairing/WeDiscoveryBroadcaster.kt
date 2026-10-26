@@ -99,18 +99,13 @@ class WeDiscoveryBroadcaster(private val context: Context) {
 
             while (running) {
                 try {
-                    // Broadcast to multicast group
+                    // Broadcast to multicast group only — multicast is the correct
+                    // transport for service discovery. Subnet broadcast (255.255.255.255)
+                    // was removed because it wakes Wi-Fi radios on every LAN device every
+                    // 1.3s. Loopback send was removed because it was delivered to itself,
+                    // polluting logs with self-reception.
                     val pkt = DatagramPacket(bytes, bytes.size, group, UDP_PORT)
                     socket.send(pkt)
-
-                    // Also broadcast to 255.255.255.255 (subnet broadcast — for LAN pair)
-                    val bcastAddr = InetAddress.getByName("255.255.255.255")
-                    val bcastPkt = DatagramPacket(bytes, bytes.size, bcastAddr, UDP_PORT)
-                    socket.send(bcastPkt)
-
-                    // Also send to 127.0.0.1 (loopback — for self-pair)
-                    val loopPkt = DatagramPacket(bytes, bytes.size, InetAddress.getByName("127.0.0.1"), UDP_PORT)
-                    socket.send(loopPkt)
 
                     WepWawetLogger.proxyDebug("broadcast sent",
                         "payload" to payload)

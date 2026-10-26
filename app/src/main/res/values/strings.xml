@@ -40,14 +40,7 @@
     <string name="settings_steam_not_logged_in">Not logged in</string>
     <string name="settings_steam_log_in">Log in to Steam</string>
     <string name="settings_steam_log_out">Log out</string>
-    <string name="settings_root_mode">Root mode</string>
-    <string name="settings_root_mode_summary">Use chroot instead of PRoot for ~15% faster Wine launches.</string>
-    <string name="settings_root_detected">Root detected</string>
-    <string name="settings_root_not_detected">Root not detected</string>
     <string name="settings_log_level">Log level</string>
-    <string name="settings_reset_wine_prefix">Reset Wine prefix</string>
-    <string name="settings_reset_wine_prefix_summary">Wipes the Wine prefix. Steam + WE will need to be reinstalled. Use only if the prefix is corrupted.</string>
-    <string name="settings_reset_wine_prefix_confirm">Are you sure? This will delete ~2 GB of data.</string>
     <string name="settings_about">About</string>
     <string name="settings_about_version">Version %1$s (build %2$s)</string>
     <string name="settings_about_git_sha">Git: %1$s</string>
@@ -59,19 +52,8 @@
     <string name="notif_proxy_text_idle">Idle — pair your Wallpaper Engine Android app.</string>
     <string name="notif_proxy_text_paired">Paired with %1$d device(s).</string>
     <string name="notif_proxy_text_streaming">Streaming wallpaper to %1$s…</string>
-    <string name="notif_wine_channel_name">Emulated PC</string>
-    <string name="notif_wine_channel_desc">Status of the emulated Steam + Wallpaper Engine under Wine.</string>
-    <string name="notif_wine_title_stopped">Steam backend stopped</string>
-    <string name="notif_wine_title_starting">Steam backend starting…</string>
-    <string name="notif_wine_title_running">Steam backend running</string>
-    <string name="notif_wine_text_idle">No wallpapers queued.</string>
-    <string name="notif_wine_text_downloading">Downloading: %1$s</string>
-    <string name="notif_wine_text_rendering">Rendering: %1$s</string>
-    <string name="notif_wine_text_error">Error: %1$s</string>
 
     <!-- Errors -->
-    <string name="err_no_root">Root not available. Wine will run via PRoot (slower).</string>
-    <string name="err_wine_prefix_corrupt">Wine prefix is corrupt. Reset it in Settings.</string>
     <string name="err_steam_login_failed">Steam login failed. Check credentials and try again.</string>
     <string name="err_workshop_download_failed">Workshop download failed for %1$s.</string>
     <string name="err_mpkg_not_ready">Wallpaper is still being prepared. Try again in a moment.</string>

@@ -98,11 +98,13 @@ fun WallpaperCard(
     // shown as a fallback. The "by …" line is hidden entirely until the
     // repo's creatorNames cache has resolved a friendly display name for
     // this creator. The clickable behavior is preserved when a creator
-    // steam ID is available (the resolution can complete after the card
+    // ID is available (the resolution can complete after the card
     // is first rendered — tapping still works because we use
-    // `creatorSteamId` directly for the click handler, not the displayed
-    // name).
-    val creatorSteamId = item.creatorSteamId
+    // `item.creator` directly for the click handler, not the displayed
+    // name). We use `item.creator` (always populated by Steam) rather than
+    // `item.creatorSteamId` (null for HTTP-API-sourced items) so the click
+    // works regardless of which code path produced the item.
+    val creatorId = item.creator
     val displayName: String? = when {
         !creatorName.isNullOrBlank() -> creatorName
         item.creator.isNotBlank() -> item.creator
@@ -189,15 +191,15 @@ fun WallpaperCard(
             }
             // "by <creator>" — clickable when a creator steam ID is available
             if (displayName != null) {
-                val clickableModifier = if (!creatorSteamId.isNullOrBlank()) {
+                val clickableModifier = if (creatorId.isNotBlank()) {
                     Modifier.clickable {
                         WepWawetLogger.workshop(
                             "wallpaper_card_creator_tap",
                             "id" to item.id,
-                            "creator_steam_id" to creatorSteamId,
+                            "creator_steam_id" to creatorId,
                             "creator_name" to displayName,
                         )
-                        onCreatorClick(creatorSteamId)
+                        onCreatorClick(creatorId)
                     }
                 } else {
                     Modifier
@@ -205,13 +207,13 @@ fun WallpaperCard(
                 Text(
                     text = "by $displayName",
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (creatorSteamId != null)
+                    color = if (creatorId.isNotBlank())
                         Color.White.copy(alpha = 0.95f)
                     else
                         Color.White.copy(alpha = 0.7f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    textDecoration = if (creatorSteamId != null)
+                    textDecoration = if (creatorId.isNotBlank())
                         TextDecoration.Underline
                     else TextDecoration.None,
                     modifier = clickableModifier,

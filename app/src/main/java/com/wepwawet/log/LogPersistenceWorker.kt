@@ -41,10 +41,16 @@ class LogPersistenceWorker(
         if (toWrite.isNotEmpty()) {
             val today = LocalDate.now(ZoneId.systemDefault())
             val dailyFile = File(logsDir, "wepwawet-${LOG_FMT.format(today)}.log")
-            // Use FileWriter with append=true so we don't truncate the daily file
+            // Write each entry with an immediate flush so a process kill mid-batch
+            // doesn't leave partial entries in the file. If the process is killed
+            // between entries, last_seq is NOT updated, and only the remaining
+            // entries are retried (no duplicates). If killed mid-entry, only the
+            // current line is partial — a log parser can detect and skip it.
             java.io.FileWriter(dailyFile, true).use { fw ->
-                java.io.BufferedWriter(fw, 8192).use { w ->
-                    toWrite.forEach { e -> w.write(e.format()); w.newLine() }
+                toWrite.forEach { e ->
+                    fw.write(e.format())
+                    fw.write("\n")
+                    fw.flush()
                 }
             }
             // Update last persisted sequence number

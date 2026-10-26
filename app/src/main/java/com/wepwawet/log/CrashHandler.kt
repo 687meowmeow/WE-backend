@@ -68,10 +68,21 @@ class CrashHandler private constructor(
             Log.e(TAG, "=== WepWawet crash ===\n${report}", e)
         }
 
-        // Chain to the previous handler (default Android handler shows the dialog + restarts)
-        runCatching { previousHandler?.uncaughtException(t, e) }
-        // If previous was null, force-kill so we don't get into a zombie state
-        exitProcess(1)
+        // Chain to the previous handler — let the default Android handler show
+        // the crash dialog + kill the process. If previousHandler is null (no
+        // default handler registered), force-kill so we don't zombie.
+        if (previousHandler != null) {
+            try {
+                previousHandler.uncaughtException(t, e)
+            } catch (handlerEx: Throwable) {
+                Log.e(TAG, "Default crash handler threw — force-killing", handlerEx)
+            }
+            // If we get here, the handler didn't kill us — force-kill.
+            exitProcess(1)
+        } else {
+            Log.e(TAG, "No previous crash handler — force-killing")
+            exitProcess(1)
+        }
     }
 
     // ====== Report builder ======

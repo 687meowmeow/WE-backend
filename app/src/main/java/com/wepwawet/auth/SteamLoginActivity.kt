@@ -11,6 +11,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
+import androidx.activity.addCallback
 import androidx.core.content.edit
 import com.wepwawet.log.WepWawetLogger
 
@@ -111,19 +112,19 @@ class SteamLoginActivity : ComponentActivity() {
         WepWawetLogger.steam("SteamLoginActivity loading URL",
             "url" to LOGIN_URL)
         setContentView(webView)
-    }
 
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        // Check if user logged in before finishing
-        val cookies = CookieManager.getInstance().getCookie("https://steamcommunity.com/")
-        if (cookies != null && cookies.contains("steamLoginSecure")) {
-            WepWawetLogger.steam("SteamLogin: back pressed, detected login cookies")
-            handleLoginSuccess()
-        } else {
-            WepWawetLogger.steam("SteamLogin: back pressed, no login cookies")
-            setResult(Activity.RESULT_CANCELED)
-            finish()
+        // Register an OnBackPressedCallback — the deprecated onBackPressed()
+        // is bypassed on Android 14+ with predictive-back enabled.
+        onBackPressedDispatcher.addCallback(this) {
+            val cookies = CookieManager.getInstance().getCookie("https://steamcommunity.com/")
+            if (cookies != null && cookies.contains("steamLoginSecure")) {
+                WepWawetLogger.steam("SteamLogin: back pressed, detected login cookies")
+                handleLoginSuccess()
+            } else {
+                WepWawetLogger.steam("SteamLogin: back pressed, no login cookies")
+                setResult(Activity.RESULT_CANCELED)
+                finish()
+            }
         }
     }
 

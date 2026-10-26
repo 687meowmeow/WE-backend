@@ -52,6 +52,7 @@ class SteamApiService(
     private val httpClient: OkHttpClient = defaultClient(),
     private val gson: Gson = defaultGson(),
     /** Steam Web API key for IPublishedFileService/QueryFiles (server-side sorting). */
+    @Volatile
     var apiKey: String? = null,
     /**
      * Android Context for the persistent creator-name cache (SharedPreferences).

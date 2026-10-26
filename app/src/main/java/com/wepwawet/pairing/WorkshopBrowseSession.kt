@@ -13,6 +13,8 @@ import com.wepwawet.log.WepWawetLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.locks.ReentrantLock
+import java.util.concurrent.TimeUnit
 
 /**
  * Singleton long-lived JavaSteam session used for workshop BROWSE queries.
@@ -65,6 +67,12 @@ object WorkshopBrowseSession {
     /** Maximum time to wait for authentication to complete (in milliseconds). */
     private const val AUTH_TIMEOUT_MS = 60_000L
 
+    /** Lock that serializes concurrent ensureConnected calls. Uses tryLock with
+     *  a 30-second timeout so queued browse queries don't block indefinitely when
+     *  auth is in progress (which can take up to 120s). Replaces the original
+     *  synchronized(authLock) which had no timeout. */
+    private val authLock = ReentrantLock()
+
     /** Singleton downloader instance — null until first [queryFiles] call. */
     @Volatile
     private var downloader: WorkshopDownloader? = null
@@ -90,7 +98,15 @@ object WorkshopBrowseSession {
         if (isAuthenticated && downloader?.isSteamConnected() == true && downloader?.getSteamWorkshopHandler() != null) {
             return true
         }
-        synchronized(authLock) {
+        // Use tryLock with a 30-second timeout — prevents indefinite blocking
+        // when multiple browse queries queue up while auth is in progress
+        // (which can take up to 120s). Replaces the original synchronized(authLock)
+        // which had no timeout and blocked queued callers indefinitely.
+        if (!authLock.tryLock(30, TimeUnit.SECONDS)) {
+            WepWawetLogger.workshopWarn("$TAG: auth lock timeout (30s) — another auth in progress")
+            return false
+        }
+        try {
             // Double-check after acquiring lock
             if (isAuthenticated && downloader?.isSteamConnected() == true && downloader?.getSteamWorkshopHandler() != null) {
                 return true
@@ -101,7 +117,7 @@ object WorkshopBrowseSession {
             val password = SteamCredentialsStore.getPassword(context)
             val guardCode = SteamCredentialsStore.getGuardCode(context)
             if (username == null || password == null) {
-                WepWawetLogger.workshopWarn("$TAG: no Steam credentials saved",)
+                WepWawetLogger.workshopWarn("$TAG: no Steam credentials saved")
                 return false
             }
 
@@ -109,7 +125,6 @@ object WorkshopBrowseSession {
             val downloader = this.downloader ?: WorkshopDownloader(username, password, guardCode).also {
                 this.downloader = it
             }
-            this.downloader = downloader
 
             // Try to connect
             WepWawetLogger.workshop("$TAG: connecting to Steam for browse session…",
@@ -134,6 +149,8 @@ object WorkshopBrowseSession {
             isAuthenticated = true
             WepWawetLogger.workshop("$TAG: browse session ready — ISteamPublishedFile.QueryFiles available")
             return true
+        } finally {
+            authLock.unlock()
         }
     }
 

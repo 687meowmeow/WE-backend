@@ -54,9 +54,6 @@ import com.wepwawet.data.WorkshopRepository
 import com.wepwawet.data.model.WorkshopItemTyped
 import com.wepwawet.log.WepWawetLogger
 import com.wepwawet.pairing.PairingService
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import java.io.File
 
 /**
  * Wallpaper detail screen.
@@ -125,6 +122,7 @@ fun WallpaperDetailScreen(
     //     implementation used rememberCoroutineScope() which was cancelled when
     //     the composable left composition, killing the download mid-flight. ===
     val downloadState by com.wepwawet.pairing.WorkshopDownloadJob.state.collectAsState()
+    val creatorNames by repo.creatorNames.collectAsState()
     // True if THIS screen's item is the one currently being downloaded.
     val isThisItemDownloading = downloadState.isRunning &&
         downloadState.workshopId == itemId
@@ -249,7 +247,7 @@ fun WallpaperDetailScreen(
                     Column(modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         MetadataRow("Type", current.type.displayName)
-                        MetadataRow("Creator", current.creator.ifBlank { "Unknown" })
+                        MetadataRow("Creator", creatorNames[current.creator] ?: current.creator.ifBlank { "Unknown" })
                         MetadataRow("Subscriptions", current.subscriptionsFormatted)
                         MetadataRow("Favorites", current.favorited.toString())
                         MetadataRow("Views", current.views.toString())
@@ -488,71 +486,6 @@ private fun MetadataRow(label: String, value: String) {
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
         )
-    }
-}
-
-// ====== Side helper: download the preview image to a local cache ======
-// (Used by future iterations; currently the send-to-phone flow uses the
-//  JavaSteam direct download path inside WorkshopDownloadJob.launchSendToPhone,
-//  which produces the real .pkg rather than just the preview thumbnail.)
-
-private val downloadHttpClient = OkHttpClient.Builder().build()
-
-/**
- * Best-effort download of the workshop item's preview_url to the app's external
- * cache dir (`/sdcard/Android/data/com.wepwawet/cache/wallpapers/<id>.jpg`).
- *
- * NOTE: This downloads the *preview thumbnail*, not the actual wallpaper content
- * (which is fetched separately via JavaSteam using the user's credentials).
- *
- * @return the downloaded File, or `null` on failure
- */
-private suspend fun downloadWallpaper(
-    context: Context,
-    item: WorkshopItemTyped,
-    onProgress: (Float) -> Unit,
-): File? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-    val url = item.previewUrl ?: return@withContext null
-    try {
-        val outDir = File(context.externalCacheDir, "wallpapers").apply { mkdirs() }
-        val outFile = File(outDir, "${item.id}.jpg")
-        // If we've already downloaded it, just return it
-        if (outFile.exists() && outFile.length() > 0) {
-            onProgress(1f)
-            WepWawetLogger.workshop("downloadWallpaper: cache hit",
-                "file" to outFile.name, "size" to outFile.length())
-            return@withContext outFile
-        }
-
-        val request = Request.Builder().url(url).build()
-        val response = downloadHttpClient.newCall(request).execute()
-        if (!response.isSuccessful) {
-            WepWawetLogger.workshopWarn("downloadWallpaper HTTP error",
-                "code" to response.code, "url" to url.take(120))
-            return@withContext null
-        }
-        val body = response.body ?: return@withContext null
-        val totalBytes = body.contentLength().toFloat().coerceAtLeast(1f)
-        body.byteStream().use { input ->
-            outFile.outputStream().use { output ->
-                val buffer = ByteArray(8 * 1024)
-                var read: Int
-                var downloaded = 0L
-                while (input.read(buffer).also { read = it } != -1) {
-                    output.write(buffer, 0, read)
-                    downloaded += read
-                    onProgress((downloaded / totalBytes).coerceIn(0f, 1f))
-                }
-            }
-        }
-        onProgress(1f)
-        WepWawetLogger.workshop("downloadWallpaper done",
-            "file" to outFile.name, "size" to outFile.length())
-        outFile
-    } catch (e: Exception) {
-        WepWawetLogger.workshopWarn("downloadWallpaper failed",
-            "exception" to e.javaClass.name, "message" to (e.message ?: ""))
-        null
     }
 }
 

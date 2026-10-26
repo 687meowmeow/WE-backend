@@ -972,7 +972,7 @@ private fun WallpaperGrid(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(items, key = { it.id }) { item ->
-                val resolvedName = item.creatorSteamId?.let { creatorNames[it] }
+                val resolvedName = creatorNames[item.creator]
                 WallpaperCard(
                     item = item,
                     tileSize = tileSize,

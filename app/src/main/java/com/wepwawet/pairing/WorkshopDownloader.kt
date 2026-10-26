@@ -190,6 +190,12 @@ class WorkshopDownloader(
     @Volatile private var isReconnectingForFallback = false  // true when our modern-auth fallback called steamClient.connect() — prevents onDisconnected(user_initiated=true) from killing the callback thread
     private val subscriptions = mutableListOf<Closeable>()
 
+    /** Tracks the callback dispatch thread so we can interrupt+join it before
+     *  spawning a new one on reconnect. Without this, the old thread (still
+     *  inside runWaitCallbacks(1000L)) races with the new thread — callbacks
+     *  may be dispatched to neither, one, or both threads. */
+    @Volatile private var callbackThread: Thread? = null
+
     private fun updateStatus(msg: String) {
         WepWawetLogger.proxy("$TAG: $msg")
         statusCallback?.invoke(msg)
@@ -858,10 +864,18 @@ class WorkshopDownloader(
         // polling loop (it checks isRunning at the top of each iteration).
         // We'll set it back to true below before spawning the new thread.
         isRunning = false
-        // Give the old thread a moment to exit cleanly (it might be in a 1s
-        // runWaitCallbacks call). 100ms is enough — the thread checks isRunning
-        // after each runWaitCallbacks returns.
-        try { Thread.sleep(100) } catch (_: InterruptedException) {}
+        // Interrupt the old thread so it exits immediately even if it's inside
+        // runWaitCallbacks(1000L) (which blocks for up to 1 second). Then join
+        // for up to 2 seconds to ensure it's fully dead before we spawn a new
+        // one — this prevents the race where both old and new threads call
+        // runWaitCallbacks on the same callbackManager concurrently.
+        callbackThread?.let { oldThread ->
+            try {
+                oldThread.interrupt()
+                oldThread.join(2000)
+            } catch (_: Exception) {}
+        }
+        callbackThread = null
 
         val dispatcher = okhttp3.Dispatcher(Executors.newCachedThreadPool { r ->
             Thread(r, "JavaSteam-Http").apply { isDaemon = true }
@@ -956,7 +970,9 @@ class WorkshopDownloader(
                 }
             }
             WepWawetLogger.proxy("$TAG: callback thread EXITED (isRunning=false)")
-        }, "JavaSteam-Callback").start()
+        }.apply { name = "JavaSteam-Callback"; isDaemon = true }.also {
+            callbackThread = it
+        }.start()
 
         val timeout = 120000L
         val start = System.currentTimeMillis()
@@ -1291,10 +1307,21 @@ class WorkshopDownloader(
             return
         }
         if (!callback.isUserInitiated && authenticated) {
-            try { Thread.sleep(2000); steamClient?.connect() } catch (_: Exception) {}
+            // Spawn a NEW thread for the reconnect attempt — calling connect()
+            // from the callback thread (which dispatched onDisconnected) risks
+            // re-entering the connection state machine and deadlocking JavaSteam's
+            // internal locks. The callback thread must be free to drain any
+            // remaining callbacks from the old connection.
+            Thread {
+                try { Thread.sleep(2000); steamClient?.connect() } catch (_: InterruptedException) {}
+                catch (_: Exception) {}
+            }.apply { isDaemon = true; name = "JavaSteam-Reconnect"; start() }
         } else if (!callback.isUserInitiated && !authenticated) {
-            // Reconnect during initial connection attempt
-            try { Thread.sleep(2000); steamClient?.connect() } catch (_: Exception) {}
+            // Reconnect during initial connection attempt — same: spawn a new thread.
+            Thread {
+                try { Thread.sleep(2000); steamClient?.connect() } catch (_: InterruptedException) {}
+                catch (_: Exception) {}
+            }.apply { isDaemon = true; name = "JavaSteam-Reconnect"; start() }
         } else {
             isRunning = false
         }

@@ -62,16 +62,19 @@ fun LogsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val events = remember { mutableStateListOf<LogEntry>() }
-    val tick = remember { mutableIntStateOf(0) }
     var isDownloading by remember { mutableStateOf(false) }
     var downloadStatus by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
-        while (true) {
-            events.clear()
-            events.addAll(WepWawetLogger.snapshot())
-            tick.intValue++
-            delay(500)
+        // Initial load from the ring buffer snapshot
+        events.clear()
+        events.addAll(WepWawetLogger.snapshot())
+        // Incremental updates — only new entries trigger recomposition.
+        // Replaces the previous 500ms full-snapshot polling which caused
+        // full-LazyColumn recomposition twice per second.
+        WepWawetLogger.events.collect { entry ->
+            events.add(entry)
+            while (events.size > 2000) events.removeAt(0)
         }
     }
 

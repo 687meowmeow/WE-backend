@@ -215,7 +215,13 @@ object WepWawetLogger {
         val sb = StringBuilder(128)
         context.forEach { (k, v) ->
             if (sb.isNotEmpty()) sb.append(' ')
-            sb.append(k).append('=').append(v?.toString() ?: "null")
+            val vStr = v?.toString() ?: "null"
+            // Quote values containing spaces or '=' so log parsing is unambiguous
+            if (vStr.contains(' ') || vStr.contains('=')) {
+                sb.append(k).append("=\"").append(vStr.replace("\"", "\\\"")).append('"')
+            } else {
+                sb.append(k).append('=').append(vStr)
+            }
         }
         return sb.toString()
     }

@@ -90,7 +90,6 @@ class WePairingServer {
         private const val AES_IV_SIZE = 16
         // VERIFIED from decompiled TransferService.java
         private const val CONNECTION_PROTOCOL_VERSION = 4
-        private const val MPKG_SUPPORT_VERSION = "PKGM0020"
     }
 
     private var serverSocket: ServerSocket? = null
@@ -291,7 +290,19 @@ class WePairingServer {
             // Consume the remaining 6 bytes of "heartbeat\n": t,b,e,a,t,\n
             val rest = ByteArray(6)
             input.readFully(rest)
-            return "heartbeat" to null
+            // Verify the remaining bytes match "tbeat\n" exactly — if they
+            // don't, the stream is out of sync and we should close the connection
+            // rather than silently consume malformed data.
+            if (rest[0] == 't'.code.toByte() && rest[1] == 'b'.code.toByte() &&
+                rest[2] == 'e'.code.toByte() && rest[3] == 'a'.code.toByte() &&
+                rest[4] == 't'.code.toByte() && rest[5] == '\n'.code.toByte()) {
+                return "heartbeat" to null
+            } else {
+                // Malformed heartbeat — stream is out of sync
+                WepWawetLogger.proxyWarn("malformed heartbeat — closing connection",
+                    "rest_hex" to rest.joinToString("") { "%02x".format(it) })
+                return "invalid" to null
+            }
         }
         // Otherwise treat as little-endian length prefix
         val length = (header[0].toInt() and 0xFF) or

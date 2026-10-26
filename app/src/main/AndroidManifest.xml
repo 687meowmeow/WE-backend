@@ -7,7 +7,7 @@
     <!-- Pairing proxy: bind TCP 7889 (foreground service) -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
 
     <!-- Foreground service (post-Android 14 typed) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -17,7 +17,7 @@
     <!-- Wake lock so the Wine process doesn't sleep mid-render -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Keep Wi-Fi alive for the (rare) LAN-pair fallback -->
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
     <!-- Multicast lock for UDP 7884 + 239.100.0.1 (if user enables mDNS discovery fallback) -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
@@ -111,21 +111,6 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Runs a Wallpaper Engine pairing proxy (UDP 7884 discovery + TCP 7889 RSA/AES handshake + .mpkg wallpaper transfer) so the official Wallpaper Engine Android app can pair with this device and receive wallpapers." />
-        </service>
-
-        <!--
-            Wine Process Service — runs the emulated Steam+WE under Wine+Box64.
-            Type: specialUse — Wine is a long-running background process that doesn't fit standard types.
-            Per Android 14, we declare the use case in <property>.
-        -->
-        <service
-            android:name=".wine.WineProcessService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse"
-            android:stopWithTask="false">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Runs an emulated Steam + Wallpaper Engine client under Wine+Box64 to provide local workshop content and pairing-compatible wallpaper files for the user's official Wallpaper Engine Android app." />
         </service>
 
         <!-- ====== FileProvider — expose the .mpkg outbox so the official WE app could read it if it needs to ====== -->
