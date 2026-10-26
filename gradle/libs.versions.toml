@@ -25,7 +25,7 @@ espresso = "3.6.1"
 # Without this patch, Steam returns fileType=0 for some Wallpaper Engine
 # workshop items (e.g., 3823357259) and the library skips the file
 # silently — causing awaitCompletion to hang forever.
-javasteam = "v1.8.0-wepwawet9"
+javasteam = "v1.8.0-wepwawet10"
 bouncycastle = "1.84"
 # zstd-jni — required by JavaSteam DepotDownloader for Zstd decompression of
 # depot chunks. Without this, the download crashes with NoClassDefFoundError
