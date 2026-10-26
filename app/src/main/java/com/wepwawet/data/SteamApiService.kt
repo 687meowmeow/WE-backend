@@ -341,7 +341,7 @@ class SteamApiService(
                     .append("%5D=").append(MOBILE_COMPAT_KVS_VALUE)
             }
             // Trend days (only for RankedByTrend)
-            if (sort.queryType == 3 && sort.trendDays > 0) {
+            if (sort.queryType == 3 && sort.trendDays > 0) {  // queryType 3 = RankedByTrend; days range [1,7] per Steam docs
                 urlBuilder.append("&days=").append(sort.trendDays)
             }
             // Search text
@@ -920,16 +920,23 @@ class SteamApiService(
      * The [queryType] maps to Steam's EPublishedFileQueryType enum:
      *   0  = RankedByVote
      *   1  = RankedByPublicationDate
-     *   3  = RankedByTrend (uses [trendDays])
-     *   10 = RankedByVotesUp
-     *   11 = RankedByTextSearch
-     *   12 = RankedByTotalUniqueSubscriptions
+     *   2  = AcceptedForGameRankedByAcceptanceDate
+     *   3  = RankedByTrend (uses [trendDays], range [1,7] per Steam docs)
+     *   9  = RankedByTotalUniqueSubscriptions
+     *   10 = RankedByTotalVotesAsc (ASCENDING — lowest first, OPPOSITE of Most Up Votes)
+     *   11 = RankedByVotesUp (DESCENDING — highest first)
+     *   12 = RankedByTextSearch (search only)
+     *
+     * Source: https://partner.steamgames.com/doc/webapi/IPublishedFileService
+     * DO NOT trust this file's old comment — it was wrong and caused v0.5.14-alpha's
+     * C3 fix to be applied BACKWARDS, breaking Most Popular, Most Up Votes, Most
+     * Subscriptions, and Most Relevant sorts.
      *
      * Requires a Steam Web API key (obtainable from steamcommunity.com/dev/apikey).
      * When no key is set, falls back to HTML scraping (only trend/toprated/mostrecent
      * work — Most Up Votes and Most Subscriptions are disabled in the UI).
      *
-     * Default sort = MOST_POPULAR_YEAR (trend with days=365), matching WE's default.
+     * Default sort = MOST_POPULAR_YEAR (trend with days=7, capped per Steam API range [1,7]).
      */
     enum class Sort(
         val queryType: Int,       // EPublishedFileQueryType
@@ -938,14 +945,14 @@ class SteamApiService(
         val trendDays: Int = 0,
     ) {
         TOP_RATED(0, "toprated", "Top Rated"),
-        MOST_POPULAR_YEAR(2, "trend", "Most Popular (Year)", trendDays = 365),
-        MOST_POPULAR_MONTH(2, "trend", "Most Popular (Month)", trendDays = 31),
-        MOST_POPULAR_WEEK(2, "trend", "Most Popular (Week)", trendDays = 7),
-        MOST_POPULAR_TODAY(2, "trend", "Most Popular (Today)", trendDays = 1),
+        MOST_POPULAR_YEAR(3, "trend", "Most Popular (Year)", trendDays = 7),  // capped at 7 per Steam API docs [1,7]
+        MOST_POPULAR_MONTH(3, "trend", "Most Popular (Month)", trendDays = 7),  // capped at 7 per Steam API docs [1,7]
+        MOST_POPULAR_WEEK(3, "trend", "Most Popular (Week)", trendDays = 7),
+        MOST_POPULAR_TODAY(3, "trend", "Most Popular (Today)", trendDays = 1),
         MOST_RECENT(1, "mostrecent", "Most Recent"),
-        MOST_UP_VOTES(10, "toprated", "Most Up Votes"),
-        MOST_SUBSCRIPTIONS(12, "toprated", "Most Subscriptions"),
-        MOST_RELEVANT(11, "mostrelevant", "Most Relevant"), // search only
+        MOST_UP_VOTES(11, "toprated", "Most Up Votes"),
+        MOST_SUBSCRIPTIONS(9, "toprated", "Most Subscriptions"),
+        MOST_RELEVANT(12, "mostrelevant", "Most Relevant"), // search only
         ;
     }
 
