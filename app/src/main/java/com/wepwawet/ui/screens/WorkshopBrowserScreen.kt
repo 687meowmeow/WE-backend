@@ -83,6 +83,7 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 
 /**
@@ -372,70 +373,31 @@ fun WorkshopBrowserScreen(
         creatorSteamId = creatorSteamId,
     )
 
-    // === When ANY filter changes (or creatorSteamId), start a new browse session ===
-    // v0.5.13-alpha (browser filter fix): DEDUPLICATE startBrowse calls.
-    //  Previously, when filterLoaded transitioned false→true, this LaunchedEffect
-    //  fired TWICE (once for filterLoaded change, once for... something else —
-    //  possibly the per-key save LaunchedEffects modifying state indirectly).
-    //  Each startBrowse call resets currentPage to 0 and clears _browseItems,
-    //  causing the in-flight loadNextPage to be cancelled
-    //  (LeftCompositionCancellationException → user saw "loading more" flashing
-    //  "loading failed" in v0.5.11, then in v0.5.12 the cancellation loop was
-    //  fixed but the user got stuck at 1 item because the second startBrowse
-    //  reset currentPage to 0, so the collect's loadNextPage call was for
-    //  page=1 instead of page=2).
-    //
-    //  FIX: track the last filter we called startBrowse with. If the current
-    //  filter is the SAME as the last one, skip the startBrowse call (it's a
-    //  duplicate). This deduplicates the LaunchedEffect re-fires.
+    // === When ANY filter changes — snapshotFlow+collect (M1 fix) ===
+    // v0.5.14-alpha: Use LaunchedEffect(Unit)+snapshotFlow to avoid
+    // cancellation when keys change. Only calls startBrowse when the
+    // filter ACTUALLY changes (dedup via lastStartBrowseFilter).
     val lastStartBrowseFilter = remember { androidx.compose.runtime.mutableStateOf<WorkshopRepository.Filter?>(null) }
-    LaunchedEffect(sort, mobileCompatible, excludedTags, creatorSteamId, filterLoaded) {
-        // Don't restart the browse session until the saved filter state has
-        // been loaded — otherwise the very first composition would start a
-        // browse with the defaults, then immediately restart it once the
-        // LaunchedEffect(Unit) applies the saved values.
-        if (!filterLoaded) return@LaunchedEffect
-        val currentFilterSnapshot = currentFilter()
-        // v0.5.13-alpha: deduplicate — if the filter hasn't actually changed
-        // since the last startBrowse call, skip. This prevents the duplicate
-        // filter_changed events that were causing currentPage to be reset to 0
-        // mid-load.
-        if (currentFilterSnapshot == lastStartBrowseFilter.value) {
-            WepWawetLogger.workshop(
-                "filter_changed SKIPPED duplicate",
-                "sort" to sort.name,
-                "mobile_compatible" to mobileCompatible,
-                "excluded_tags_count" to excludedTags.size,
-                "creator_steam_id" to (creatorSteamId ?: "none"),
-                "filterLoaded" to filterLoaded,
-            )
-            return@LaunchedEffect
+    LaunchedEffect(Unit) {
+        snapshotFlow {
+            if (filterLoaded) currentFilter() else null
         }
-        lastStartBrowseFilter.value = currentFilterSnapshot
-        try {
-            WepWawetLogger.workshop(
-                "filter_changed restart_browse",
-                "sort" to sort.name,
-                "trend_days" to sort.trendDays,
-                "mobile_compatible" to mobileCompatible,
-                "excluded_tags_count" to excludedTags.size,
-                "excluded_tags" to excludedTags.joinToString(","),
-                "creator_steam_id" to (creatorSteamId ?: "none"),
-                "filterLoaded" to filterLoaded,
-            )
-            // Clear search so we fall back to browse mode display
-            if (query.isNotBlank()) {
-                updateQuery("")
-                repo.clearSearch()
+            .distinctUntilChanged()
+            .filterNotNull()
+            .collect { filter ->
+                if (filter != lastStartBrowseFilter.value) {
+                    lastStartBrowseFilter.value = filter
+                    WepWawetLogger.workshop("filter_changed restart_browse",
+                        "sort" to sort.name, "trend_days" to sort.trendDays,
+                        "mobile_compatible" to mobileCompatible,
+                        "excluded_tags_count" to excludedTags.size,
+                        "excluded_tags" to excludedTags.joinToString(","),
+                        "creator_steam_id" to (creatorSteamId ?: "none"),
+                    )
+                    if (query.isNotBlank()) { updateQuery(""); repo.clearSearch() }
+                    repo.startBrowse(filter)
+                }
             }
-            repo.startBrowse(currentFilterSnapshot)
-        } catch (e: Exception) {
-            WepWawetLogger.workshopWarn(
-                "filter_changed restart_browse failed",
-                "exception" to e.javaClass.name,
-                "message" to (e.message ?: ""),
-            )
-        }
     }
 
     // === Debounced search: when the user types, after 500 ms of quiet, fire startSearch ===
@@ -493,62 +455,32 @@ fun WorkshopBrowserScreen(
     val displayState = if (inSearchMode) searchState else browseState
     val displayItems: List<WorkshopItemTyped> = if (inSearchMode) searchItems else items
 
-    // === Infinite scroll: predictive preload + auto-load when total is small ===
-    // v0.5.12-alpha (browser filter fix): COMPLETE REWRITE of the trigger logic.
-    //  v0.5.11-alpha used LaunchedEffect(shouldLoadMore, displayItems.size, displayState)
-    //  which caused a CANCELLATION LOOP: when loadNextPage set _browseState=Loading(N+1),
-    //  the displayState key change re-fired the LaunchedEffect, cancelling the in-flight
-    //  loadNextPage call (LeftCompositionCancellationException). The user saw "loading
-    //  more" flashing "loading failed" repeatedly. Log showed:
-    //    [WEP-WS] WARN: loadNextPage exception page=1
-    //      exception=androidx.compose.runtime.LeftCompositionCancellationException
-    //    [WEP-WS] INFO: infinite_scroll triggered loadNextPage page=2 (RETRY)
-    //    [WEP-WS] WARN: loadNextPage exception page=1 (CANCELED AGAIN)
-    //    ... (infinite loop, page 2 never completes)
-    //
-    //  v0.5.12-alpha fix: use snapshotFlow + collect pattern inside a LaunchedEffect
-    //  keyed on FILTER CONTEXT (inSearchMode, isCreatorMode, creatorSteamId), NOT on
-    //  state. State changes don't cancel the LaunchedEffect. The snapshotFlow emits when
-    //  state changes, but collect is suspend — it waits for loadNextPage to complete
-    //  before processing the next emission. This breaks the cancellation loop.
-    //
-    //  The condition `displayState is Loaded && hasMore` ensures we only trigger when
-    //  in a stable Loaded state, not during Loading (which would cause duplicates).
-    //  When total=0 (page returned 0 new items), the `total < 30` branch triggers
-    //  auto-preload — so we keep loading pages until either items appear OR
-    //  hasMore=false OR the consecutive-empty-pages limit is hit (in WorkshopRepository).
-    LaunchedEffect(inSearchMode, isCreatorMode, creatorSteamId) {
-        // Re-launch the polling loop when the filter context changes (so a new
-        // browse session starts fresh). snapshotFlow emits the current state
-        // immediately on collection, then re-emits on state changes.
+    // === Infinite scroll: snapshotFlow reads State<T> directly (C2 fix) ===
+    // v0.5.14-alpha: Read State<T> delegates (items, browseState, etc.)
+    // DIRECTLY inside snapshotFlow block — NOT captured local vals.
+    // Captured vals don't register as State<T> reads, so snapshotFlow
+    // never re-evaluates when items/state change → stuck at 1 item.
+    LaunchedEffect(Unit) {
         snapshotFlow {
-            val total = displayItems.size
+            val curItems = items
+            val curSearchItems = searchItems
+            val curBrowseState = browseState
+            val curSearchState = searchState
+            val curQuery = query
+            val curInSearch = !isCreatorMode && (curSearchItems.isNotEmpty() ||
+                (curQuery.isNotBlank() && curSearchState !is WorkshopRepository.BrowseState.Idle))
+            val activeItems = if (curInSearch) curSearchItems else curItems
+            val activeState = if (curInSearch) curSearchState else curBrowseState
+            val total = activeItems.size
             val lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            val loadedState = displayState as? WorkshopRepository.BrowseState.Loaded
-            // Only trigger when:
-            //  - displayState is Loaded (not Idle/Loading/Done/Error)
-            //  - hasMore is true (more pages available)
-            //  - Either total < 30 (auto-preload to fill viewport) OR
-            //    lastVisible >= total - 6 (user near bottom, predictive preload)
-            val shouldLoad = loadedState != null && loadedState.hasMore &&
+            val loadedState = activeState as? WorkshopRepository.BrowseState.Loaded
+            loadedState != null && loadedState.hasMore &&
                 (total < 30 || (total > 0 && lastVisible >= total - 6))
-            // v0.5.13-alpha: detailed logging for snapshotFlow emissions.
-            //  This helps diagnose why the snapshotFlow didn't re-emit after
-            //  page 1 loaded in v0.5.12-alpha (user got stuck at 1 item).
-            WepWawetLogger.workshopDebug(
-                "snapshotFlow evaluated",
-                "total" to total,
-                "lastVisible" to lastVisible,
-                "loadedState" to (loadedState?.let { "Loaded(page=${it.page},hasMore=${it.hasMore})" } ?: "not-Loaded"),
-                "shouldLoad" to shouldLoad,
-            )
-            shouldLoad
-}
+        }
             .distinctUntilChanged()
             .filter { it }
             .collect {
-                WepWawetLogger.workshop(
-                    "infinite_scroll triggered loadNextPage",
+                WepWawetLogger.workshop("infinite_scroll triggered loadNextPage",
                     "last_visible" to (gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1),
                     "total" to displayItems.size,
                     "auto_preload" to (displayItems.size < 30),

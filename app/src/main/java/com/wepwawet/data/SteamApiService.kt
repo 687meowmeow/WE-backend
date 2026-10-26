@@ -938,14 +938,14 @@ class SteamApiService(
         val trendDays: Int = 0,
     ) {
         TOP_RATED(0, "toprated", "Top Rated"),
-        MOST_POPULAR_YEAR(3, "trend", "Most Popular (Year)", trendDays = 365),
-        MOST_POPULAR_MONTH(3, "trend", "Most Popular (Month)", trendDays = 31),
-        MOST_POPULAR_WEEK(3, "trend", "Most Popular (Week)", trendDays = 7),
-        MOST_POPULAR_TODAY(3, "trend", "Most Popular (Today)", trendDays = 1),
+        MOST_POPULAR_YEAR(2, "trend", "Most Popular (Year)", trendDays = 365),
+        MOST_POPULAR_MONTH(2, "trend", "Most Popular (Month)", trendDays = 31),
+        MOST_POPULAR_WEEK(2, "trend", "Most Popular (Week)", trendDays = 7),
+        MOST_POPULAR_TODAY(2, "trend", "Most Popular (Today)", trendDays = 1),
         MOST_RECENT(1, "mostrecent", "Most Recent"),
-        MOST_UP_VOTES(11, "toprated", "Most Up Votes"),
-        MOST_SUBSCRIPTIONS(9, "toprated", "Most Subscriptions"),
-        MOST_RELEVANT(12, "mostrelevant", "Most Relevant"), // search only
+        MOST_UP_VOTES(10, "toprated", "Most Up Votes"),
+        MOST_SUBSCRIPTIONS(12, "toprated", "Most Subscriptions"),
+        MOST_RELEVANT(11, "mostrelevant", "Most Relevant"), // search only
         ;
     }
 

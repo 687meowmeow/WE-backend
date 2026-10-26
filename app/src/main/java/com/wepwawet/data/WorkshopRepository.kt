@@ -67,6 +67,7 @@ class WorkshopRepository constructor(
 
     /** Mutex guards concurrent browse/search operations against each other. */
     private val browseLock = Mutex()
+    private var loadJob: kotlinx.coroutines.Job? = null  // M2 fix
 
     // ====== Search state (separate from browse so user can switch back) ======
 
@@ -141,6 +142,8 @@ class WorkshopRepository constructor(
      * Called when the user changes sort, tag, query, or creator.
      */
     suspend fun startBrowse(filter: Filter) {
+        loadJob?.cancel()
+        loadJob = null
         browseLock.withLock {
             currentFilter = filter
             currentPage = 0

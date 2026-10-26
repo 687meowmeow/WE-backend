@@ -75,7 +75,7 @@ fun WepWawetNavHost() {
     // The key is required for the IPublishedFileService/QueryFiles server-side
     // sort options (Most Up Votes, Most Subscriptions); without it, those sorts
     // fall back to HTML scraping (which doesn't support them).
-    val steamApi = remember { SteamApiService() }
+    val steamApi = remember { SteamApiService(appContext = context.applicationContext) }
     val repo = remember { WorkshopRepository(steamApi) }
 
     // Reload the Steam Web API key every time the user returns to the NavHost
