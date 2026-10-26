@@ -1,80 +1,99 @@
 # WepWawet
 
-> Steam Workshop browser & downloader for Android. Browse 3M+ Wallpaper Engine workshop items, log in with your own Steam account (2FA / Steam Guard supported), and download `.pkg` wallpaper packs directly to your phone. **No PC required.**
+> Steam Workshop browser & downloader for Android. Browse 3M+ Wallpaper Engine workshop items, log in with your own Steam account (2FA / Steam Guard supported), and download wallpaper packs straight to your phone. **No PC required.**
 
-**Status: v0.5.6-alpha — functional beta.** Pairing proxy is included for the official WE Android app.
+**Status: v0.5.19-alpha — functional alpha.** Browse → login → download works end-to-end on-device. A pairing proxy is included for the official Wallpaper Engine Android app.
 
 [![Build APK](https://github.com/687meowmeow/WE-backend/actions/workflows/build.yml/badge.svg)](https://github.com/687meowmeow/WE-backend/actions/workflows/build.yml)
 
+---
+
+## ⚠️ Vibe coded notice
+
+This project is **vibe coded**. It was built largely with AI assistance, by prompting, testing on a phone, and prompting again.
+
+## Why this exists
+
+Because I'm too lazy to turn my PC on.
+
+---
+
 ## What this is
 
-WepWawet is an Android app (Kotlin + Jetpack Compose, min Android 8.0 / API 26, target SDK 35) that lets you browse the Steam Workshop for Wallpaper Engine (app 431960), inspect items, and download the actual `.pkg` wallpaper packs to your device.
+WepWawet is an Android app (Kotlin + Jetpack Compose, min Android 8.0 / API 26, target SDK 35) that lets you browse the Steam Workshop for Wallpaper Engine (app 431960), inspect items, and download the actual wallpaper packs to your device.
 
-The download path is **on-device JavaSteam** — your Steam credentials live on your phone; JavaSteam talks directly to Steam's auth + content servers. **No PC, no server, no third-party service required.** Steam Guard 2FA codes are supported. Refresh tokens are saved to skip 2FA on subsequent sessions.
+Downloads run through **on-device JavaSteam**. Your Steam credentials stay on your phone and JavaSteam talks directly to Steam's auth and content servers. No PC, no server, no third-party service. Steam Guard 2FA is supported, and refresh tokens are saved so you can skip 2FA on later sessions.
 
-The repo also includes a foreground **pairing proxy** (`PairingProxyService`) that lets the official Wallpaper Engine Android app pair with this on-device "fake PC" — useful if you want WE's official UI to drive content served from WepWawet.
+The app also includes a foreground **pairing proxy** (`PairingService`) that lets the official Wallpaper Engine Android app pair with WepWawet acting as a "fake PC". This lets WE's own UI pull content served by WepWawet.
 
-## Features (v0.5.6-alpha)
+## Features
 
-- **Browse**: paginated `IPublishedFileService/QueryFiles` (server-side sorting, cursor-based pagination, proper `requiredtags[]` repeated-field format, auto-excludes Web/Application tags that aren't mobile-compatible).
-- **Search**: free-text search via `RankedByTextSearch` query type.
-- **Item details**: `ISteamRemoteStorage/GetPublishedFileDetails` enrichment with a robust `WorkshopItemDeserializer` that coerces Steam API type mismatches (e.g. `banned: Int → Boolean`) so future API changes won't crash parsing.
-- **Creator names**: async resolution via profile-page scraping (`resolveCreatorName`), capped at 8 concurrent lookups, fire-and-forget so items render immediately.
-- **Steam login**: WebView-based login with transparent 2FA / Steam Guard handling (`SteamLoginActivity`).
-- **JavaSteam download**: on-device `.pkg` download via JavaSteam's modern auth flow (`WorkshopDownloader.kt`). Saves refresh tokens to skip 2FA on subsequent sessions. Handles `RateLimitExceeded` by clearing the stale token.
+- **Browse**: paginated `IPublishedFileService/QueryFiles` with server-side sorting, cursor-based pagination, and automatic exclusion of Web/Application tags that aren't mobile-compatible.
+- **Search**: free-text search via `RankedByTextSearch`.
+- **Tag filtering**: tag picker sheet and adjustable tile sizes.
+- **Item details**: `ISteamRemoteStorage/GetPublishedFileDetails` enrichment, with a tolerant deserializer that survives Steam API type mismatches.
+- **Creator names**: resolved asynchronously, so items render immediately.
+- **Steam login**: WebView-based login with 2FA / Steam Guard handling (`SteamLoginActivity`).
+- **On-device download**: JavaSteam downloader (`WorkshopDownloader`) with saved refresh tokens and handling for rate limits and stale tokens.
+- **Package conversion**: `.pkg` → `.mpkg` packing with native ETC2 texture encoding (etc2comp via JNI) and LZ4 compression, so the official WE app can use the content.
 - **Download manager**: tracks active and completed downloads.
-- **Pairing proxy**: foreground service on UDP 7884 + TCP 7889 that implements the WE pairing protocol.
-- **Extensive logging**: structured logger (`WepWawetLogger`) with 6 levels, 7 domains, 2000-entry ring buffer, WorkManager daily flush, 14-day prune, and crash capture. **Download log button** in the Logs screen exports the full log buffer to the public Downloads/WepWawet/ folder.
+- **Pairing proxy**: foreground service speaking the WE pairing protocol (UDP discovery + TCP session).
+- **Logging**: structured logger (`WepWawetLogger`) with levels and domains, a ring buffer, daily WorkManager flush, crash capture, and a button to export logs to `Downloads/WepWawet/`.
+
+## Tech stack
+
+| Area | Tech |
+|------|------|
+| Language / UI | Kotlin 2.2, Jetpack Compose, Navigation Compose |
+| Networking | OkHttp, Retrofit, kotlinx.serialization |
+| Steam access | [JavaSteam](https://github.com/Longi94/JavaSteam) via a patched fork (`com.github.687meowmeow:JavaSteam`, `1.8.0-wepwawet10`) |
+| Images | Coil |
+| Background work | WorkManager, foreground services |
+| Native | C++ / CMake, etc2comp (ETC2 encoding) |
+| Compression | lz4-java, zstd-jni, XZ |
+| Build | Gradle (Kotlin DSL), AGP 8.7, GitHub Actions |
+
+The JavaSteam fork exists because upstream skips some Wallpaper Engine workshop items (it doesn't recognize their file type), which made downloads hang forever.
 
 ## Repo layout
 
 | Path | Purpose |
 |------|---------|
-| `app/` | Android app module (Kotlin + Jetpack Compose) |
-| `app/src/main/java/com/wepwawet/` | App source — UI, data, pairing, auth, log |
-| `app/build.gradle.kts` | App gradle config (versionCode, ABI filters, packaging rules) |
-| `app/proguard-rules.pro` | R8 rules (keep Gson reflection targets) |
-| `app/debug.keystore` | Stable debug keystore so all CI builds are signed with the same key |
-| `.github/workflows/build.yml` | CI: APK build → release |
-| `gradle/`, `build.gradle.kts`, `settings.gradle.kts`, `gradle.properties`, `gradlew*` | Gradle project files |
-| `ARCHITECTURE.md` | Architecture decisions, data flow |
-| `CHANGELOG.md` | Per-version changelog |
+| `app/` | Android app module |
+| `app/src/main/java/com/wepwawet/ui/` | Compose UI: screens, components, theme, nav host |
+| `app/src/main/java/com/wepwawet/data/` | Steam API service, repository, models, download manager |
+| `app/src/main/java/com/wepwawet/pairing/` | JavaSteam downloader, pairing server, discovery, `.pkg`/`.mpkg` handling, ETC2 encoder |
+| `app/src/main/java/com/wepwawet/auth/` | Steam login activity |
+| `app/src/main/java/com/wepwawet/log/` | Logger, crash handler, log persistence |
+| `app/src/main/cpp/` | JNI + bundled etc2comp |
+| `app/proguard-rules.pro` | R8 rules (Gson reflection, LZ4 — **don't remove these**, see `worklog.md`) |
+| `app/debug.keystore` | Stable debug keystore so all builds share a signing key |
+| `.github/workflows/build.yml` | CI: build the APK and attach it to a release |
+| `worklog.md` | Running audit notes and regression history |
 
 ## Device requirements
 
-- **SoC:** Snapdragon 8 Gen 2 or newer (for on-device JavaSteam path; pairing proxy path has no special hardware needs)
-- **RAM:** 6 GB+ recommended
-- **Storage:** 1 GB+ free for the app + downloaded `.pkg` files
 - **Android:** 8.0 (API 26) or higher
-- **Network:** Internet access for Steam APIs
+- **ABI:** arm64-v8a only
+- **SoC:** Snapdragon 8 Gen 2 or newer is the tested target
+- **RAM:** 6 GB+ recommended
+- **Storage:** 1 GB+ free for the app and downloaded packs
+- **Network:** internet access for Steam APIs
 
 ## Building
 
-### Local build
+### Local
 
-Requirements: JDK 17, Android SDK with NDK + CMake, x86_64 host (for Wine build steps if you also rebuild native components).
+Requirements: JDK 17 and the Android SDK with NDK + CMake.
 
 ```bash
 ./gradlew :app:assembleRelease
 ```
 
-The release APK is signed with `app/debug.keystore` (committed to the repo so all builds — local + CI — share a signing key). For a real release you should replace this with your own keystore before publishing.
+## Disclaimer
 
-### CI build
-
-Push a `v*` tag (e.g. `v0.5.6-alpha`) and GitHub Actions will assemble the APK and attach it to a Release. See `.github/workflows/build.yml`.
-
-## Quick navigation for new contributors
-
-1. Read `ARCHITECTURE.md` — explains what the system looks like end-to-end.
-2. Skim `app/src/main/java/com/wepwawet/data/` — Steam API service, repository, models.
-3. Skim `app/src/main/java/com/wepwawet/pairing/` — JavaSteam downloader, pairing proxy.
-4. Skim `app/src/main/java/com/wepwawet/ui/screens/` — Compose screens (browser, detail, downloads, settings, pairing, logs).
-
-## Versioning
-
-Pre-1.0 semver with `-alpha` suffix. As of v0.5.6-alpha the core browse → login → download loop is functional end-to-end on-device via JavaSteam. The pairing proxy is functional but the larger on-device Wine emulation plan (the original v0.1 vision) is on hold.
+Not affiliated with Valve, Steam, or Wallpaper Engine / Kristjan Skutta. You need your own Steam account, and you should only download content you own or are allowed to use. Respect the workshop creators' terms.
 
 ## License
 
-TBD. Will be either Apache 2.0 (with LGPL'd third-party modifications published as separate source archives per LGPL compliance) or GPL 3 to simplify compliance. See `LICENSE` once finalized.
+TBD. Likely Apache 2.0 or GPL 3, depending on what's simplest for third-party compliance. A `LICENSE` file will be added once decided.
