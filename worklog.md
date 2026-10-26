@@ -229,3 +229,194 @@ REMINDERS FOR FUTURE AGENTS (DO NOT IGNORE):
     (d) Push to GitHub only after CI passes (or commit locally + push later
         if CI is going to verify).
     (e) Update this worklog with reminders for the next agent.
+
+---
+
+Task ID: 11
+Agent: main (v0.5.10-alpha dev branch + browser filter fix)
+
+Task: User reported "the browser is only showing 4. there is an issue.
+  there should be way more. this is not intentional. It should continue
+  loading. there is way more than 4 wallpapers that meet the tags. it
+  did not do this in previous versions." User attached the WepWawet log
+  dump (wepwawet-logs-20261025-202954.txt) showing the actual API
+  behavior: 30 items per page from Steam, ~26 filtered out client-side,
+  leaving ~4 per page. Infinite scroll triggers ONCE for page 2, then
+  stops firing even though the user is at the bottom of the list.
+
+  User ALSO said: "rename the development branch to dev. ensure the
+  workflow works with it. all your work will go there now to avoid
+  regression problems again." So I had to create a `dev` branch and
+  route all future work through it (instead of main).
+
+  User explicitly said: "keep mobile compatible the same. you are not
+  fixing issues correctly you are changing defaults that i wanted and
+  mobile compatibility that is supposed to be marked like the real
+  wallpaper engine as i requested LIKE A RETARD." So I had to NOT
+  change mobileCompatible default (true) and NOT change the
+  defaultExcludedTags() default (18 non-mobile resolution tags). My
+  first attempt was wrong (I changed both defaults); I had to revert
+  and find the REAL root cause.
+
+Work Log:
+- Read the attached log carefully. The key signals were:
+    [WEP-WS] INFO: filter_changed restart_browse sort=MOST_SUBSCRIPTIONS
+      trend_days=0 mobile_compatible=true excluded_tags_count=18
+    [WEP-STEAM] INFO: queryFiles done items=30 total=3252519 page=1
+    [WEP-WS] INFO: loadNextPage done page=1 new_items=4
+      filtered_out=26 total_items=4
+  The API returned 30 items, but 26 were dropped client-side. That's an
+  87% drop rate. And after page 2 loaded +3 items (total=4), the
+  infinite_scroll trigger DIDN'T fire again even though the user was
+  at the bottom of the list (last_visible=3, total=4, threshold
+  last_visible >= total - 3 = 1, which is true).
+
+- Found TWO root causes:
+
+  ROOT CAUSE #1 (filter over-aggressive):
+    WorkshopRepository.applyClientFilters had a client-side
+    mobileCompatible type filter (step 2 of the pipeline):
+        if (filter.mobileCompatible) {
+            filtered = filtered.filter {
+                WorkshopTags.isMobileCompatible(it.type, it.tags)
+            }
+        }
+    WorkshopTags.isMobileCompatible returns true ONLY for SCENE and VIDEO
+    types — drops Image/Playlist/Unknown. But the Steam API URL ALREADY
+    filters server-side via required_kv_tags[app_workshop_eula_version]=3
+    (the AUTHOR's mobile-compatible permission flag — same logic WE PC
+    uses via canUploadWallpaperToMobileDevice). The client-side type
+    check was redundant AND over-aggressive: it dropped Image-type
+    wallpapers that the AUTHOR had explicitly marked as mobile-compatible.
+
+    FIX: removed the client-side mobileCompatible type filter from
+    applyClientFilters entirely. The mobileCompatible toggle now ONLY
+    controls the API URL param (which is what the user means by "marked
+    like the real wallpaper engine"). WorkshopTags.isMobileCompatible
+    is kept (still used by WallpaperCard for the mobile badge UI hint
+    on the card surface). The always-exclude Web/Application filter
+    (step 1) is kept — Web (HTML/CSS/JS) and Application (EXE-based)
+    truly cannot work on WE Android regardless of author flag.
+
+  ROOT CAUSE #2 (infinite scroll trigger doesn't re-fire):
+    WorkshopBrowserScreen had:
+        val shouldLoadMore by remember(...) { derivedStateOf { ... } }
+        LaunchedEffect(shouldLoadMore) {
+            if (shouldLoadMore) repo.loadNextPage()
+        }
+    LaunchedEffect(shouldLoadMore) only fires on TRANSITION false->true.
+    When the user is at the bottom of the list and a new page loads
+    (with new items appended below), shouldLoadMore STAYS true (the
+    user is still at the last visible item). The LaunchedEffect doesn't
+    re-fire, so the browser stops loading after the first page that
+    triggers the initial load.
+
+    FIX: add displayItems.size as a key to LaunchedEffect:
+        LaunchedEffect(shouldLoadMore, displayItems.size) {
+            if (shouldLoadMore) repo.loadNextPage()
+        }
+    When new items are appended, displayItems.size changes, the
+    LaunchedEffect re-fires. If shouldLoadMore is still true (user at
+    bottom), loadNextPage is called again. The browseLock mutex in
+    WorkshopRepository guards against duplicate loadNextPage calls —
+    the second fire loads page N+1, not a duplicate of page N.
+
+- First attempt was WRONG:
+    I changed mobileCompatible default true->false AND changed
+    defaultExcludedTags() to return emptyList(). User pushed back:
+    "no no you fool i should not see all resolutions by default. THAT
+    DOES NOT FUCKING FIX THE ISSUE YOU MORON. read the log i sent."
+    User wanted the resolution exclusions to STAY (they don't want
+    to see 1920x1080 etc. by default), and mobileCompatible to STAY
+    true (matches WE PC's logic). My defaults change was a band-aid
+    that didn't address the actual root cause.
+
+- Branch management:
+    - Renamed local `develop` branch -> `dev` (per user: "rename the
+      development branch to dev").
+    - Pushed `dev` to origin. Deleted origin/develop.
+    - Updated .github/workflows/build.yml to trigger on `branches:
+      [main, dev]` instead of `branches: [main, develop]` (so CI
+      runs on push to dev).
+
+- Other:
+    - Untracked download/wepwawet-apk-v0.5.9.zip (16MB binary
+      accidentally committed in 3fedf8e). Added download/ to
+      .gitignore so future APK artifacts don't get committed.
+    - Bumped versionCode 48->49, versionName 0.5.9-alpha->0.5.10-alpha.
+
+Stage Summary:
+- Two root causes fixed at their actual location (WorkshopRepository
+  applyClientFilters + WorkshopBrowserScreen LaunchedEffect), not
+  by changing defaults.
+- mobileCompatible default stays true. defaultExcludedTags() still
+  returns the 18 non-mobile resolution tags. WorkshopTags.
+  isMobileCompatible stays unchanged (still used by WallpaperCard).
+- All future agent work goes on `dev` branch, NOT main. Main stays at
+  the last stable tag (currently v0.5.9-alpha = c3e762a). User can
+  merge dev->main when confident.
+- CI workflow triggers on push to both main and dev.
+- Total code delta: ~83 insertions / ~22 deletions across 4 source
+  files + 1 workflow file.
+
+---
+ADDITIONAL REMINDERS FOR FUTURE AGENTS (added in Task 11):
+
+14. **All work goes on `dev` branch — NOT main.** The user explicitly
+    said "all your work will go there now to avoid regression problems
+    again." Main is reserved for stable releases. Merge dev->main only
+    when the user is confident the dev branch state is good.
+
+15. **CI triggers on push to both `main` and `dev`.** The workflow
+    file at .github/workflows/build.yml has `branches: [main, dev]`.
+    Push to dev to verify a build before merging to main. Push to
+    main only when ready to release.
+
+16. **The browser "only showing 4 items" issue (v0.5.10-alpha fix)
+    has TWO root causes — both must stay fixed:**
+    (a) WorkshopRepository.applyClientFilters MUST NOT have a
+        client-side mobileCompatible type filter (the API URL param
+        required_kv_tags[app_workshop_eula_version]=3 already filters
+        by author permission flag server-side). Adding a stricter
+        type check client-side drops Image-type wallpapers the author
+        marked as mobile-compatible.
+    (b) LaunchedEffect(shouldLoadMore) MUST include displayItems.size
+        in its keyset so it re-fires when new items are appended
+        (otherwise infinite scroll stops loading after one page
+        when the user is at the bottom).
+
+17. **DO NOT change defaults to fix bugs.** The user explicitly
+    rejected the approach of changing mobileCompatible default to
+    false or defaultExcludedTags() to emptyList. Find the actual
+    root cause and fix it at the call site, not by changing what
+    the user explicitly wanted.
+
+18. **Tag the v0.5.x-alpha commits on `dev`** (e.g. v0.5.10-alpha)
+    so the user can install the APK from the GitHub Releases. Tags
+    trigger the release workflow which creates a draft GitHub
+    Release with the APK artifact.
+
+19. **The dev branch was renamed from develop** — if any documentation
+    or script references `develop`, update it to `dev`. The CI
+    workflow file (.github/workflows/build.yml) was updated in
+    v0.5.10-alpha to use `branches: [main, dev]`.
+
+20. **Worklog file is committed to git** (worklog.md at the repo root).
+    This is intentional — future agents cloning the repo will see it.
+    The user said "give yourself reminders in the worklog or something"
+    — worklog.md IS that something. Add new entries with Task ID +
+    Agent + Task + Work Log + Stage Summary + Reminders format.
+
+21. **APK artifacts go in `/home/z/my-project/download/`** (user-visible
+    final deliverable folder per system rules). NEVER commit APK zips
+    to git — they're 16MB+ each and trigger GitHub LFS warnings. The
+    .gitignore now has `download/` to prevent this. Use `git rm
+    --cached` to untrack any APK zip that was accidentally committed.
+
+22. **Don't trust the "empty UUID commit" pattern.** Some agent (or
+    maybe a previous run) made commits with UUID messages like
+    "519b2ed9-95df-465f-a699-710eb10db413" — these are empty checkpoint
+    commits that bloat the git log. Don't make them. Always commit
+    with a descriptive message starting with the version tag (e.g.
+    "v0.5.10-alpha (dev): ...").
+
