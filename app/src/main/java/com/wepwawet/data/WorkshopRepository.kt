@@ -180,8 +180,14 @@ class WorkshopRepository constructor(
         }
         val page = currentPage + 1
         _browseState.value = BrowseState.Loading(page)
+        // v0.5.13-alpha: log currentPage at start so we can verify it's
+        // incrementing correctly across pages (the user's log showed
+        // loadNextPage starting page=1 multiple times instead of advancing
+        // to page=2, page=3, etc. — likely because startBrowse was called
+        // multiple times, resetting currentPage to 0).
         WepWawetLogger.workshop("loadNextPage start",
             "page" to page,
+            "currentPage_before" to currentPage,
             "sort" to filter.sort.displayName,
             "query_type" to filter.sort.queryType,
             "tags" to filter.tags.joinToString(","),

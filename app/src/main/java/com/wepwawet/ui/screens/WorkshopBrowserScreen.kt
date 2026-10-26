@@ -373,12 +373,45 @@ fun WorkshopBrowserScreen(
     )
 
     // === When ANY filter changes (or creatorSteamId), start a new browse session ===
+    // v0.5.13-alpha (browser filter fix): DEDUPLICATE startBrowse calls.
+    //  Previously, when filterLoaded transitioned false→true, this LaunchedEffect
+    //  fired TWICE (once for filterLoaded change, once for... something else —
+    //  possibly the per-key save LaunchedEffects modifying state indirectly).
+    //  Each startBrowse call resets currentPage to 0 and clears _browseItems,
+    //  causing the in-flight loadNextPage to be cancelled
+    //  (LeftCompositionCancellationException → user saw "loading more" flashing
+    //  "loading failed" in v0.5.11, then in v0.5.12 the cancellation loop was
+    //  fixed but the user got stuck at 1 item because the second startBrowse
+    //  reset currentPage to 0, so the collect's loadNextPage call was for
+    //  page=1 instead of page=2).
+    //
+    //  FIX: track the last filter we called startBrowse with. If the current
+    //  filter is the SAME as the last one, skip the startBrowse call (it's a
+    //  duplicate). This deduplicates the LaunchedEffect re-fires.
+    val lastStartBrowseFilter = remember { androidx.compose.runtime.mutableStateOf<WorkshopRepository.Filter?>(null) }
     LaunchedEffect(sort, mobileCompatible, excludedTags, creatorSteamId, filterLoaded) {
         // Don't restart the browse session until the saved filter state has
         // been loaded — otherwise the very first composition would start a
         // browse with the defaults, then immediately restart it once the
         // LaunchedEffect(Unit) applies the saved values.
         if (!filterLoaded) return@LaunchedEffect
+        val currentFilterSnapshot = currentFilter()
+        // v0.5.13-alpha: deduplicate — if the filter hasn't actually changed
+        // since the last startBrowse call, skip. This prevents the duplicate
+        // filter_changed events that were causing currentPage to be reset to 0
+        // mid-load.
+        if (currentFilterSnapshot == lastStartBrowseFilter.value) {
+            WepWawetLogger.workshop(
+                "filter_changed SKIPPED duplicate",
+                "sort" to sort.name,
+                "mobile_compatible" to mobileCompatible,
+                "excluded_tags_count" to excludedTags.size,
+                "creator_steam_id" to (creatorSteamId ?: "none"),
+                "filterLoaded" to filterLoaded,
+            )
+            return@LaunchedEffect
+        }
+        lastStartBrowseFilter.value = currentFilterSnapshot
         try {
             WepWawetLogger.workshop(
                 "filter_changed restart_browse",
@@ -386,14 +419,16 @@ fun WorkshopBrowserScreen(
                 "trend_days" to sort.trendDays,
                 "mobile_compatible" to mobileCompatible,
                 "excluded_tags_count" to excludedTags.size,
+                "excluded_tags" to excludedTags.joinToString(","),
                 "creator_steam_id" to (creatorSteamId ?: "none"),
+                "filterLoaded" to filterLoaded,
             )
             // Clear search so we fall back to browse mode display
             if (query.isNotBlank()) {
                 updateQuery("")
                 repo.clearSearch()
             }
-            repo.startBrowse(currentFilter())
+            repo.startBrowse(currentFilterSnapshot)
         } catch (e: Exception) {
             WepWawetLogger.workshopWarn(
                 "filter_changed restart_browse failed",
@@ -495,9 +530,20 @@ fun WorkshopBrowserScreen(
             //  - hasMore is true (more pages available)
             //  - Either total < 30 (auto-preload to fill viewport) OR
             //    lastVisible >= total - 6 (user near bottom, predictive preload)
-            loadedState != null && loadedState.hasMore &&
+            val shouldLoad = loadedState != null && loadedState.hasMore &&
                 (total < 30 || (total > 0 && lastVisible >= total - 6))
-        }
+            // v0.5.13-alpha: detailed logging for snapshotFlow emissions.
+            //  This helps diagnose why the snapshotFlow didn't re-emit after
+            //  page 1 loaded in v0.5.12-alpha (user got stuck at 1 item).
+            WepWawetLogger.workshopDebug(
+                "snapshotFlow evaluated",
+                "total" to total,
+                "lastVisible" to lastVisible,
+                "loadedState" to (loadedState?.let { "Loaded(page=${it.page},hasMore=${it.hasMore})" } ?: "not-Loaded"),
+                "shouldLoad" to shouldLoad,
+            )
+            shouldLoad
+}
             .distinctUntilChanged()
             .filter { it }
             .collect {
