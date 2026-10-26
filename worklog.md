@@ -782,3 +782,50 @@ Stage Summary:
 - Only entries that need modification (shaders, .tex, JSONs) are loaded — typically < 50MB total.
 - Large entries (models, videos) are streamed directly from .pkg to .mpkg using a 64KB buffer.
 - Memory usage during packing: ~50MB (modified entries) + 64KB (stream buffer) + texture conversion overhead — well within the 512MB heap.
+
+---
+Task ID: 19
+Agent: external-implementer (via Z.ai CLI)
+Task: Fix JPEG .tex false positive, fix streamPack VFS table log, fix type detection, add .tex header parser + ETC2 pass-through. Read 1981-entry log thoroughly. Clone backup repo for mpkg scripts.
+
+Work Log:
+- Read entire 1981-entry log (wepwawet-logs-20261026-152225.txt).
+- Cloned WE-backend-backup repo (private, used PAT) to /home/z/my-project/repos/WE-backend-backup for mpkg/tex analysis scripts.
+- Attempted to download debug + real WE mpkg from filebin.net — URLs returned HTML pages, not files. Filebin may need authenticated download or specific URL format. Noted but not blocking.
+- Decompiled wallpaperui.exe more — already analyzed in prior tasks.
+
+Key issues found in log:
+
+1. JPEG .tex false positive (5 textures FAIL):
+   - Code scans raw .tex bytes for JPEG_MAGIC (FFD8FF, only 3 bytes)
+   - FFD8FF appears in binary .tex data by coincidence (DXT textures, LZ4 data, etc.)
+   - The 4th byte after FFD8FF (the marker type) is 0xFF, 0x7E, or 0x20 — all INVALID JPEG markers
+   - BitmapFactory.decodeByteArray returns null → conversion fails → .tex kept as original → yellow/black on Android
+   - FIX: Added isValidJpegMarker() — validates that the 4th byte after FFD8FF is a valid JPEG marker (0xC0-0xCF, 0xC4, 0xDA, 0xDB, 0xDD, 0xD0-0xD7, 0xE0-0xEF, 0xFE). Invalid markers → skip, don't try to decode.
+
+2. streamPack VFS table log says "vfs_table_size=0" — BUG in log calculation:
+   - The calculation `cursor - finalEntries.sumOf { it.size }` subtracts data section size from cursor (which IS the data section size) → 0
+   - FIX: Changed to `finalEntries.sumOf { 4 + it.name.toByteArray(Charsets.UTF_8).size + 4 + 4 }` — the actual VFS table size (name_len + name + offset + size per entry)
+
+3. Type detection returns "unknown" — project.json not in .pkg entries:
+   - detectWallpaperType(entries) is called BEFORE standalone files are added from install dir
+   - project.json is only in the install dir (not in the .pkg for this wallpaper)
+   - FIX: Moved type detection to AFTER standalone file addition
+
+4. .tex header not parsed — format unknown:
+   - Code doesn't parse TEXV/TEXI/TEXB headers to determine the actual texture format
+   - If format is 5 (ETC2_RGBA8), the .tex is ALREADY mobile-compatible — no conversion needed!
+   - FIX: Added parseTexHeader() — parses TEXI format field and TEXB IsLz4 field. If format=5, skips conversion (pass-through).
+
+5. 17 PNG .tex files converted successfully to ETC2+LZ4 — these work correctly.
+6. .mpkg was packed and transferred successfully (256MB, 245 chunks, 704ms at 2.9 Mbps).
+
+Files modified:
+- MpkgPacker.kt: Added isValidJpegMarker(), parseTexHeader(), readU32Le() helpers. Fixed JPEG detection to validate marker byte. Fixed streamPack VFS table log. Fixed type detection (moved after standalone files). Added ETC2 pass-through check.
+- app/build.gradle.kts: bumped versionCode 60→61, versionName 0.5.21→0.5.22.
+
+Stage Summary:
+- JPEG false positive is now prevented — the 5 failing .tex files will no longer waste time trying to decode invalid JPEG data.
+- If any .tex files are already ETC2 (format=5), they'll be passed through without conversion — saves time and prevents unnecessary re-encoding.
+- .tex header format and IsLz4 are logged for debugging — next time we can see exactly what format the failing .tex files are in (likely DXT, which needs a separate decoder).
+- The wallpaper's .mpkg will still have 5 textures showing yellow/black on Android (the DXT textures) — a DXT decoder is needed for full parity. This is noted as a known limitation.
