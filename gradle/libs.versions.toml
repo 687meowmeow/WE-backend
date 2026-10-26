@@ -37,6 +37,17 @@ xz = "1.11"
 # LZ4 compression for .tex files — matches WE's compression=1 format.
 # Used to LZ4-compress ETC2 RGBA8 data before writing to .tex files.
 lz4Java = "1.8.0"
+# Protobuf Java — required transitively by JavaSteam (v1.8.0-wepwawet10+).
+# JavaSteam's generated message classes (e.g. CPublishedFile_QueryFiles_Response,
+# PublishedFileDetails, EPublishedFileQueryType) extend com.google.protobuf.GeneratedMessage,
+# MessageOrBuilder, ProtocolMessageEnum — these supertypes must be on the COMPILE
+# classpath, not just runtime. Without this explicit dep, AGP fails with:
+#   'Cannot access GeneratedMessage which is a supertype of ... Check your module
+#   classpath for missing or conflicting dependencies.'
+# Version must match what JavaSteam's POM declares (4.31.1) — older versions on
+# the runtime classpath (from other deps) win the conflict and lack the supertypes
+# JavaSteam's newer generated code expects.
+protobufJava = "4.31.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -84,6 +95,10 @@ xz = { group = "org.tukaani", name = "xz", version.ref = "xz" }
 # Used by MpkgPacker.convertTexPngToEtc2() to LZ4-compress ETC2 RGBA8 bytes
 # before writing to .tex files (matches WE's compression=1 format)
 lz4Java = { group = "org.lz4", name = "lz4-java", version.ref = "lz4Java" }
+# Protobuf Java — exposes JavaSteam's generated message supertypes (GeneratedMessage,
+# MessageOrBuilder, ProtocolMessageEnum, etc.) on the COMPILE classpath. See the
+# protobufJava version comment above for the full rationale.
+protobufJava = { group = "com.google.protobuf", name = "protobuf-java", version.ref = "protobufJava" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

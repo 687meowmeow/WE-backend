@@ -17,8 +17,8 @@ android {
         applicationId = "com.wepwawet"
         minSdk = 26  // Android 8.0 — required for the WE pairing protocol + ImageDecoderDecoder GIF path
         targetSdk = 35
-        versionCode = 55
-        versionName = "0.5.16-alpha"
+        versionCode = 56
+        versionName = "0.5.17-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {
             abiFilters += "arm64-v8a"
@@ -192,6 +192,11 @@ dependencies {
     implementation(libs.javasteam.core)
     implementation(libs.javasteam.depotdownloader)
     implementation(libs.bouncycastleProvider)  // required by JavaSteam for crypto
+    // protobuf-java — JavaSteam's generated message classes (e.g. CPublishedFile_QueryFiles_Response)
+    // extend com.google.protobuf.GeneratedMessage / MessageOrBuilder / ProtocolMessageEnum. AGP doesn't
+    // expose these supertypes transitively at compile time, so we add them explicitly. Without this,
+    // WorkshopBrowseSession.kt fails with 'Cannot access GeneratedMessage which is a supertype of ...'.
+    implementation(libs.protobufJava)
     // zstd-jni — required by JavaSteam for Zstd chunk decompression
     // MUST use AAR (not JAR) — the JAR only has Linux/macOS/Windows .so files
     // (compiled with glibc), which fail on Android with UnsatisfiedLinkError.
