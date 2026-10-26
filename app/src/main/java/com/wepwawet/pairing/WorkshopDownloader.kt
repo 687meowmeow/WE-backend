@@ -970,7 +970,7 @@ class WorkshopDownloader(
                 }
             }
             WepWawetLogger.proxy("$TAG: callback thread EXITED (isRunning=false)")
-        }.apply { name = "JavaSteam-Callback"; isDaemon = true }.also {
+        }).apply { name = "JavaSteam-Callback"; isDaemon = true }.also {
             callbackThread = it
         }.start()
 

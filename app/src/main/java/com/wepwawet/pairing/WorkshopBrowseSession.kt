@@ -77,9 +77,6 @@ object WorkshopBrowseSession {
     @Volatile
     private var downloader: WorkshopDownloader? = null
 
-    /** True while [ensureConnected] is in flight — prevents duplicate auth attempts. */
-    private val authLock = Object()
-
     /** True after a successful authentication; false after a disconnect. */
     @Volatile
     private var isAuthenticated = false
@@ -264,7 +261,8 @@ object WorkshopBrowseSession {
      * or when the app is shutting down.
      */
     fun disconnect() {
-        synchronized(authLock) {
+        authLock.lock()
+        try {
             try {
                 downloader?.cleanup()
             } catch (e: Exception) {
@@ -272,6 +270,8 @@ object WorkshopBrowseSession {
             }
             downloader = null
             isAuthenticated = false
+        } finally {
+            authLock.unlock()
         }
     }
 }
