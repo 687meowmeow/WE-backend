@@ -628,3 +628,43 @@ Verified:
 - WE-backend dev branch local changes: `app/build.gradle.kts`, `WepWawetApplication.kt`, `data/SteamApiService.kt`, `data/WorkshopRepository.kt`, `pairing/WorkshopDownloader.kt`, `pairing/WorkshopBrowseSession.kt` (NEW), `gradle/libs.versions.toml`.
 - ProGuard rules already keep `in.dragonbra.javasteam.**` (verified in `app/proguard-rules.pro`).
 - Compile-time verification: NOT YET RUN (no Android SDK on this system). The user's CI workflow (`.github/workflows/build.yml`) will verify on push.
+
+---
+Task ID: 15
+Agent: external-implementer (via Z.ai CLI)
+Task: Fix AsyncJobFailedException — WorkshopBrowseSession.queryFiles fails because connectAndAuthenticate() returns true before the SteamClient is actually connected/authenticated.
+
+Work Log:
+- Read user-provided log file (wepwawet-logs-20261026-112541.txt, 308 entries).
+- Analyzed the timeline line by line:
+  - 11:23:30.081 — WorkshopBrowseSession.ensureConnected() called ("connecting to Steam for browse session…")
+  - 11:23:31.178 — WorkshopBrowseSession logs "browse session ready" (only 1 second later!)
+  - 11:23:31.179 — queryFiles fails instantly with AsyncJobFailedException
+  - 11:23:31.687 — WebSocket actually connects (0.5s AFTER the failure)
+  - 11:23:32.174 — onLoggedOn fires (1s after WebSocket connect, ~2s after "browse session ready")
+- Root cause: WorkshopDownloader.connectAndAuthenticate() has a polling loop that checks `authenticated`, but `authenticated` was NOT reset when a new SteamClient was created inside the same WorkshopDownloader instance. If the WorkshopDownloader is reused (WorkshopBrowseSession reuses it across browse queries), `authenticated` is still true from a PREVIOUS session's auth. The polling loop returns true immediately, before the new SteamClient has connected. Then queryFiles() fails because the service call can't be dispatched (no active connection).
+- Secondary issue: onDisconnected() did NOT reset `authenticated = false` — so after a WebSocket watchdog disconnect (30s inactivity), the stale auth flag persisted.
+- Third issue: subscriptions list grew unbounded on each reconnect — each connectAndAuthenticate() call added 6+ subscriptions without clearing old ones (memory leak + stale callback dispatch).
+
+Fixes applied (WorkshopDownloader.kt):
+1. Added `authenticated = false`, `downloadError = null`, `hasValidToken = false` at the START of connectAndAuthenticate() — before creating the new SteamClient. This ensures the polling loop correctly waits for the NEW auth to complete.
+2. Added subscription cleanup at the start of connectAndAuthenticate() — closes all old subscriptions and clears the list before subscribing to new callbacks. Prevents memory leak and stale callback dispatch.
+3. Added `isRunning = false` + 100ms sleep at the start of connectAndAuthenticate() — causes the old callback thread to exit before a new one is spawned. Prevents orphaned callback threads.
+4. Added `authenticated = false` at the START of onDisconnected() — ensures the auth flag is invalidated when the connection drops (e.g., WebSocket watchdog timeout after 30s of inactivity).
+5. Added public `isSteamConnected(): Boolean` method — checks `steamClient?.isConnected` so callers can verify the connection is actually alive.
+
+Fixes applied (WorkshopBrowseSession.kt):
+6. Updated ensureConnected() fast-path check to also verify `downloader?.isSteamConnected() == true` — catches the case where the WebSocket watchdog disconnected between queries but `isAuthenticated` wasn't reset yet (no queryFiles failure occurred to trigger the catch block's reset).
+
+Stage Summary:
+- After this fix, connectAndAuthenticate() will correctly block for 2-3 seconds (until the WebSocket connects + auth completes) instead of returning immediately based on stale auth state.
+- The first browse query after app launch (or after a 30s+ idle period) will take ~3-4 seconds (auth + RPC). Subsequent queries should be < 1 second (session already established).
+- The AsyncJobFailedException should no longer occur — the ISteamPublishedFile.QueryFiles service RPC will be dispatched on a properly authenticated SteamClient.
+- The HTTP API + HTML scraping fallbacks are still in place for when the JavaSteam session is truly unavailable (user not logged in, Steam down, etc.).
+- The LeftCompositionCancellationException (user navigated away while page was loading) is a pre-existing issue from v0.5.12-alpha's snapshotFlow+collect pattern — it's benign (results are discarded, user sees fresh results when they come back). Not fixed in this task.
+
+Reminders for future agents:
+36. **WorkshopDownloader.connectAndAuthenticate() now resets `authenticated = false` at the start.** This means each call creates a fresh SteamClient and waits for the NEW auth to complete (up to 120s timeout). Don't call connectAndAuthenticate() multiple times concurrently — the second call would reset the first call's auth state.
+37. **WorkshopDownloader.onDisconnected() now resets `authenticated = false`.** This means the auth flag is invalidated on disconnect (watchdog timeout, network drop, user-initiated). WorkshopBrowseSession.ensureConnected() will detect this and reconnect on the next queryFiles() call.
+38. **WorkshopDownloader.isSteamConnected() is a new public method.** Use it to check if the underlying SteamClient is actually connected (not just that auth was previously successful). WorkshopBrowseSession.ensureConnected() uses it in the fast-path check.
+39. **The subscriptions list is now cleared at the start of connectAndAuthenticate().** This prevents the memory leak where each reconnect added 6+ subscriptions without removing old ones. Don't add subscriptions OUTSIDE of connectAndAuthenticate() — they'll be cleared on the next reconnect.

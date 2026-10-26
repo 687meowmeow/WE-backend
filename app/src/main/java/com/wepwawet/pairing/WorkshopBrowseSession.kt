@@ -83,12 +83,16 @@ object WorkshopBrowseSession {
      * @return `true` if authenticated and ready for browse queries; `false` on auth failure or timeout.
      */
     private fun ensureConnected(context: Context): Boolean {
-        if (isAuthenticated && downloader?.getSteamWorkshopHandler() != null) {
+        // Fast path: session is authenticated AND the SteamClient is actually
+        // connected (not just that auth was previously successful — catches
+        // WebSocket watchdog disconnects after 30s of inactivity) AND the
+        // SteamWorkshop handler is available.
+        if (isAuthenticated && downloader?.isSteamConnected() == true && downloader?.getSteamWorkshopHandler() != null) {
             return true
         }
         synchronized(authLock) {
             // Double-check after acquiring lock
-            if (isAuthenticated && downloader?.getSteamWorkshopHandler() != null) {
+            if (isAuthenticated && downloader?.isSteamConnected() == true && downloader?.getSteamWorkshopHandler() != null) {
                 return true
             }
 

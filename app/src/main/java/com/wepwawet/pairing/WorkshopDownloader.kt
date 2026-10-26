@@ -198,6 +198,15 @@ class WorkshopDownloader(
     fun isAuthenticated(): Boolean = authenticated
 
     /**
+     * Check if the underlying SteamClient is actually connected (not just that
+     * auth was previously successful). Used by [com.wepwawet.pairing.WorkshopBrowseSession]
+     * to verify the session is alive before reusing it — catches the case where
+     * the WebSocket watchdog disconnected after 30s of inactivity but
+     * `authenticated` wasn't reset yet (e.g., between queries with no failure).
+     */
+    fun isSteamConnected(): Boolean = steamClient?.isConnected ?: false
+
+    /**
      * Public accessor for the underlying JavaSteam [SteamWorkshop] handler.
      *
      * Returns `null` if the [SteamClient] is not connected/authenticated.
@@ -819,6 +828,41 @@ class WorkshopDownloader(
         // invisible — making it impossible to diagnose why a download hangs. ===
         JavaSteamLogBridge.installIfNeeded()
 
+        // === Reset auth state from any previous session ===
+        // CRITICAL: If this WorkshopDownloader instance is being REUSED (e.g.,
+        // WorkshopBrowseSession reuses the same downloader across browse queries),
+        // the `authenticated` flag might still be true from a previous session
+        // that has since disconnected. Without this reset, the polling loop below
+        // returns true IMMEDIATELY (because `authenticated` is stale-true), before
+        // the new SteamClient has even connected. This causes every subsequent
+        // RPC call (e.g., ISteamPublishedFile.QueryFiles) to fail with
+        // AsyncJobFailedException because the connection isn't actually ready.
+        //
+        // Also reset downloadError so a previous error doesn't short-circuit the
+        // new attempt, and hasValidToken so the refresh-token logic runs fresh.
+        authenticated = false
+        downloadError = null
+        hasValidToken = false
+
+        // === Clean up old subscriptions before re-subscribing ===
+        // Each call to connectAndAuthenticate() adds 6+ subscriptions to the
+        // `subscriptions` list. Without clearing old ones first, the list grows
+        // unbounded on each reconnect — a memory leak. The old subscriptions
+        // also reference the old (now-orphaned) callbackManager, so they'd
+        // dispatch to stale handlers.
+        subscriptions.forEach { try { it.close() } catch (_: Exception) {} }
+        subscriptions.clear()
+
+        // === Stop old callback thread before starting a new one ===
+        // Setting isRunning = false causes the old callback thread to exit its
+        // polling loop (it checks isRunning at the top of each iteration).
+        // We'll set it back to true below before spawning the new thread.
+        isRunning = false
+        // Give the old thread a moment to exit cleanly (it might be in a 1s
+        // runWaitCallbacks call). 100ms is enough — the thread checks isRunning
+        // after each runWaitCallbacks returns.
+        try { Thread.sleep(100) } catch (_: InterruptedException) {}
+
         val dispatcher = okhttp3.Dispatcher(Executors.newCachedThreadPool { r ->
             Thread(r, "JavaSteam-Http").apply { isDaemon = true }
         })
@@ -1189,6 +1233,16 @@ class WorkshopDownloader(
     }
 
     private fun onDisconnected(callback: DisconnectedCallback) {
+        // === CRITICAL: Reset `authenticated` flag on disconnect ===
+        // Without this, the `authenticated` flag stays true after a disconnect
+        // (e.g., WebSocket watchdog timeout after 30s of inactivity). Then the
+        // next `connectAndAuthenticate()` call's polling loop returns true
+        // immediately (based on stale auth state), before the new SteamClient
+        // has connected — causing every RPC call to fail with
+        // AsyncJobFailedException. WorkshopBrowseSession.ensureConnected() also
+        // relies on this to invalidate its fast-path return.
+        authenticated = false
+
         WepWawetLogger.proxy("$TAG: disconnected",
             "user_initiated" to callback.isUserInitiated,
             "authenticated" to authenticated,
