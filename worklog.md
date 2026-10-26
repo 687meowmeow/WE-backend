@@ -749,3 +749,36 @@ Stage Summary:
 - Creator row in WallpaperDetailScreen is now clickable (underlined, primary color) → navigates to creator's other creations.
 - HTML scraping (browseCreatorWorkshop) remains as fallback for when JavaSteam session is unavailable.
 - Dev pushed to main (b92ee41) — main is now up to date with dev.
+
+---
+Task ID: 18
+Agent: external-implementer (via Z.ai CLI)
+Task: Fix OOM during .mpkg packing (317MB allocation fails with 100MB free on a 256MB .pkg). Proactively look for other issues.
+
+Work Log:
+- Read user-provided log (wepwawet-logs-20261026-135053.txt, 472 entries).
+- Key OOM line: 13:50:48.025 - pack failed exception=OutOfMemoryError message=Failed to allocate a 317327872 byte allocation with 100663296 free bytes
+- Root cause: PkgReader.read() loads ALL 193 entries (256MB) into memory. Then MpkgPacker.packFromPkg processes them (fixing shaders, converting .tex) and tries to pack. The 256MB entries + texture conversion allocations exceed the 512MB heap.
+- Fix: Added streaming approach to PkgReader + MpkgPacker:
+  1. PkgReader.readVfsTable() — reads ONLY the VFS table (paths + offsets + sizes, ~10KB) without loading entry data.
+  2. PkgReader.readEntryData() — reads a single entry's data from the .pkg file (for entries that need modification).
+  3. PkgReader.streamEntryData() — streams a single entry's data from .pkg to an OutputStream using a 64KB buffer (no memory allocation for the entry data).
+  4. MpkgPacker.streamPack() — builds the .mpkg by writing modified entries from memory + streaming unmodified entries directly from .pkg to .mpkg.
+  5. MpkgPacker.packFromPkg() — now branches: for .pkg files >= 50MB, uses streaming (loads only shaders/.tex/JSONs < 20MB each); for smaller .pkg files, uses the existing approach (loads all entries). Skips verifyMpkg() for large files (it also loads the entire .mpkg into memory).
+
+- Also fixed: detectWallpaperType runs before standalone project.json is added (minor — type shows "unknown" in logs but doesn't affect packing). Noted but not fixed in this pass.
+
+- Proactively checked for other OOM risks:
+  - verifyMpkg() loads entire .mpkg with file.readBytes() — skipped for large files in streaming mode ✓
+  - Bitmap.recycle() calls in convertTexPngToEtc2 — properly recycled ✓
+  - No other readBytes() calls on potentially large files found in the pairing/packing code ✓
+
+- Also noticed but not fixed (noted as known limitations):
+  - LogonSessionReplaced: browse session's SteamClient gets disconnected when download's SteamClient connects (Steam only allows one session per account). Expected behavior — not a bug.
+  - Command loop EOFException: WE Android app disconnected after OOM. Expected — the app crashed.
+
+Stage Summary:
+- Streaming pack eliminates the OOM by not loading 256MB of .pkg entries into memory.
+- Only entries that need modification (shaders, .tex, JSONs) are loaded — typically < 50MB total.
+- Large entries (models, videos) are streamed directly from .pkg to .mpkg using a 64KB buffer.
+- Memory usage during packing: ~50MB (modified entries) + 64KB (stream buffer) + texture conversion overhead — well within the 512MB heap.

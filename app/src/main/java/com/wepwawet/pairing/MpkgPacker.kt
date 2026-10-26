@@ -117,7 +117,34 @@ object MpkgPacker {
             "output" to outputFile.name)
 
         // Step 1: Read the .pkg file
-        val entries = PkgReader.read(pkgFile).toMutableList()
+        // Step 1: Read the .pkg file — use streaming for large .pkg files to avoid OOM
+        val STREAM_THRESHOLD = 50_000_000L // 50MB
+        val vfsData: Pair<List<PkgReader.VfsEntry>, Long>? = if (pkgFile.length() > STREAM_THRESHOLD) {
+            PkgReader.readVfsTable(pkgFile)
+        } else {
+            null
+        }
+        val entries: MutableList<Pair<String, ByteArray>> = if (vfsData != null) {
+            // Large .pkg — load ONLY entries that need modification (shaders, .tex, JSONs)
+            val (vfsEntries, dataSectionStart) = vfsData!!
+            WepWawetLogger.proxy("MpkgPacker.packFromPkg: streaming mode (large .pkg)",
+                "pkg_size" to pkgFile.length(),
+                "vfs_entries" to vfsEntries.size,
+                "loading_only_modified" to true)
+            val loaded = mutableListOf<Pair<String, ByteArray>>()
+            for (vfs in vfsEntries) {
+                val needsMod = vfs.path.endsWith(".frag") || vfs.path.endsWith(".vert") ||
+                    vfs.path.endsWith(".tex") || vfs.path == "scene.json" || vfs.path == "project.json"
+                if (needsMod && vfs.size < 20_000_000) { // Only load entries < 20MB
+                    val data = PkgReader.readEntryData(pkgFile, dataSectionStart, vfs.offset, vfs.size)
+                    if (data != null) loaded.add(vfs.path to data)
+                }
+            }
+            loaded
+        } else {
+            // Small .pkg — load all entries (fits in heap)
+            PkgReader.read(pkgFile).toMutableList()
+        }
         if (entries.isEmpty()) {
             WepWawetLogger.proxyError("MpkgPacker.packFromPkg FAILED — no entries in .pkg",
                 "pkg_file" to pkgFile.name)
@@ -249,18 +276,26 @@ object MpkgPacker {
         }
 
         // Step 4: Pack the entries into a .mpkg
-        // We preserve the original .pkg entries as-is (they're already in the
-        // correct WE format). The only difference between .pkg and .mpkg is
-        // the magic header and the VFS table format.
-        val totalSize = pack(entries, outputFile)
+        val totalSize: Long
+        if (vfsData != null) {
+            // Streaming pack — writes modified entries from memory, streams
+            // unmodified entries directly from .pkg to .mpkg (no OOM)
+            val (vfsEntries, dataSectionStart) = vfsData!!
+            val modifiedMap = entries.associate { it.first to it.second }
+            totalSize = streamPack(pkgFile, dataSectionStart, vfsEntries, modifiedMap, outputFile)
+            // Skip verifyMpkg for large files (it loads entire .mpkg into memory)
+        } else {
+            // Standard pack — all entries in memory
+            totalSize = pack(entries, outputFile)
+            verifyMpkg(outputFile, entries)
+        }
 
         WepWawetLogger.proxy("MpkgPacker.packFromPkg COMPLETE",
             "output" to outputFile.name,
             "mpkg_size" to totalSize,
             "entry_count" to entries.size,
-            "type" to type)
-
-        verifyMpkg(outputFile, entries)
+            "type" to type,
+            "streaming" to (vfsData != null))
         return totalSize
     }
 
@@ -679,6 +714,94 @@ object MpkgPacker {
             "mpkg_size" to outputFile.length(),
             "video_size" to videoSize)
         return outputFile.length()
+    }
+
+    /**
+     * Stream-pack entries from .pkg to .mpkg — loads ONLY modified entries into
+     * memory, streams unmodified entries directly from .pkg to .mpkg. This
+     * avoids OOM on large .pkg files (e.g., 256MB wallpapers with 163MB models).
+     *
+     * @param pkgFile The source .pkg file (for streaming unmodified entries).
+     * @param dataSectionStart The offset where the .pkg data section begins.
+     * @param vfsEntries The .pkg VFS table entries (path, offset, size).
+     * @param modifiedEntries Map of path → modified ByteArray (shaders, .tex, JSONs).
+     * @param outputFile The destination .mpkg file.
+     */
+    private fun streamPack(
+        pkgFile: File,
+        dataSectionStart: Long,
+        vfsEntries: List<PkgReader.VfsEntry>,
+        modifiedEntries: Map<String, ByteArray>,
+        outputFile: File,
+    ): Long {
+        // Build final entry list: modified entries + unmodified (from VFS) + standalone
+        data class FinalEntry(val name: String, val size: Int, val data: ByteArray?, val vfsOffset: Long)
+        val finalEntries = mutableListOf<FinalEntry>()
+        val modifiedNames = modifiedEntries.keys
+
+        for (vfs in vfsEntries) {
+            if (vfs.path in modifiedNames) {
+                val data = modifiedEntries[vfs.path]!!
+                finalEntries.add(FinalEntry(vfs.path, data.size, data, 0))
+            } else {
+                // Unmodified — stream from .pkg
+                finalEntries.add(FinalEntry(vfs.path, vfs.size.toInt(), null, vfs.offset))
+            }
+        }
+
+        WepWawetLogger.proxy("MpkgPacker.streamPack layout",
+            "total_entries" to finalEntries.size,
+            "modified_entries" to finalEntries.count { it.data != null },
+            "streamed_entries" to finalEntries.count { it.data == null },
+            "data_section_start" to dataSectionStart)
+
+        // Write .mpkg header + VFS table
+        val out = outputFile.outputStream().buffered()
+        try {
+            writeLeInt(out, HEADER_MARKER)
+            out.write(MAGIC.toByteArray(Charsets.US_ASCII))
+            writeLeInt(out, finalEntries.size)
+
+            var cursor = 0
+            for (entry in finalEntries) {
+                val nameBytes = entry.name.toByteArray(Charsets.UTF_8)
+                writeLeInt(out, nameBytes.size)
+                out.write(nameBytes)
+                writeLeInt(out, cursor)
+                writeLeInt(out, entry.size)
+                cursor += entry.size
+            }
+
+            WepWawetLogger.proxy("MpkgPacker.streamPack header written",
+                "header_size" to (4 + 8 + 4),
+                "vfs_table_size" to (cursor - finalEntries.sumOf { it.size }),
+                "data_section_start" to (4 + 8 + 4 + finalEntries.sumOf { 4 + it.name.toByteArray(Charsets.UTF_8).size + 4 + 4 }))
+
+            // Write data section: modified from memory, unmodified streamed from .pkg
+            for ((index, entry) in finalEntries.withIndex()) {
+                if (entry.data != null) {
+                    out.write(entry.data)
+                } else {
+                    PkgReader.streamEntryData(pkgFile, dataSectionStart, entry.vfsOffset, entry.size.toLong(), out)
+                }
+                if (index % 50 == 0 || index == finalEntries.lastIndex) {
+                    WepWawetLogger.proxyDebug("MpkgPacker.streamPack progress",
+                        "index" to index, "total" to finalEntries.size,
+                        "name" to entry.name, "size" to entry.size,
+                        "streamed" to (entry.data == null))
+                }
+            }
+            out.flush()
+        } finally {
+            out.close()
+        }
+
+        val totalSize = outputFile.length()
+        WepWawetLogger.proxy("MpkgPacker.streamPack COMPLETE",
+            "output" to outputFile.name,
+            "mpkg_size" to totalSize,
+            "entry_count" to finalEntries.size)
+        return totalSize
     }
 
     // ==================== JSON BUILDERS ====================

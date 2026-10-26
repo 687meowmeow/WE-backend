@@ -210,8 +210,111 @@ object PkgReader {
     }
 
     /**
-     * Read a 4-byte little-endian u32 from the RandomAccessFile.
+     * Data class representing a VFS table entry from a .pkg file.
+     * Contains the path, offset (relative to data section start), and size.
+     * Does NOT contain the actual file data — use [readEntryData] to load it.
      */
+    data class VfsEntry(val path: String, val offset: Long, val size: Long)
+
+    /**
+     * Read ONLY the VFS table from a .pkg file — does NOT load any entry data.
+     * This is used by [MpkgPacker.packFromPkg] to stream large entries from
+     * .pkg to .mpkg without loading them into memory (avoids OOM on large
+     * .pkg files, e.g., 256MB wallpapers with 163MB model files).
+     *
+     * @return list of [VfsEntry] (path, offset, size) + the data section start offset,
+     *         or null on error.
+     */
+    fun readVfsTable(pkgFile: File): Pair<List<VfsEntry>, Long>? {
+        if (!pkgFile.exists() || !pkgFile.canRead() || pkgFile.length() < 16) return null
+        val raf = RandomAccessFile(pkgFile, "r")
+        try {
+            val magicLen = readU32Le(raf)
+            if (magicLen !in 1..MAX_MAGIC_LEN) return null
+            val magicBytes = ByteArray(magicLen.toInt())
+            raf.readFully(magicBytes)
+            val magic = String(magicBytes, Charsets.US_ASCII)
+            if (magic !in SUPPORTED_MAGICS) return null
+
+            val entryCount = readU32Le(raf)
+            if (entryCount !in 1..MAX_ENTRY_COUNT) return null
+
+            val entries = mutableListOf<VfsEntry>()
+            for (i in 0 until entryCount) {
+                val pathLen = readU32Le(raf).toInt()
+                if (pathLen !in 1..MAX_PATH_LEN) return null
+                val pathBytes = ByteArray(pathLen)
+                raf.readFully(pathBytes)
+                val path = String(pathBytes, Charsets.UTF_8)
+                val offset = readU32Le(raf).toLong().and(0xFFFFFFFF)
+                val size = readU32Le(raf).toLong().and(0xFFFFFFFF)
+                entries.add(VfsEntry(path, offset, size))
+            }
+            val dataSectionStart = raf.filePointer
+            return entries to dataSectionStart
+        } catch (e: Exception) {
+            WepWawetLogger.proxyError("$TAG.readVfsTable FAILED", "exception" to e.javaClass.name)
+            return null
+        } finally {
+            try { raf.close() } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Read a single entry's data from the .pkg file.
+     * Used for loading ONLY entries that need modification (shaders, .tex, JSONs)
+     * while streaming the rest directly to the .mpkg output.
+     *
+     * @param pkgFile the .pkg file
+     * @param dataSectionStart the offset where the data section begins (from [readVfsTable])
+     * @param offset the entry's offset within the data section
+     * @param size the entry's size in bytes
+     * @return the entry's data as a ByteArray, or null on error
+     */
+    fun readEntryData(pkgFile: File, dataSectionStart: Long, offset: Long, size: Long): ByteArray? {
+        return try {
+            val raf = RandomAccessFile(pkgFile, "r")
+            try {
+                raf.seek(dataSectionStart + offset)
+                val data = ByteArray(size.toInt())
+                raf.readFully(data)
+                data
+            } finally {
+                raf.close()
+            }
+        } catch (e: Exception) {
+            WepWawetLogger.proxyError("$TAG.readEntryData FAILED",
+                "offset" to offset, "size" to size, "exception" to e.javaClass.name)
+            null
+        }
+    }
+
+    /**
+     * Stream a single entry's data from the .pkg file directly to an OutputStream.
+     * Does NOT load the data into memory — uses a small (64KB) buffer.
+     *
+     * @param pkgFile the .pkg file
+     * @param dataSectionStart the offset where the data section begins
+     * @param offset the entry's offset within the data section
+     * @param size the entry's size in bytes
+     * @param out the destination OutputStream
+     */
+    fun streamEntryData(pkgFile: File, dataSectionStart: Long, offset: Long, size: Long, out: java.io.OutputStream) {
+        val raf = RandomAccessFile(pkgFile, "r")
+        try {
+            raf.seek(dataSectionStart + offset)
+            val buffer = ByteArray(64 * 1024) // 64KB buffer
+            var remaining = size
+            while (remaining > 0) {
+                val toRead = minOf(remaining, buffer.size.toLong()).toInt()
+                raf.readFully(buffer, 0, toRead)
+                out.write(buffer, 0, toRead)
+                remaining -= toRead
+            }
+        } finally {
+            raf.close()
+        }
+    }
     private fun readU32Le(raf: RandomAccessFile): Long {
         val b = ByteArray(4)
         raf.readFully(b)
