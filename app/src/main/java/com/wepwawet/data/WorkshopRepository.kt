@@ -5,6 +5,7 @@ import com.wepwawet.data.model.WallpaperType
 import com.wepwawet.data.model.WorkshopItemTyped
 import com.wepwawet.data.model.WorkshopTags
 import com.wepwawet.log.WepWawetLogger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -360,6 +361,18 @@ class WorkshopRepository constructor(
                 "new_items" to filteredItems.size,
                 "filtered_out" to (items.size - filteredItems.size),
                 "total_items" to _browseItems.value.size)
+        } catch (e: CancellationException) {
+            // Coroutine cancellation (e.g., user navigated away from the
+            // WorkshopBrowserScreen while loadNextPage was in flight). MUST
+            // be re-thrown — swallowing it would break structured concurrency
+            // and would also leave the browseState stuck on Loading(page).
+            //
+            // The previous code (catch Exception) put BrowseState.Error and
+            // logged LeftCompositionCancellationException as a warning, which
+            // polluted the logs and showed a fake error state to the user.
+            WepWawetLogger.workshopDebug("loadNextPage cancelled (coroutine scope disposed)",
+                "page" to currentPage)
+            throw e
         } catch (e: Exception) {
             _browseState.value = BrowseState.Error(e.message ?: "Unknown error", currentPage)
             WepWawetLogger.workshopWarn("loadNextPage exception",
@@ -496,6 +509,11 @@ class WorkshopRepository constructor(
                 "new_items" to filteredItems.size,
                 "filtered_out" to (items.size - filteredItems.size),
                 "total_items" to _searchItems.value.size)
+        } catch (e: CancellationException) {
+            // See loadNextPageLocked for rationale — cancellation must propagate.
+            WepWawetLogger.workshopDebug("loadNextSearchPage cancelled (coroutine scope disposed)",
+                "page" to currentSearchPage)
+            throw e
         } catch (e: Exception) {
             _searchState.value = BrowseState.Error(e.message ?: "Unknown error", currentSearchPage)
             WepWawetLogger.workshopWarn("loadNextSearchPage exception",

@@ -21,12 +21,16 @@ file(GLOB ETC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/etc2comp/EtcLib/EtcCodec/*.cpp
 )
 
-# Add our JNI wrapper
+# Add our JNI wrappers (ETC2 encoder + DXT decoder)
 set(JNI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/etc2_jni.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dxt_jni.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dxt_decoder.cpp
 )
 
-# Build the shared library
+# Build the shared library (ETC2 encoder + DXT decoder, both in libwepwawet_etc2.so
+# for simpler loading and smaller binary — they are always used together for .tex
+# transcoding).
 add_library(wepwawet_etc2 SHARED
     ${JNI_SOURCES}
     ${ETC_SOURCES}

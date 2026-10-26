@@ -12,6 +12,7 @@ import com.wepwawet.data.model.WallpaperType
 import com.wepwawet.data.model.WorkshopItem
 import com.wepwawet.data.model.WorkshopItemTyped
 import com.wepwawet.log.WepWawetLogger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -213,6 +214,29 @@ object WorkshopBrowseSession {
                 "cursor" to (details.cursor ?: "page-mode"),
             )
             Result.success(items)
+        } catch (e: CancellationException) {
+            // CRITICAL: Coroutine cancellation (e.g., user navigated away from the
+            // WorkshopBrowserScreen while queryFiles was in flight) MUST be
+            // re-thrown, NOT treated as a query failure.
+            //
+            // The previous code caught `Exception` here and reset
+            // isAuthenticated=false, which caused the next query (after the user
+            // came back) to needlessly re-authenticate (10-15 seconds slower).
+            // This also polluted the logs with `LeftCompositionCancellationException`
+            // warnings that were not real failures.
+            //
+            // CancellationException is the parent class of:
+            //   - kotlinx.coroutines.JobCancellationException
+            //   - androidx.compose.runtime.LeftCompositionCancellationException
+            //   - androidx.compose.runtime.Recomposer$CancellationException
+            //
+            // Per the kotlinx.coroutines contract, all coroutine cancellation
+            // MUST propagate up. Swallowing it would break structured concurrency.
+            WepWawetLogger.workshopDebug(
+                "$TAG: queryFiles cancelled (coroutine scope disposed)",
+                "exception" to e.javaClass.name,
+            )
+            throw e
         } catch (e: Exception) {
             WepWawetLogger.workshopWarn(
                 "$TAG: queryFiles failed",
@@ -275,6 +299,14 @@ object WorkshopBrowseSession {
                 "page" to details.page,
             )
             Result.success(items)
+        } catch (e: CancellationException) {
+            // See [queryFiles] for the rationale — coroutine cancellation must
+            // propagate, not be treated as a query failure.
+            WepWawetLogger.workshopDebug(
+                "$TAG: getUserFiles cancelled (coroutine scope disposed)",
+                "exception" to e.javaClass.name,
+            )
+            throw e
         } catch (e: Exception) {
             WepWawetLogger.workshopWarn(
                 "$TAG: getUserFiles failed",
