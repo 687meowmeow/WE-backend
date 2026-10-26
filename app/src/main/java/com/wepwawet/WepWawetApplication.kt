@@ -158,6 +158,23 @@ class WepWawetApplication : Application(), Configuration.Provider, ImageLoaderFa
     }
 
     /**
+     * Called by the system when the application is being destroyed. Disconnects
+     * the long-lived JavaSteam [com.wepwawet.pairing.WorkshopBrowseSession] so
+     * the Steam session is cleanly logged off (free up server resources, avoid
+     * Steam's "you're already logged in elsewhere" prompt on next launch).
+     */
+    override fun onTerminate() {
+        super.onTerminate()
+        try {
+            com.wepwawet.pairing.WorkshopBrowseSession.disconnect()
+            WepWawetLogger.appInfo("WorkshopBrowseSession disconnected on app terminate")
+        } catch (e: Exception) {
+            WepWawetLogger.appWarn("WorkshopBrowseSession disconnect failed on terminate",
+                "exception" to e.javaClass.name, "message" to (e.message ?: ""))
+        }
+    }
+
+    /**
      * Write a boot breadcrumb to Downloads/WepWawet/boot.txt. This proves the
      * app actually reached Application.onCreate() — if this file is missing,
      * the crash is happening BEFORE the Application class even runs (class

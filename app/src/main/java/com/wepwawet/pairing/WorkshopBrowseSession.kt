@@ -1,0 +1,256 @@
+package com.wepwawet.pairing
+
+import android.content.Context
+import `in`.dragonbra.javasteam.protobufs.steamclient.SteammessagesPublishedfileSteamclient.CPublishedFile_QueryFiles_Response
+import `in`.dragonbra.javasteam.protobufs.steamclient.SteammessagesPublishedfileSteamclient.PublishedFileDetails
+import `in`.dragonbra.javasteam.steam.handlers.steamunifiedmessages.callback.ServiceMethodResponse
+import `in`.dragonbra.javasteam.steam.handlers.steamworkshop.QueryFilesDetails
+import `in`.dragonbra.javasteam.steam.handlers.steamworkshop.SteamWorkshop
+import com.wepwawet.data.model.WallpaperType
+import com.wepwawet.data.model.WorkshopItem
+import com.wepwawet.data.model.WorkshopItemTyped
+import com.wepwawet.log.WepWawetLogger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+
+/**
+ * Singleton long-lived JavaSteam session used for workshop BROWSE queries.
+ *
+ * This is the SAME call that `steam_api64.dll` (the native Steamworks SDK) makes when WE PC
+ * browses the workshop. WE-backend Android can't ship `steam_api64.dll`, but JavaSteam speaks
+ * the Steam CM protocol directly — so we make byte-identical service calls to what WE PC makes.
+ *
+ * Bypasses Steam's IPublishedFileService HTTP API `[1,7]` days limit for RankedByTrend:
+ *   - days = 1   → "Most Popular (Today)"
+ *   - days = 7   → "Most Popular (Week)"
+ *   - days = 30  → "Most Popular (Month)"
+ *   - days = 365 → "Most Popular (Year)"
+ *
+ * Architecture:
+ *  - On first [queryFiles] call, lazily creates a [WorkshopDownloader] and authenticates.
+ *  - The session stays alive between browse queries (no `cleanup()`).
+ *  - Subsequent queries reuse the same authenticated [SteamWorkshop] handler.
+ *  - If the session disconnects (e.g., network drop, Steam rate limit), the next query
+ *    auto-reconnects.
+ *
+ * Thread-safety: all state mutations are guarded by `synchronized(this)`. The JavaSteam
+ * callback manager thread runs [org.jobCallbackLoop] in a daemon thread.
+ *
+ * Limitation: only ONE session is allowed at a time. If the user is currently running a
+ * download via [WorkshopDownloadJob], that download uses its OWN [WorkshopDownloader] —
+ * they don't share state. This is fine because both downloaders can authenticate with
+ * the same Steam account simultaneously (Steam allows multiple concurrent sessions).
+ *
+ * Usage from [com.wepwawet.data.SteamApiService]:
+ * ```kotlin
+ * val session = WorkshopBrowseSession
+ * val result = session.queryFiles(context, QueryFilesDetails(
+ *     appId = 431960,
+ *     queryType = EPublishedFileQueryType.k_PublishedFileQueryType_RankedByTrend,
+ *     days = 365u,  // MOST_POPULAR_YEAR — bypasses HTTP API [1,7] limit
+ *     page = 1,
+ *     requiredKvTags = listOf("app_workshop_eula_version" to "3"),  // mobile-compat
+ *     excludedTags = listOf("Application", "Web"),
+ *     returnTags = true,
+ *     returnPreviews = true,
+ *     returnShortDescription = true,
+ * ))
+ * ```
+ */
+object WorkshopBrowseSession {
+
+    private const val TAG = "WorkshopBrowseSession"
+
+    /** Maximum time to wait for authentication to complete (in milliseconds). */
+    private const val AUTH_TIMEOUT_MS = 60_000L
+
+    /** Singleton downloader instance — null until first [queryFiles] call. */
+    @Volatile
+    private var downloader: WorkshopDownloader? = null
+
+    /** True while [ensureConnected] is in flight — prevents duplicate auth attempts. */
+    private val authLock = Object()
+
+    /** True after a successful authentication; false after a disconnect. */
+    @Volatile
+    private var isAuthenticated = false
+
+    /**
+     * Ensure the [downloader] is created and authenticated. Subsequent calls return immediately.
+     *
+     * @param context Android context (used to read Steam credentials from [SteamCredentialsStore])
+     * @return `true` if authenticated and ready for browse queries; `false` on auth failure or timeout.
+     */
+    private fun ensureConnected(context: Context): Boolean {
+        if (isAuthenticated && downloader?.getSteamWorkshopHandler() != null) {
+            return true
+        }
+        synchronized(authLock) {
+            // Double-check after acquiring lock
+            if (isAuthenticated && downloader?.getSteamWorkshopHandler() != null) {
+                return true
+            }
+
+            // Get credentials
+            val username = SteamCredentialsStore.getUsername(context)
+            val password = SteamCredentialsStore.getPassword(context)
+            val guardCode = SteamCredentialsStore.getGuardCode(context)
+            if (username == null || password == null) {
+                WepWawetLogger.workshopWarn("$TAG: no Steam credentials saved",)
+                return false
+            }
+
+            // Create downloader if not already created (reuse across reconnects)
+            val downloader = this.downloader ?: WorkshopDownloader(username, password, guardCode).also {
+                this.downloader = it
+            }
+            this.downloader = downloader
+
+            // Try to connect
+            WepWawetLogger.workshop("$TAG: connecting to Steam for browse session…",
+                "username" to username,
+                "has_guard" to !guardCode.isNullOrBlank(),
+            )
+            val connected = downloader.connectAndAuthenticate(context)
+            if (!connected) {
+                WepWawetLogger.workshopWarn("$TAG: connection/auth failed — browse session unavailable")
+                isAuthenticated = false
+                return false
+            }
+
+            // Verify the SteamWorkshop handler is available
+            val workshop = downloader.getSteamWorkshopHandler()
+            if (workshop == null) {
+                WepWawetLogger.workshopWarn("$TAG: connected but SteamWorkshop handler is null")
+                isAuthenticated = false
+                return false
+            }
+
+            isAuthenticated = true
+            WepWawetLogger.workshop("$TAG: browse session ready — ISteamPublishedFile.QueryFiles available")
+            return true
+        }
+    }
+
+    /**
+     * Issue a `ISteamPublishedFile.QueryFiles` service RPC and return the parsed response.
+     *
+     * This is the SAME call WE PC's `wallpaperui.exe` makes via `steam_api64.dll`'s
+     * `ISteamUGC::SendQueryUGCRequest`. The native SDK does NOT have the HTTP API's
+     * [1,7] days limit for RankedByTrend — neither does this service path (it speaks
+     * the same Steam CM protocol that `steam_api64.dll` speaks).
+     *
+     * If the session is not yet connected, [ensureConnected] is called first. If
+     * authentication fails (no credentials, wrong password, Steam down, etc.), this
+     * returns `Result.failure` and the caller should fall back to HTTP/HTML.
+     *
+     * @param context Android context for reading Steam credentials.
+     * @param details The query parameters (see [QueryFilesDetails]).
+     * @return Success with a list of [WorkshopItemTyped]; failure with the cause.
+     */
+    suspend fun queryFiles(
+        context: Context,
+        details: QueryFilesDetails,
+    ): Result<List<WorkshopItemTyped>> = withContext(Dispatchers.IO) {
+        try {
+            // Ensure session is connected
+            if (!ensureConnected(context)) {
+                return@withContext Result.failure(
+                    IllegalStateException("JavaSteam browse session not available — see logs")
+                )
+            }
+
+            val workshop: SteamWorkshop = downloader?.getSteamWorkshopHandler()
+                ?: return@withContext Result.failure(
+                    IllegalStateException("SteamWorkshop handler is null after auth")
+                )
+
+            // Dispatch the RPC — returns AsyncJobSingle<ServiceMethodResponse<CPublishedFile_QueryFiles_Response.Builder>>
+            val job = workshop.queryFiles(details)
+
+            // Await the response with a timeout. AsyncJobSingle.await() returns the
+            // ServiceMethodResponse when the callback manager dispatches it.
+            val response: ServiceMethodResponse<CPublishedFile_QueryFiles_Response.Builder> =
+                withTimeoutOrNull(AUTH_TIMEOUT_MS) {
+                    job.await()  // AsyncJobSingle.await() is suspend
+                } ?: return@withContext Result.failure(
+                    IllegalStateException("ISteamPublishedFile.QueryFiles timed out after $AUTH_TIMEOUT_MS ms")
+                )
+
+            // Parse the response
+            val body = response.body.build()
+            val items = body.publishedfiledetailsList.map { mapPublishedFileDetails(it) }
+
+            WepWawetLogger.workshop(
+                "$TAG: queryFiles OK",
+                "total" to body.total,
+                "returned" to items.size,
+                "has_next_cursor" to (body.nextCursor?.isNotBlank() == true),
+                "query_type" to details.queryType.number,
+                "days" to (details.days?.toInt() ?: 0),
+                "page" to details.page,
+                "cursor" to (details.cursor ?: "page-mode"),
+            )
+            Result.success(items)
+        } catch (e: Exception) {
+            WepWawetLogger.workshopWarn(
+                "$TAG: queryFiles failed",
+                "exception" to e.javaClass.name,
+                "message" to (e.message ?: ""),
+            )
+            // Mark session as needing reconnect on next call
+            isAuthenticated = false
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Map a JavaSteam [PublishedFileDetails] protobuf to our [WorkshopItemTyped] model.
+     *
+     * The protobuf message has all the fields we need (publishedfileid, title, tags, etc.).
+     * The type (Scene/Video/etc.) is derived from the tags via [WallpaperType.fromTags].
+     */
+    private fun mapPublishedFileDetails(details: PublishedFileDetails): WorkshopItemTyped {
+        val tags = details.tagsList.map { it.tag }
+        val item = WorkshopItem(
+            publishedfileid = details.publishedfileid.toString(),
+            title = details.title,
+            description = details.fileDescription,
+            fileSize = details.fileSize,
+            previewUrl = if (details.previewUrl.isNullOrBlank()) details.imageUrl else details.previewUrl,
+            subscriptions = details.subscriptions.toLong(),
+            favorited = details.favorited.toLong(),
+            views = details.views.toLong(),
+            lifetimeSubscriptions = details.lifetimeSubscriptions.toLong(),
+            lifetimeFavorited = details.lifetimeFavorited.toLong(),
+            tags = tags,
+            timeCreated = details.timeCreated.toLong(),
+            timeUpdated = details.timeUpdated.toLong(),
+            creator = details.creator.toString(),
+            creatorAppId = details.creatorAppid.toLong(),
+            creatorSteamId = details.creator.toString(),
+            visibility = details.visibility,
+            banned = details.banned,
+            banReason = details.banReason,
+            banner = details.banner.toString(),
+        )
+        return WorkshopItemTyped(item, WallpaperType.fromTags(tags))
+    }
+
+    /**
+     * Force-disconnect the session. Used when the user logs out of Steam in Settings,
+     * or when the app is shutting down.
+     */
+    fun disconnect() {
+        synchronized(authLock) {
+            try {
+                downloader?.cleanup()
+            } catch (e: Exception) {
+                WepWawetLogger.workshopWarn("$TAG: cleanup failed", "exception" to e.javaClass.name)
+            }
+            downloader = null
+            isAuthenticated = false
+        }
+    }
+}

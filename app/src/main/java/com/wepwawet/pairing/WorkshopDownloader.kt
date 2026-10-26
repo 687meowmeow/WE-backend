@@ -27,6 +27,7 @@ import `in`.dragonbra.javasteam.steam.handlers.steamuser.LogOnDetails
 import `in`.dragonbra.javasteam.steam.handlers.steamuser.SteamUser
 import `in`.dragonbra.javasteam.steam.handlers.steamuser.callback.LoggedOffCallback
 import `in`.dragonbra.javasteam.steam.handlers.steamuser.callback.LoggedOnCallback
+import `in`.dragonbra.javasteam.steam.handlers.steamworkshop.SteamWorkshop
 import `in`.dragonbra.javasteam.steam.steamclient.SteamClient
 import `in`.dragonbra.javasteam.steam.steamclient.callbackmgr.CallbackManager
 import `in`.dragonbra.javasteam.steam.steamclient.callbacks.ConnectedCallback
@@ -195,6 +196,31 @@ class WorkshopDownloader(
     }
 
     fun isAuthenticated(): Boolean = authenticated
+
+    /**
+     * Public accessor for the underlying JavaSteam [SteamWorkshop] handler.
+     *
+     * Returns `null` if the [SteamClient] is not connected/authenticated.
+     *
+     * Used by [com.wepwawet.pairing.WorkshopBrowseSession] to issue workshop
+     * browse queries via the ISteamPublishedFile.QueryFiles service RPC —
+     * which bypasses the IPublishedFileService HTTP API's [1,7] days limit
+     * for RankedByTrend. This achieves absolute parity with WE PC's
+     * `steam_api64.dll`-based workshop browse queries (which use the same
+     * underlying Steam CM protocol that JavaSteam speaks).
+     *
+     * Usage:
+     * ```kotlin
+     * val workshop = downloader.getSteamWorkshopHandler() ?: return
+     * val details = QueryFilesDetails(appId = 431960, queryType = EPublishedFileQueryType.k_PublishedFileQueryType_RankedByTrend, days = 365u)
+     * val response = workshop.queryFiles(details).await()
+     * val body = response.body.build()
+     * val total = body.total
+     * val items = body.publishedfiledetailsList
+     * ```
+     */
+    fun getSteamWorkshopHandler(): SteamWorkshop? =
+        steamClient?.getHandler(SteamWorkshop::class.java)
 
     private inner class GuardAuthenticator : IAuthenticator {
         override fun getDeviceCode(previousCodeWasIncorrect: Boolean): CompletableFuture<String> {

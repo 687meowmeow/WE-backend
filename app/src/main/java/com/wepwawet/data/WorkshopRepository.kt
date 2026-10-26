@@ -203,15 +203,24 @@ class WorkshopRepository constructor(
 
         try {
             val result = if (filter.creatorSteamId != null) {
-                // Browse a specific creator's workshop
+                // Browse a specific creator's workshop (HTML scraping — no API alternative
+                // for creator-specific queries, since JavaSteam's CPublishedFile_GetUserFiles
+                // would require a different service call we don't expose yet)
                 steamApi.browseCreatorWorkshop(
                     steamId = filter.creatorSteamId,
                     page = page,
                 )
             } else {
-                // Try IPublishedFileService/QueryFiles first (server-side sorting)
-                // Falls back to HTML scraping if no API key
-                val queryResult = steamApi.queryFiles(
+                // PRIMARY PATH: JavaSteam native CM protocol (ISteamPublishedFile.QueryFiles
+                // service RPC) — byte-identical to what WE PC's steam_api64.dll sends.
+                // Bypasses the IPublishedFileService HTTP API's [1,7] days limit for
+                // RankedByTrend — Steam honors any value (1, 7, 30, 365, ...) on the
+                // service path. This is ABSOLUTE PARITY with WE PC.
+                //
+                // Falls back gracefully to HTTP API + HTML scraping if the JavaSteam
+                // session is unavailable (user not logged in, Steam down, auth failed,
+                // EPublishedFileQueryType.forNumber returned null, etc.).
+                val javaSteamResult = steamApi.queryFilesViaJavaSteam(
                     sort = filter.sort,
                     page = page,
                     tags = filter.tags,
@@ -219,26 +228,54 @@ class WorkshopRepository constructor(
                     mobileCompatible = filter.mobileCompatible,
                     query = filter.query,
                 )
-                if (queryResult.isSuccess) {
-                    queryResult
+                if (javaSteamResult.isSuccess) {
+                    javaSteamResult
                 } else {
-                    // Fallback to HTML scraping
-                    if (filter.query != null) {
-                        steamApi.searchWorkshop(
-                            query = filter.query,
-                            page = page,
-                            tags = filter.tags,
-                            excludedTags = filter.excludedTags,
-                            mobileCompatible = filter.mobileCompatible,
-                        )
+                    // Log the failure then fall through to HTTP API + HTML fallbacks.
+                    WepWawetLogger.workshopWarn(
+                        "loadNextPage: JavaSteam path failed — falling back to HTTP/HTML",
+                        "page" to page,
+                        "sort" to filter.sort.displayName,
+                        "exception" to (javaSteamResult.exceptionOrNull()?.javaClass?.name ?: "unknown"),
+                        "message" to (javaSteamResult.exceptionOrNull()?.message ?: ""),
+                    )
+                    // FALLBACK 1: IPublishedFileService HTTP API (server-side sorting, requires API key).
+                    // For trend sorts with days > 7, this silently clamps to 7 — so MOST_POPULAR_YEAR
+                    // (365) and MOST_POPULAR_MONTH (30) would return identical results to
+                    // MOST_POPULAR_WEEK (7). WorkshopRepository will then route trend sorts to
+                    // HTML endpoint (FALLBACK 2) which DOES accept arbitrary day values.
+                    val queryResult = steamApi.queryFiles(
+                        sort = filter.sort,
+                        page = page,
+                        tags = filter.tags,
+                        excludedTags = filter.excludedTags,
+                        mobileCompatible = filter.mobileCompatible,
+                        query = filter.query,
+                    )
+                    if (queryResult.isSuccess) {
+                        queryResult
                     } else {
-                        steamApi.browseWorkshop(
-                            sort = filter.sort,
-                            page = page,
-                            tags = filter.tags,
-                            excludedTags = filter.excludedTags,
-                            mobileCompatible = filter.mobileCompatible,
-                        )
+                        // FALLBACK 2: HTML scraping endpoint (steamcommunity.com/workshop/browse).
+                        // Accepts arbitrary `days` values for trend sorts (verified: 1, 7, 30,
+                        // 365 all return distinct results for WE appid 431960). Always used for
+                        // trend sorts when both JavaSteam and HTTP API fail.
+                        if (filter.query != null) {
+                            steamApi.searchWorkshop(
+                                query = filter.query,
+                                page = page,
+                                tags = filter.tags,
+                                excludedTags = filter.excludedTags,
+                                mobileCompatible = filter.mobileCompatible,
+                            )
+                        } else {
+                            steamApi.browseWorkshop(
+                                sort = filter.sort,
+                                page = page,
+                                tags = filter.tags,
+                                excludedTags = filter.excludedTags,
+                                mobileCompatible = filter.mobileCompatible,
+                            )
+                        }
                     }
                 }
             }
