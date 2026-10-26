@@ -410,3 +410,163 @@ ADDITIONAL REMINDERS FOR FUTURE AGENTS (added in Task 12):
     — these bloat the git log. Don't make them. Always commit with a
     descriptive message starting with the version tag (e.g.
     "v0.5.11-alpha (dev): ...").
+
+---
+
+Task ID: 13
+Agent: main (v0.5.12-alpha dev branch — fix cancellation loop + consecutive-empty-pages limit)
+
+Task: User reported (with full log attached):
+  "two issues now only one thing is loading. it says loading more and
+   flashing loading failed for a split second. next with just the mature
+   tag on there is nothing appearing, this is not intended. there should
+   be way more. stuff appears when i go to most subscribed though. fix.
+   i am up to date. no lazy fixes."
+
+Work Log:
+- Read the user's v0.5.11-alpha log carefully. TWO root causes:
+
+  ROOT CAUSE #1 (cancellation loop — "loading more" flashing "loading failed"):
+    My v0.5.11-alpha fix added `displayState` as a third key to the
+    LaunchedEffect: `LaunchedEffect(shouldLoadMore, displayItems.size,
+    displayState)`. The intent was to catch the case where a page
+    returns 0 new items (so displayItems.size doesn't change, but
+    displayState goes Loading→Loaded, which would re-fire the effect).
+
+    BUT: when `repo.loadNextPage()` is called from the LaunchedEffect
+    body, it sets `_browseState.value = Loading(N+1)` near the start.
+    The `displayState` key change causes the LaunchedEffect to RE-FIRE,
+    which CANCELS the in-flight `loadNextPage()` call
+    (LeftCompositionCancellationException). The user sees "loading more"
+    flashing "loading failed" repeatedly. Log showed:
+      [WEP-WS] WARN: loadNextPage exception page=1
+        exception=androidx.compose.runtime.LeftCompositionCancellationException
+      [WEP-WS] INFO: infinite_scroll triggered loadNextPage page=2 (RETRY)
+      [WEP-WS] WARN: loadNextPage exception page=1 (CANCELLED AGAIN)
+      ... (infinite loop, page 2 never completes — user stuck at 1 item)
+
+    FIX: replaced the LaunchedEffect(shouldLoadMore, displayItems.size,
+    displayState) pattern with a `snapshotFlow + collect` pattern inside
+    a `LaunchedEffect(inSearchMode, isCreatorMode, creatorSteamId)`:
+
+      LaunchedEffect(inSearchMode, isCreatorMode, creatorSteamId) {
+          snapshotFlow {
+              val loadedState = displayState as? BrowseState.Loaded
+              loadedState != null && loadedState.hasMore &&
+                  (total < 30 || (total > 0 && lastVisible >= total - 6))
+          }
+              .distinctUntilChanged()
+              .filter { it }
+              .collect {
+                  repo.loadNextPage()
+              }
+      }
+
+    The LaunchedEffect keys are FILTER CONTEXT (inSearchMode,
+    isCreatorMode, creatorSteamId), NOT state. State changes during
+    loadNextPage DON'T cancel the LaunchedEffect. The snapshotFlow
+    emits on state changes, but `collect` is suspend — it waits for
+    loadNextPage to complete before processing the next emission. This
+    breaks the cancellation loop.
+
+    The condition `displayState is Loaded && hasMore` ensures we only
+    trigger when in a stable Loaded state, not during Loading (which
+    would cause duplicates).
+
+  ROOT CAUSE #2 (with just Mature tag on, nothing appears):
+    When the user excludes "Everyone" + "Questionable" age rating tags,
+    Steam API returns ~0 items (most items are tagged "Everyone"). The
+    auto_preload condition `total > 0 && (total < 30 || ...)` was false
+    for total=0, so no loadNextPage was triggered. The user got stuck at
+    0 items.
+
+    FIX: changed the snapshotFlow condition to:
+      `loadedState != null && loadedState.hasMore &&
+       (total < 30 || (total > 0 && lastVisible >= total - 6))`
+
+    The `total > 0` check is now only on the scroll-trigger branch, NOT
+    on the auto-preload branch. With total=0, the auto-preload (total <
+    30) triggers, loading the next page. This continues until either
+    items appear OR hasMore=false OR the consecutive-empty-pages limit
+    is hit (see #3 below).
+
+  ROOT CAUSE #3 (potential infinite loop with very restrictive filter):
+    With the new auto-preload condition (total < 30 triggers load
+    regardless of scroll), if the user's filter is so restrictive that
+    EVERY page returns 0 items, the auto-preload would loop forever
+    (loading page 2, page 3, ..., page N, ...) until Steam runs out of
+    items (millions of pages).
+
+    FIX: added `consecutiveEmptyPages` counter in WorkshopRepository.
+    After each page that returns 0 new items (API returned 30 items but
+    applyClientFilters filtered all 30 out), increment the counter. When
+    the counter reaches MAX_CONSECUTIVE_EMPTY_PAGES (20), set
+    hasMore=false and BrowseState=Done, which stops the auto-preload
+    loop. The counter is reset to 0 on `startBrowse` (new filter session)
+    AND on any non-empty page.
+
+    This means: if the user's filter is so restrictive that 20
+    consecutive pages return 0 items, we give up and show "no more
+    results" instead of "loading more" forever. The user can adjust
+    their filter (e.g., remove the age-rating exclusion OR remove some
+    resolution-tag exclusions) and try again.
+
+Stage Summary:
+- Cancellation loop FIXED (snapshotFlow + collect pattern, no displayState key).
+- 0-items-with-Mature-only-tag FIXED (auto_preload now triggers on total=0
+  via the `total < 30` branch).
+- Infinite loop on restrictive filter PREVENTED (20 consecutive empty
+  pages → hasMore=false → Done state).
+- mobileCompatible default stays true. defaultExcludedTags() still
+  returns the 18 non-mobile resolution tags. Workflow still triggers
+  only on tags (v0.5.11-alpha change preserved).
+- Bumped versionCode 50→51, versionName 0.5.11-alpha→0.5.12-alpha.
+
+---
+ADDITIONAL REMINDERS FOR FUTURE AGENTS (added in Task 13):
+
+32. **DO NOT use `displayState` as a LaunchedEffect key.** When
+    loadNextPage sets `_browseState = Loading(N+1)`, the displayState
+    key change re-fires the LaunchedEffect, cancelling the in-flight
+    loadNextPage call (LeftCompositionCancellationException → user
+    sees "loading failed" flashing). Use `snapshotFlow + collect`
+    pattern inside `LaunchedEffect(filter context keys)` instead.
+    See WorkshopBrowserScreen.kt infinite scroll block for the
+    canonical pattern.
+
+33. **snapshotFlow + collect pattern for state-driven side effects:**
+      LaunchedEffect(filterContextKeys...) {
+          snapshotFlow { state-derived condition }
+              .distinctUntilChanged()
+              .filter { it }
+              .collect { sideEffect() }
+      }
+    The LaunchedEffect keys must NOT include any state that changes
+    during the side effect (otherwise the effect gets cancelled).
+    Filter-context keys (like inSearchMode, isCreatorMode,
+    creatorSteamId) only change when the user explicitly switches
+    filter context — they don't change during a loadNextPage call.
+
+34. **Auto-preload must handle total=0.** When the user's filter
+    returns 0 items per page (e.g., age-rating exclusion that filters
+    out all "Everyone"-tagged items), the auto-preload condition
+    `total < 30` (without the `total > 0` guard) triggers, loading the
+    next page. This continues until items appear OR hasMore=false OR
+    the consecutive-empty-pages limit (20) is hit.
+
+35. **Consecutive-empty-pages limit (MAX_CONSECUTIVE_EMPTY_PAGES=20)
+    prevents infinite auto-preload loop.** If the user's filter is so
+    restrictive that every page returns 0 new items (API returns 30,
+    client-side filter drops all 30), we give up after 20 consecutive
+    empties. The counter is in WorkshopRepository, reset on startBrowse
+    AND on any non-empty page. When the limit is hit, hasMore=false
+    and BrowseState=Done (UI shows "no more results" instead of
+    "loading more" forever).
+
+36. **The parallel agent keeps switching the local branch back to
+    main.** When working on dev, you may need to `git checkout dev`
+    multiple times. To minimize interference, do all your work in a
+    single bash command sequence (using `&&`) where possible, OR use
+    a Python script to do the file edit atomically. The script
+    at /home/z/my-project/scripts/fix_infinite_scroll_v0.5.12.py
+    is an example — it does the regex replacement in one shot.

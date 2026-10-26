@@ -55,6 +55,16 @@ class WorkshopRepository constructor(
     private var currentPage: Int = 0
     @Volatile private var hasMore: Boolean = true
 
+    // v0.5.12-alpha: track consecutive empty pages (pages where the API returned
+    // items but client-side applyClientFilters filtered all of them out). After
+    // MAX_CONSECUTIVE_EMPTY_PAGES consecutive empties, give up and set hasMore=false
+    // so the UI shows "no more results" instead of "loading more" forever.
+    // This prevents the infinite auto-preload loop when the user's filter is
+    // too restrictive (e.g., mobileCompatible=true + 18 default-excluded
+    // resolution tags + age-rating exclusion → 0 items per page forever).
+    private var consecutiveEmptyPages: Int = 0
+    private val MAX_CONSECUTIVE_EMPTY_PAGES: Int = 20
+
     /** Mutex guards concurrent browse/search operations against each other. */
     private val browseLock = Mutex()
 
@@ -135,6 +145,7 @@ class WorkshopRepository constructor(
             currentFilter = filter
             currentPage = 0
             hasMore = true
+            consecutiveEmptyPages = 0  // v0.5.12-alpha: reset on new browse session
             _browseItems.value = emptyList()
             _browseState.value = BrowseState.Idle
             steamApi.resetQueryFilesCursor()
@@ -243,6 +254,30 @@ class WorkshopRepository constructor(
 
             // Client-side filtering + sorting pipeline
             val filteredItems = applyClientFilters(items, filter)
+
+            // v0.5.12-alpha: track consecutive empty pages to prevent infinite
+            // auto-preload loop when the user's filter is too restrictive
+            // (e.g., mobileCompatible=true + 18 default-excluded resolution
+            // tags + age-rating exclusion → every page returns 30 items
+            // from API, all 30 filtered out client-side, 0 new items added,
+            // auto_preload triggers next page load, repeat forever).
+            // After MAX_CONSECUTIVE_EMPTY_PAGES (20) consecutive empty pages,
+            // give up and set hasMore=false so the UI shows "no more results"
+            // instead of "loading more" forever.
+            if (filteredItems.isEmpty()) {
+                consecutiveEmptyPages++
+                if (consecutiveEmptyPages >= MAX_CONSECUTIVE_EMPTY_PAGES) {
+                    hasMore = false
+                    _browseState.value = BrowseState.Done
+                    WepWawetLogger.workshop("loadNextPage: max consecutive empty pages reached, giving up",
+                        "page" to page,
+                        "consecutive_empty" to consecutiveEmptyPages,
+                        "max" to MAX_CONSECUTIVE_EMPTY_PAGES)
+                    return
+                }
+            } else {
+                consecutiveEmptyPages = 0  // reset on non-empty page
+            }
 
             // Cache each item by id for fast detail-screen lookup
             filteredItems.forEach { detailCache[it.id] = it }
