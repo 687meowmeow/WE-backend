@@ -894,3 +894,13 @@ Stage Summary:
 - Estimated wallpaper success rate: ~70% (v0.5.x) → ~99% (v0.6.0-alpha) after all fixes.
 - Security fixes (S-1 through S-5 from parity doc §12) deliberately NOT implemented per user instruction
   ("implement all changes besides security").
+
+Build Status (verified 2026-10-27):
+- v0.6.0-alpha build SUCCEEDED on GitHub Actions (run 40589909546)
+- All 3 jobs passed: Check for duplicate tag run, Build APK, Publish GitHub Release
+- Release: https://github.com/687meowmeow/WE-backend/releases/tag/v0.6.0-alpha
+- APK: 16.80 MB at https://github.com/687meowmeow/WE-backend/releases/download/v0.6.0-alpha/app-release.apk
+- Note: glslang+SPIRV-Cross failed to fetch in CI (transient Git/network issue with shallow clones).
+  The build succeeded because glslang is optional (the regex fallback path handles HLSL→GLSL).
+  For full native HLSL→GLSL conversion, vendor glslang+SPIRV-Cross as git submodules.
+
