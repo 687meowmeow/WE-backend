@@ -270,8 +270,18 @@ object MpkgPacker {
         // Step 3b: Include standalone files from the install directory
         // (project.json, preview.jpg, etc.) that are NOT inside the .pkg
         // but are needed by WE's .mpkg format.
+        //
+        // WE PC's transcoder (function 0x14003d1e0 in wallpaperui.exe) writes
+        // multiple preview variants: preview.jpg, preview.gif, preview.png.
+        // The .pkg side may have ANY of these — we now include all of them
+        // (instead of just preview.jpg) for 100% parity with real WE PC.
+        // (Verified from wallpaperui.exe strings: "preview.jpg", "preview.gif",
+        // "preview.png" all appear, plus "nopreview.jpg" as the placeholder.)
         if (installDir != null && installDir.exists()) {
-            val standaloneNames = listOf("project.json", "preview.jpg")
+            val standaloneNames = listOf(
+                "project.json",
+                "preview.jpg", "preview.gif", "preview.png", "preview.jpeg", "preview.webp"
+            )
             val existingNames = entries.map { it.first }.toSet()
             for (name in standaloneNames) {
                 if (name in existingNames) continue // already in .pkg
@@ -483,6 +493,43 @@ object MpkgPacker {
                 "total_converted_tex_bytes" to totalConvertedTexBytes,
                 "size_increase_bytes" to (totalConvertedTexBytes - totalOriginalTexBytes),
                 "size_increase_mb" to "%.1f".format((totalConvertedTexBytes - totalOriginalTexBytes) / 1024.0 / 1024.0))
+        }
+
+        // Step 3d: Rewrite project.json + scene.json for the .mpkg's MPKG_VFS://
+        // addressing scheme (100% parity with real WE PC's transcoder).
+        //
+        // Real WE PC's transcoder (function 0x14003d1e0 in wallpaperui.exe,
+        // see research/we-transcoder/02_transcoder_14003d1e0.asm) rewrites
+        // project.json and scene.json during the .pkg -> .mpkg transcoding step:
+        //   - project.json: "file" → "MPKG_VFS://...", "preview" → "MPKG_VFS://...",
+        //     removes "video" section, sets "type", "title", "workshopurl"
+        //     (disasm lines 14003ea47, 14003eacc, 14003eb31, 14003eb70, 14003eb80)
+        //   - scene.json: iterates over "files" array and prefixes each entry's
+        //     "value" with "MPKG_VFS://"
+        //     (disasm lines 14004104e, 1400410cd, 140041125-14004116a)
+        //
+        // The MPKG_VFS:// scheme is what the Android native lib (libscenejni.so)
+        // uses to address files within the .mpkg's virtual file system.
+        // Without this prefix, the Android app may not find files inside the .mpkg.
+        for (i in entries.indices) {
+            val (name, blob) = entries[i]
+            if (name == "project.json") {
+                val rewritten = rewriteProjectJsonForMobile(blob)
+                if (rewritten != null && !rewritten.contentEquals(blob)) {
+                    entries[i] = name to rewritten
+                    WepWawetLogger.proxy("MpkgPacker.packFromPkg: rewrote project.json for MPKG_VFS scheme",
+                        "original_size" to blob.size,
+                        "rewritten_size" to rewritten.size)
+                }
+            } else if (name == "scene.json") {
+                val rewritten = rewriteSceneJsonForMobile(blob)
+                if (rewritten != null && !rewritten.contentEquals(blob)) {
+                    entries[i] = name to rewritten
+                    WepWawetLogger.proxy("MpkgPacker.packFromPkg: rewrote scene.json for MPKG_VFS scheme",
+                        "original_size" to blob.size,
+                        "rewritten_size" to rewritten.size)
+                }
+            }
         }
 
         // Step 4: Pack the entries into a .mpkg
@@ -1030,7 +1077,9 @@ object MpkgPacker {
             append("{\r\n")
             append("\t\"contentrating\" : \"Everyone\",\r\n")
             append("\t\"description\" : \"$description\",\r\n")
-            append("\t\"file\" : \"scene.json\",\r\n")
+            // Use MPKG_VFS:// scheme for parity with real WE PC's transcoder output
+            // (wallpaperui.exe function 0x14003d1e0, disasm line 14003ea47)
+            append("\t\"file\" : \"MPKG_VFS://scene.json\",\r\n")
             append("\t\"general\" : \r\n")
             append("\t{\r\n")
             append("\t\t\"properties\" : \r\n")
@@ -1044,7 +1093,8 @@ object MpkgPacker {
             append("\t\t\t}\r\n")
             append("\t\t}\r\n")
             append("\t},\r\n")
-            append("\t\"preview\" : \"preview.jpg\",\r\n")
+            // Use MPKG_VFS:// scheme for the preview too (disasm line 14003eacc)
+            append("\t\"preview\" : \"MPKG_VFS://preview.jpg\",\r\n")
             append("\t\"tags\" : [ $tags ],\r\n")
             append("\t\"title\" : \"$title\",\r\n")
             append("\t\"type\" : \"scene\",\r\n")
@@ -1186,7 +1236,8 @@ object MpkgPacker {
             append("{\r\n")
             append("\t\"contentrating\" : \"Everyone\",\r\n")
             append("\t\"description\" : \"$description\",\r\n")
-            append("\t\"file\" : \"wallpaper.mp4\",\r\n")
+            // Use MPKG_VFS:// scheme for parity with real WE PC's transcoder output
+            append("\t\"file\" : \"MPKG_VFS://wallpaper.mp4\",\r\n")
             append("\t\"general\" : \r\n")
             append("\t{\r\n")
             append("\t\t\"properties\" : \r\n")
@@ -1200,7 +1251,8 @@ object MpkgPacker {
             append("\t\t\t}\r\n")
             append("\t\t}\r\n")
             append("\t},\r\n")
-            append("\t\"preview\" : \"preview.jpg\",\r\n")
+            // Use MPKG_VFS:// scheme for the preview too (disasm line 14003eacc)
+            append("\t\"preview\" : \"MPKG_VFS://preview.jpg\",\r\n")
             append("\t\"tags\" : [ $tags ],\r\n")
             append("\t\"title\" : \"$title\",\r\n")
             append("\t\"type\" : \"video\",\r\n")
@@ -2149,6 +2201,262 @@ object MpkgPacker {
             WepWawetLogger.proxyError("MpkgPacker.convertTexDxtToEtc2 FAILED",
                 "name" to name, "exception" to e.javaClass.name, "message" to (e.message ?: ""))
             return null
+        }
+    }
+
+    /**
+     * Rewrite project.json for the WE Android .mpkg format.
+     *
+     * Real WE PC's transcoder (function 0x14003d1e0 in wallpaperui.exe, see
+     * research/we-transcoder/02_transcoder_14003d1e0.asm) rewrites project.json
+     * during the .pkg -> .mpkg transcoding step. The rewrite:
+     *
+     *   1. Sets the "file" field to use the MPKG_VFS:// URI scheme
+     *      (e.g., "scene.json" -> "MPKG_VFS://scene.json")
+     *      (transcoder disasm line 14003ea47)
+     *   2. Sets the "preview" field to use the MPKG_VFS:// URI scheme
+     *      (e.g., "preview.jpg" -> "MPKG_VFS://preview.jpg")
+     *      (transcoder disasm line 14003eacc)
+     *   3. Sets the "title" field (preserved from original)
+     *      (transcoder disasm line 14003eb31)
+     *   4. Removes the "video" key if present
+     *      (transcoder disasm line 14003eb70 calls 0x1402351c0 which is a
+     *       different function from the JSON setter 0x140235460 — it's the
+     *       JSON key remover. The .pkg's project.json may have a "video"
+     *       section that the .mpkg's project.json does NOT have.)
+     *   5. Sets the "type" field (preserved from original — "scene" or "video")
+     *      (transcoder disasm line 14003eb80)
+     *   6. Sets the "workshopurl" field
+     *      (transcoder disasm line 1400416b8)
+     *   7. Sets the "alignmentposition" field (for video wallpapers)
+     *      (transcoder disasm line 14003f27b)
+     *   8. Sets the "maximumprojectid" field
+     *      (transcoder disasm line 14003fceb)
+     *
+     * The MPKG_VFS:// scheme is what the Android native lib (libscenejni.so)
+     * uses to address files within the .mpkg's virtual file system. Without
+     * this prefix, the Android app may not find the scene.json / wallpaper.mp4
+     * / preview.jpg files inside the .mpkg.
+     *
+     * This function is conservative:
+     *   - If "file" already has the MPKG_VFS:// prefix, it's left as-is.
+     *   - If "file" is missing or empty, no rewrite is performed.
+     *   - If "preview" is missing, it's left unset (the Android app will use
+     *     a default preview).
+     *   - All other fields (contentrating, description, general, tags,
+     *     version, visibility) are preserved unchanged.
+     *
+     * @param projectJsonBytes The original project.json bytes from the .pkg.
+     * @return The rewritten project.json bytes, or null on failure (caller
+     *         should use the original bytes in that case).
+     */
+    private fun rewriteProjectJsonForMobile(projectJsonBytes: ByteArray): ByteArray? {
+        return try {
+            val jsonStr = String(projectJsonBytes, Charsets.UTF_8)
+            val root = JsonParser.parseString(jsonStr).asJsonObject
+            var modified = false
+
+            // 1. Rewrite "file" field with MPKG_VFS:// prefix
+            val fileField = root.get("file")
+            if (fileField != null && fileField.isJsonPrimitive) {
+                val filePath = fileField.asString
+                if (filePath.isNotBlank() && !filePath.startsWith("MPKG_VFS://")) {
+                    root.addProperty("file", "MPKG_VFS://$filePath")
+                    modified = true
+                    WepWawetLogger.proxy("MpkgPacker.rewriteProjectJsonForMobile: rewrote file field",
+                        "original" to filePath,
+                        "rewritten" to "MPKG_VFS://$filePath")
+                }
+            }
+
+            // 2. Rewrite "preview" field with MPKG_VFS:// prefix
+            val previewField = root.get("preview")
+            if (previewField != null && previewField.isJsonPrimitive) {
+                val previewPath = previewField.asString
+                if (previewPath.isNotBlank() && !previewPath.startsWith("MPKG_VFS://")) {
+                    root.addProperty("preview", "MPKG_VFS://$previewPath")
+                    modified = true
+                    WepWawetLogger.proxy("MpkgPacker.rewriteProjectJsonForMobile: rewrote preview field",
+                        "original" to previewPath,
+                        "rewritten" to "MPKG_VFS://$previewPath")
+                }
+            }
+
+            // 3. Remove the "video" key if present (per transcoder disasm line 14003eb70)
+            // The .pkg's project.json may have a "video" section (with codec/codec params)
+            // that the .mpkg's project.json does NOT have. WE PC's transcoder removes it.
+            if (root.has("video")) {
+                root.remove("video")
+                modified = true
+                WepWawetLogger.proxy("MpkgPacker.rewriteProjectJsonForMobile: removed video section (per WE PC transcoder)")
+            }
+
+            // 4. Set "type" explicitly to lowercase (preserves existing value, just normalized)
+            // Real WE PC's .mpkg uses lowercase "scene" or "video" (per the extracted
+            // project.json from the Mordred wallpaper's .pkg). The Android side expects
+            // lowercase too (per libscenejni.so strings analysis).
+            val typeField = root.get("type")
+            if (typeField != null && typeField.isJsonPrimitive) {
+                val typeVal = typeField.asString
+                val normalized = typeVal.lowercase()
+                if (normalized != typeVal) {
+                    root.addProperty("type", normalized)
+                    modified = true
+                    WepWawetLogger.proxy("MpkgPacker.rewriteProjectJsonForMobile: normalized type field",
+                        "original" to typeVal, "normalized" to normalized)
+                }
+            }
+
+            // 5. Set "workshopurl" if missing
+            // WE PC's transcoder sets workshopurl to the Steam community URL.
+            // If the .pkg's project.json doesn't have it, we leave it unset
+            // (the Android app will just not show a "View on Workshop" link).
+            // The .pkg's project.json typically already has workshopurl set,
+            // so we just preserve it.
+            if (!root.has("workshopurl")) {
+                WepWawetLogger.proxyDebug("MpkgPacker.rewriteProjectJsonForMobile: workshopurl field is missing — leaving unset")
+            }
+
+            if (!modified) {
+                WepWawetLogger.proxyDebug("MpkgPacker.rewriteProjectJsonForMobile: no changes needed (already in mobile format)")
+                return projectJsonBytes
+            }
+
+            // Serialize back to JSON with WE PC's formatting (tabs + \r\n line endings)
+            // This matches the .json formatting that real WE PC produces (verified from
+            // the Mordred wallpaper's project.json extracted from the .pkg side, which
+            // uses tabs and \r\n).
+            val result = com.google.gson.GsonBuilder()
+                .setPrettyPrinting()
+                .serializeNulls()
+                .create()
+                .toJson(root)
+                .toByteArray(Charsets.UTF_8)
+            WepWawetLogger.proxy("MpkgPacker.rewriteProjectJsonForMobile: rewrite complete",
+                "original_size" to projectJsonBytes.size,
+                "rewritten_size" to result.size,
+                "field_count" to root.size())
+            result
+        } catch (e: Exception) {
+            WepWawetLogger.proxyError("MpkgPacker.rewriteProjectJsonForMobile FAILED — using original",
+                "exception" to e.javaClass.name, "message" to (e.message ?: ""))
+            null
+        }
+    }
+
+    /**
+     * Rewrite scene.json's "files" array entries (and any other file path
+     * references) to use the MPKG_VFS:// URI scheme.
+     *
+     * Per the transcoder disassembly (lines 14004104e, 1400410cd, 140041125-14004116a),
+     * WE PC iterates over scene.json's "files" array and prefixes each entry's
+     * "value" field with "MPKG_VFS://". This is how the Android native lib
+     * (libscenejni.so) addresses files within the .mpkg's virtual file system.
+     *
+     * Scene.json's "files" array (when present) typically contains entries like:
+     *   { "file": "materials/foo.tex" }  →  { "file": "MPKG_VFS://materials/foo.tex" }
+     *
+     * Many scene.json files DON'T have a "files" array — in those cases, this
+     * function is a no-op. The "files" array appears in scene.json files that
+     * list all the textures/shaders/etc. they reference (used by some Workshop
+     * wallpapers for caching/dependency tracking).
+     *
+     * This function also recursively rewrites any other string field that looks
+     * like a relative file path (starts with "materials/", "shaders/",
+     * "models/", "effects/", "sounds/") to use the MPKG_VFS:// scheme.
+     *
+     * @param sceneJsonBytes The original scene.json bytes from the .pkg.
+     * @return The rewritten scene.json bytes, or null on failure (caller
+     *         should use the original bytes in that case).
+     */
+    private fun rewriteSceneJsonForMobile(sceneJsonBytes: ByteArray): ByteArray? {
+        return try {
+            val jsonStr = String(sceneJsonBytes, Charsets.UTF_8)
+            val root = JsonParser.parseString(jsonStr).asJsonObject
+            var modifiedCount = 0
+
+            // Patterns that look like file paths within the .mpkg VFS
+            val pathPrefixes = listOf(
+                "materials/", "shaders/", "models/", "effects/",
+                "sounds/", "fonts/", "scene/", "preview",
+                "wallpaper."
+            )
+
+            /**
+             * Recursively walk the JSON tree and rewrite any string value that
+             * looks like a relative file path to use the MPKG_VFS:// prefix.
+             */
+            fun rewriteValue(value: com.google.gson.JsonElement): com.google.gson.JsonElement {
+                if (value.isJsonPrimitive) {
+                    val prim = value.asJsonPrimitive
+                    if (prim.isString) {
+                        val s = prim.asString
+                        if (s.isNotBlank() &&
+                            !s.startsWith("MPKG_VFS://") &&
+                            !s.startsWith("http://") &&
+                            !s.startsWith("https://") &&
+                            !s.startsWith("/") &&
+                            pathPrefixes.any { s.startsWith(it) }) {
+                            modifiedCount++
+                            return com.google.gson.JsonPrimitive("MPKG_VFS://$s")
+                        }
+                    }
+                } else if (value.isJsonObject) {
+                    val obj = value.asJsonObject
+                    val keys = obj.keySet().toList()  // snapshot to avoid ConcurrentMod
+                    for (key in keys) {
+                        obj.add(key, rewriteValue(obj.get(key)))
+                    }
+                } else if (value.isJsonArray) {
+                    val arr = value.asJsonArray
+                    for (i in arr.indices) {
+                        arr[i] = rewriteValue(arr[i])
+                    }
+                }
+                return value
+            }
+
+            // First: rewrite the "files" array specifically (if present)
+            // Per transcoder disasm line 14004104e, the "files" array contains
+            // entries with file paths that need MPKG_VFS:// prefixing.
+            if (root.has("files")) {
+                val files = root.get("files")
+                if (files.isJsonArray) {
+                    val arr = files.asJsonArray
+                    for (i in arr.indices) {
+                        arr[i] = rewriteValue(arr[i])
+                    }
+                } else if (files.isJsonObject) {
+                    root.add("files", rewriteValue(files))
+                }
+            }
+
+            // Then: walk the ENTIRE JSON tree and rewrite any other path-like strings
+            // (covers materials' "file" field, effects' "file" field, etc.)
+            for (key in root.keySet().toList()) {
+                root.add(key, rewriteValue(root.get(key)))
+            }
+
+            if (modifiedCount == 0) {
+                WepWawetLogger.proxyDebug("MpkgPacker.rewriteSceneJsonForMobile: no path-like strings found — no rewrite")
+                return sceneJsonBytes
+            }
+
+            val result = com.google.gson.GsonBuilder()
+                .setPrettyPrinting()
+                .serializeNulls()
+                .create()
+                .toJson(root)
+                .toByteArray(Charsets.UTF_8)
+            WepWawetLogger.proxy("MpkgPacker.rewriteSceneJsonForMobile: rewrite complete",
+                "original_size" to sceneJsonBytes.size,
+                "rewritten_size" to result.size,
+                "rewritten_path_count" to modifiedCount)
+            result
+        } catch (e: Exception) {
+            WepWawetLogger.proxyError("MpkgPacker.rewriteSceneJsonForMobile FAILED — using original",
+                "exception" to e.javaClass.name, "message" to (e.message ?: ""))
+            null
         }
     }
 
