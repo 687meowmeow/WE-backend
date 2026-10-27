@@ -241,33 +241,27 @@ object MpkgPacker {
             null
         }
         val entries: MutableList<Pair<String, ByteArray>> = if (vfsData != null) {
-            // Large .pkg — load ONLY entries that need modification (shaders, .tex, JSONs)
+            // Large .pkg — load ONLY entries that need modification (shaders, JSONs).
+            // v0.6.1: CRITICAL OOM FIX — .tex entries are NOT loaded here. They are loaded
+            // and converted ONE AT A TIME in the .tex processing phase below. This prevents
+            // OOM when a .pkg has many large .tex files (e.g., 310 entries × 2MB avg = 620MB,
+            // exceeding the 512MB heap). After conversion, each .tex is ~4-8x smaller
+            // (ETC2+LZ4), so the converted results fit comfortably in memory.
             val (vfsEntries, dataSectionStart) = vfsData!!
             WepWawetLogger.proxy("MpkgPacker.packFromPkg: streaming mode (large .pkg)",
                 "pkg_size" to pkgFile.length(),
                 "vfs_entries" to vfsEntries.size,
-                "loading_only_modified" to true)
+                "loading_only_modified" to true,
+                "tex_entries_deferred" to vfsEntries.count { it.path.endsWith(".tex") })
             val loaded = mutableListOf<Pair<String, ByteArray>>()
             for (vfs in vfsEntries) {
+                // Load non-.tex entries that need modification (shaders, JSONs).
+                // .tex entries are deferred to the one-at-a-time processing phase.
                 val needsMod = vfs.path.endsWith(".frag") || vfs.path.endsWith(".vert") ||
-                    vfs.path.endsWith(".tex") || vfs.path == "scene.json" || vfs.path == "project.json"
-                // v0.6.0 (parity §6 6-6): CRITICAL FIX — Raised threshold from 20 MB to 256 MB.
-                // Previously: 4K DXT5 with mipmaps (~21 MB), 8K DXT1 (~32 MB), 8K DXT5 (~64 MB)
-                // were silently skipped in streaming mode → streamed as raw DXT to .mpkg →
-                // Android sees DXT texture it can't decode → yellow/black "missing texture".
-                //
-                // 256 MB headroom covers 16K textures (~340 MB as DXT5). The texture conversion
-                // cache (texCacheLookup/texCacheStore) means each .tex is only loaded ONCE
-                // per pack, so the threshold should match what fits in the app's heap (typically
-                // 192-512 MB). Anything larger is logged as a warning.
-                if (needsMod && vfs.size < 256_000_000L) {
+                    vfs.path == "scene.json" || vfs.path == "project.json"
+                if (needsMod) {
                     val data = PkgReader.readEntryData(pkgFile, dataSectionStart, vfs.offset, vfs.size)
                     if (data != null) loaded.add(vfs.path to data)
-                } else if (needsMod) {
-                    WepWawetLogger.proxyWarn("MpkgPacker.packFromPkg: .tex too large to load (>256MB) — passing through unchanged",
-                        "name" to vfs.path,
-                        "size" to vfs.size,
-                        "threshold" to 256_000_000L)
                 }
             }
             loaded
@@ -352,24 +346,17 @@ object MpkgPacker {
         // REMOVED by WE Android (including the X-ray effect).
         fixShadersForMobile(entries)
 
-        // Step 3c: Convert .tex files that contain PNG data to raw RGBA8888.
+        // Step 3c: Convert .tex files.
         //
-        // Steam depot stores .tex files as PNG-encoded (TexB format=13=FIF_PNG)
-        // because WE PC has stb_image to decode PNG at load time.
-        // WE Android does NOT have a PNG decoder for .tex files — when it sees
-        // TexB format=13, the texture loader fails and shows the yellow/black
-        // "missing texture" checkerboard.
+        // v0.6.1: CRITICAL OOM FIX — In streaming mode, .tex entries are loaded from
+        // the .pkg ONE AT A TIME, converted, and the converted (smaller) result is kept.
+        // The original .tex bytes are freed after each conversion. This prevents OOM
+        // when a .pkg has many large .tex files (e.g., 100+ textures × 2MB avg = 200MB+
+        // just for original .tex data, plus RGBA decode buffers + ETC2 encode buffers
+        // = well over 512MB heap).
         //
-        // Fix: rebuild each .tex with raw RGBA8888 pixel data:
-        //   - TexI format=0 (RGBA8888) — declared format matches actual data
-        //   - TexB format=-1 (FIF_UNKNOWN) — use TexI format directly
-        //   - 1 image with 1 mipmap (the largest PNG) to keep file size reasonable
-        //   - Compression=0 (no LZ4), data = raw RGBA bytes from BitmapFactory
-        //
-        // NOTE: This makes the file larger (~87 MB for 4 textures of 3000x1800
-        // vs 5 MB for PNG-encoded). The trade-off: it actually renders on Android.
-        // Future optimization: add LZ4 compression or ETC2/ASTC encoding to
-        // reduce size while keeping Android compatibility.
+        // After conversion, each .tex is ~4-8x smaller (ETC2+LZ4 vs DXT/PNG), so the
+        // converted results fit comfortably in memory for the subsequent streamPack phase.
         val processedEntries = mutableListOf<Pair<String, ByteArray>>()
         var texConverted = 0
         var texDxtConverted = 0
@@ -377,12 +364,40 @@ object MpkgPacker {
         var texRgbaConverted = 0  // v0.6.0: RGBA8888 → ETC2 conversions
         var totalOriginalTexBytes = 0L
         var totalConvertedTexBytes = 0L
+
+        // Pass 1: Process non-.tex entries from `entries` (already loaded, small)
         for (entry in entries) {
             val (name, blob) = entry
-            if (!name.endsWith(".tex")) {
-                processedEntries.add(entry)
-                continue
-            }
+            if (name.endsWith(".tex")) continue  // .tex handled in Pass 2
+            processedEntries.add(entry)
+        }
+
+        // Pass 2: Process .tex entries ONE AT A TIME using a lazy sequence.
+        // v0.6.1: CRITICAL OOM FIX — .tex entries are NEVER all loaded into memory at once.
+        // A Kotlin Sequence is used to lazily load each .tex from .pkg (streaming mode) or
+        // from the entries list (non-streaming mode). Each .tex is loaded, converted, and
+        // the result added to processedEntries. The original bytes go out of scope after
+        // each iteration, allowing GC to reclaim between iterations.
+        val texSource: Sequence<Pair<String, ByteArray>> = if (vfsData != null) {
+            // Streaming mode: lazily load each .tex from .pkg one at a time
+            val (vfsEntries, dataSectionStart) = vfsData!!
+            val texVfsEntries = vfsEntries.filter { it.path.endsWith(".tex") }
+            WepWawetLogger.proxy("MpkgPacker.packFromPkg: streaming .tex entries (lazy, one at a time)",
+                "tex_count" to texVfsEntries.size)
+            texVfsEntries.asSequence().map { vfs ->
+                val data = PkgReader.readEntryData(pkgFile, dataSectionStart, vfs.offset, vfs.size)
+                if (data != null) vfs.path to data else null
+            }.filterNotNull()
+        } else {
+            // Non-streaming mode: .tex entries are already in `entries`
+            val texEntries = entries.filter { it.first.endsWith(".tex") }
+            WepWawetLogger.proxy("MpkgPacker.packFromPkg: processing .tex entries from loaded list",
+                "tex_count" to texEntries.size)
+            texEntries.asSequence()
+        }
+
+        for (texEntry in texSource) {
+            val (name, blob) = texEntry
 
             // Parse the .tex header FIRST. We route to the appropriate converter
             // based on the TexI format field — this avoids the false-positive
@@ -419,7 +434,7 @@ object MpkgPacker {
             if (texiFormat == 5) {
                 WepWawetLogger.proxy("MpkgPacker.packFromPkg: .tex is ETC2 (format=5) — already mobile-compatible, skipping conversion",
                     "name" to name, "tex_size" to blob.size, "is_lz4" to isLz4)
-                processedEntries.add(entry)
+                processedEntries.add(texEntry)
                 continue
             }
 
@@ -442,7 +457,7 @@ object MpkgPacker {
                         "converted_size" to converted.size,
                         "size_ratio" to "%.2fx".format(converted.size.toDouble() / blob.size.toDouble()))
                 } else {
-                    processedEntries.add(entry)
+                    processedEntries.add(texEntry)
                     WepWawetLogger.proxyWarn("MpkgPacker.packFromPkg: RGBA8888 .tex conversion FAILED — using original (4x larger than necessary)",
                         "name" to name)
                 }
@@ -471,7 +486,7 @@ object MpkgPacker {
                         "converted_size" to converted.size,
                         "size_ratio" to "%.2fx".format(converted.size.toDouble() / blob.size.toDouble()))
                 } else {
-                    processedEntries.add(entry)
+                    processedEntries.add(texEntry)
                     WepWawetLogger.proxyWarn("MpkgPacker.packFromPkg: DXT/BC .tex transcode FAILED — using original (will show yellow/black on Android)",
                         "name" to name,
                         "dxt_format" to dxtFormat.displayName)
@@ -495,7 +510,7 @@ object MpkgPacker {
                         "original_size" to blob.size,
                         "converted_size" to converted.size)
                 } else {
-                    processedEntries.add(entry)
+                    processedEntries.add(texEntry)
                     WepWawetLogger.proxyWarn("MpkgPacker.packFromPkg: RG88 .tex transcode FAILED — using original",
                         "name" to name)
                 }
@@ -518,7 +533,7 @@ object MpkgPacker {
                         "original_size" to blob.size,
                         "converted_size" to converted.size)
                 } else {
-                    processedEntries.add(entry)
+                    processedEntries.add(texEntry)
                     WepWawetLogger.proxyWarn("MpkgPacker.packFromPkg: R8 .tex transcode FAILED — using original",
                         "name" to name)
                 }
@@ -572,18 +587,21 @@ object MpkgPacker {
                         "converted_size" to converted.size,
                         "size_ratio" to "%.2fx".format(converted.size.toDouble() / blob.size.toDouble()))
                 } else {
-                    processedEntries.add(entry)
+                    processedEntries.add(texEntry)
                     WepWawetLogger.proxyWarn("MpkgPacker.packFromPkg: .tex PNG conversion FAILED — using original (will likely show yellow/black on Android)",
                         "name" to name)
                 }
             } else {
-                processedEntries.add(entry)
+                processedEntries.add(texEntry)
             }
         }
+        // v0.6.1: Always replace entries with processedEntries.
+        // processedEntries contains non-.tex entries (Pass 1) + converted .tex entries (Pass 2).
+        // In streaming mode, `entries` doesn't have .tex entries (they were loaded one-at-a-time
+        // in Pass 2), so we MUST replace entries with processedEntries to have the complete list.
+        entries.clear()
+        entries.addAll(processedEntries)
         if (texConverted > 0) {
-            // Replace entries with processed ones
-            entries.clear()
-            entries.addAll(processedEntries)
             WepWawetLogger.proxy("MpkgPacker.packFromPkg: converted .tex files summary",
                 "tex_converted_count" to texConverted,
                 "tex_dxt_converted" to texDxtConverted,

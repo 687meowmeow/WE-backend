@@ -1,5 +1,8 @@
 package com.wepwawet.data
 
+import android.content.Context
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import com.wepwawet.data.model.WorkshopItemTyped
 import com.wepwawet.log.WepWawetLogger
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,10 +18,16 @@ import java.util.concurrent.ConcurrentHashMap
  * with a central, app-wide download tracker. The UI can observe [activeDownloads]
  * and [completedDownloads] to show a download manager screen.
  *
- * State is held in-memory (StateFlow) for the active session. Completed downloads
- * are also kept in-memory for the session (future: persist to SharedPreferences/DB).
+ * v0.6.1: Completed downloads are now persisted to SharedPreferences. They survive
+ * app restarts. Active downloads are still in-memory only (they can't survive a
+ * restart since the download process itself is killed).
  */
 object DownloadManager {
+
+    private const val PREF_NAME = "wepwawet_downloads"
+    private const val KEY_COMPLETED = "completed_downloads_json"
+    private var appContext: Context? = null
+    private val gson = Gson()
 
     // ====== Active downloads (in-progress) ======
 
@@ -32,6 +41,41 @@ object DownloadManager {
 
     /** Lock for concurrent access to completed downloads list. */
     private val completedLock = Any()
+
+    /**
+     * Initialize from SharedPreferences. Call once at app startup.
+     * Loads previously-completed downloads from disk.
+     */
+    fun initialize(context: Context) {
+        appContext = context.applicationContext
+        loadCompletedFromDisk()
+    }
+
+    private fun loadCompletedFromDisk() {
+        try {
+            val prefs = appContext?.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE) ?: return
+            val json = prefs.getString(KEY_COMPLETED, null) ?: return
+            val type = object : TypeToken<List<CompletedDownload>>() {}.type
+            val loaded: List<CompletedDownload> = gson.fromJson(json, type) ?: emptyList()
+            _completedDownloads.value = loaded
+            WepWawetLogger.workshop("DownloadManager: loaded completed downloads from disk",
+                "count" to loaded.size)
+        } catch (e: Exception) {
+            WepWawetLogger.workshopWarn("DownloadManager: failed to load completed downloads from disk",
+                "exception" to e.javaClass.name, "message" to (e.message ?: ""))
+        }
+    }
+
+    private fun saveCompletedToDisk() {
+        try {
+            val prefs = appContext?.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE) ?: return
+            val json = gson.toJson(_completedDownloads.value)
+            prefs.edit().putString(KEY_COMPLETED, json).apply()
+        } catch (e: Exception) {
+            WepWawetLogger.workshopWarn("DownloadManager: failed to save completed downloads to disk",
+                "exception" to e.javaClass.name)
+        }
+    }
 
     /**
      * Start tracking a new download.
@@ -93,6 +137,7 @@ object DownloadManager {
             _completedDownloads.update { existing ->
                 (listOf(completed) + existing.filter { it.itemId != itemId })
             }
+            saveCompletedToDisk()
         }
         _activeDownloads.update { it - itemId }
         WepWawetLogger.workshop("DownloadManager: completed download",
@@ -160,6 +205,7 @@ object DownloadManager {
             _completedDownloads.update { existing ->
                 (listOf(completed) + existing.filter { it.itemId != itemId })
             }
+            saveCompletedToDisk()
         }
         WepWawetLogger.workshopWarn("DownloadManager: failed download",
             "item_id" to itemId, "error" to errorMessage)
@@ -180,6 +226,7 @@ object DownloadManager {
     fun removeCompleted(itemId: String) {
         synchronized(completedLock) {
             _completedDownloads.update { it.filter { c -> c.itemId != itemId } }
+            saveCompletedToDisk()
         }
     }
 
@@ -189,6 +236,7 @@ object DownloadManager {
     fun clearCompleted() {
         synchronized(completedLock) {
             _completedDownloads.value = emptyList()
+            saveCompletedToDisk()
         }
     }
 

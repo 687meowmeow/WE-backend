@@ -262,6 +262,11 @@ fun SettingsScreen(
             item {
                 AboutCard()
             }
+
+            // ===== 5. Cache =====
+            item {
+                CacheCard(context = context)
+            }
         }
     }
 }
@@ -553,5 +558,83 @@ private fun AboutCard() {
                 style = MaterialTheme.typography.labelSmall,
             )
         }
+    }
+}
+
+/**
+ * Section 5 — Cache.
+ *
+ * Shows the current cache size and provides a "Clear cache" button that
+ * deletes all files in the app's cache directory (downloaded .pkg files,
+ * .mpkg files, texture conversion cache, etc.).
+ */
+@Composable
+private fun CacheCard(context: Context) {
+    var cacheSize by remember { mutableStateOf(0L) }
+    var cleared by remember { mutableStateOf(false) }
+
+    // Compute cache size
+    LaunchedEffect(cleared) {
+        cacheSize = try {
+            var size = 0L
+            context.cacheDir.walkTopDown().forEach { f ->
+                if (f.isFile) size += f.length()
+            }
+            size
+        } catch (_: Exception) { 0L }
+    }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Cache", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Cache size: ${formatCacheSize(cacheSize)}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Clears downloaded .pkg files, .mpkg files, and texture conversion cache.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            Button(
+                onClick = {
+                    WepWawetLogger.appInfo("settings_clear_cache_clicked")
+                    try {
+                        context.cacheDir.walkTopDown().forEach { f ->
+                            if (f.isFile) f.delete()
+                        }
+                        // Also clear the external cache dir if it exists
+                        context.externalCacheDir?.walkTopDown()?.forEach { f ->
+                            if (f.isFile) f.delete()
+                        }
+                        cleared = !cleared
+                        WepWawetLogger.appInfo("settings_clear_cache_done")
+                    } catch (e: Exception) {
+                        WepWawetLogger.appInfo("settings_clear_cache_failed",
+                            "exception" to e.javaClass.name)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Clear Cache")
+            }
+        }
+    }
+}
+
+private fun formatCacheSize(bytes: Long): String {
+    if (bytes <= 0) return "0 B"
+    val kb = bytes / 1024.0
+    val mb = kb / 1024.0
+    val gb = mb / 1024.0
+    return when {
+        gb >= 1 -> "%.2f GB".format(gb)
+        mb >= 1 -> "%.1f MB".format(mb)
+        kb >= 1 -> "%.0f KB".format(kb)
+        else -> "$bytes B"
     }
 }

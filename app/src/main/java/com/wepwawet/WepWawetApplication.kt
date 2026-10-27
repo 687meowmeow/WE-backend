@@ -112,6 +112,9 @@ class WepWawetApplication : Application(), Configuration.Provider, ImageLoaderFa
 
         super.onCreate()
 
+        // v0.6.1: Load persisted download history from SharedPreferences
+        com.wepwawet.data.DownloadManager.initialize(this)
+
         // Step 2: Write a boot breadcrumb to public Downloads/WepWawet/boot.txt
         // so the user can verify the app actually reached onCreate — if even
         // this file is missing, the crash is happening BEFORE Application.onCreate

@@ -1,6 +1,7 @@
 package com.wepwawet.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -79,6 +80,7 @@ import java.util.Locale
 @Composable
 fun DownloadManagerScreen(
     onBack: () -> Unit,
+    onItemClick: (String) -> Unit = {},
 ) {
     val active by DownloadManager.activeDownloads.collectAsState()
     val completed by DownloadManager.completedDownloads.collectAsState()
@@ -131,7 +133,7 @@ fun DownloadManagerScreen(
                     SectionHeader(title = "Active (${activeList.size})")
                 }
                 items(activeList, key = { "active_${it.itemId}" }) { download ->
-                    ActiveDownloadCard(download = download)
+                    ActiveDownloadCard(download = download, onItemClick = onItemClick)
                 }
             }
 
@@ -140,7 +142,7 @@ fun DownloadManagerScreen(
                     SectionHeader(title = "Completed (${completedList.size})")
                 }
                 items(completedList, key = { "completed_${it.itemId}" }) { download ->
-                    CompletedDownloadCard(download = download)
+                    CompletedDownloadCard(download = download, onItemClick = onItemClick)
                 }
             }
         }
@@ -168,9 +170,11 @@ private fun SectionHeader(title: String) {
  * "Cancel" button.
  */
 @Composable
-private fun ActiveDownloadCard(download: DownloadProgress) {
+private fun ActiveDownloadCard(download: DownloadProgress, onItemClick: (String) -> Unit = {}) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onItemClick(download.itemId) },
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -247,7 +251,7 @@ private fun ActiveDownloadCard(download: DownloadProgress) {
  * "Remove" button.
  */
 @Composable
-private fun CompletedDownloadCard(download: CompletedDownload) {
+private fun CompletedDownloadCard(download: CompletedDownload, onItemClick: (String) -> Unit = {}) {
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US) }
     Card(
         modifier = Modifier.fillMaxWidth(),

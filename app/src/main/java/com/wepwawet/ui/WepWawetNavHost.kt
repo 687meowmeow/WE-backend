@@ -137,7 +137,10 @@ fun WepWawetNavHost() {
 
         composable("downloads") {
             WepWawetLogger.lifecycle("NavHost navigate to downloads")
-            DownloadManagerScreen(onBack = { nav.popBackStack() })
+            DownloadManagerScreen(
+                onBack = { nav.popBackStack() },
+                onItemClick = { itemId -> nav.navigate("detail/$itemId") },
+            )
         }
 
         composable(

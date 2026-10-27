@@ -100,7 +100,7 @@ import com.wepwawet.pairing.PairingService
  *   - Exposes `state: StateFlow<State>` with progress / status / errorMessage /
  *     resultMessage / hasChunkProgress / workshopId / isRunning — observed
  *     here via `collectAsState()`.
- *   - Passes `installDir` to `MpkgPacker.packFromPkg` — same as debug download.
+ *   - Passes `installDir` to `MpkgPacker.packFromPkg` — might take a while.
  *
  * All actions are logged via [WepWawetLogger.workshop].
  *

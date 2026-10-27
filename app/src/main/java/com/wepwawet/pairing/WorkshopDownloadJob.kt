@@ -638,7 +638,7 @@ object WorkshopDownloadJob {
                 //   - PKGV (.pkg) files have "PKGV" at offset 4
                 // ===
                 _state.update { s -> s.copy(
-                    status = "Packing content → .mpkg (same as debug download)…",
+                    status = "Packing content → .mpkg (might take a while)…",
                     progress = 0.85f,
                 ) }
                 // v0.5.32 (audit §1): mirror the packing phase transition
@@ -647,7 +647,7 @@ object WorkshopDownloadJob {
                     itemId = item.id,
                     progress = 0.85f,
                     status = com.wepwawet.data.DownloadStatus.PACKING,
-                    statusMessage = "Packing content → .mpkg (same as debug download)…",
+                    statusMessage = "Packing content → .mpkg (might take a while)…",
                 )
                 val cacheMpkg = File(appContext.cacheDir, "${item.id}_${sendId}_send.mpkg")
                 val installDir = File(appContext.cacheDir, "workshop_downloads/${item.id}")
