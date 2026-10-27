@@ -70,6 +70,25 @@ object WorkshopBrowseSession {
     /** Maximum time to wait for authentication to complete (in milliseconds). */
     private const val AUTH_TIMEOUT_MS = 60_000L
 
+    // v0.5.32 (audit H4): Separate the query timeout from the auth timeout.
+    // Previously AUTH_TIMEOUT_MS (60s) was reused for withTimeoutOrNull
+    // around the actual Steam CM RPC. On timeout, withTimeoutOrNull
+    // returned null, the elvis operator returned Result.failure(...),
+    // and the function exited BEFORE reaching the catch (e: Exception)
+    // block — so isAuthenticated was NOT reset on timeout. The session
+    // stayed marked "authenticated" even though the underlying Steam CM
+    // was unresponsive. The user got stuck in a "this session is fine
+    // but every query takes 60s" loop. Restarting the app was the only
+    // recovery.
+    //
+    // Per the audit, Steam CM RPCs under load (especially RankedByTrend
+    // over a 365-day window for WE's 3M+ items) can take 30-60+ seconds
+    // for the first query. We use 60s for queries (same as auth) so
+    // transient slow-but-working queries don't get falsely flagged as
+    // timeouts; the key fix is that we now RESET isAuthenticated on the
+    // timeout path so the next call forces a reconnect.
+    private const val QUERY_TIMEOUT_MS = 60_000L
+
     /** Lock that serializes concurrent ensureConnected calls. Uses tryLock with
      *  a 30-second timeout so queued browse queries don't block indefinitely when
      *  auth is in progress (which can take up to 120s). Replaces the original
@@ -134,6 +153,22 @@ object WorkshopBrowseSession {
             val connected = downloader.connectAndAuthenticate(context)
             if (!connected) {
                 WepWawetLogger.workshopWarn("$TAG: connection/auth failed — browse session unavailable")
+                // v0.5.32 (audit H3): clean up the partially-initialized
+                // downloader and clear the cached reference so the next
+                // ensureConnected() call creates a FRESH downloader.
+                //
+                // Previously the (partially-initialized) downloader was
+                // left in this.downloader forever. Next browse query
+                // re-entered the lock and called connectAndAuthenticate
+                // on the SAME downloader — leaking resources on every
+                // call (per audit H2: SteamClient TCP socket + OkHttp
+                // thread pool). Worse: if the original failure was
+                // RateLimitExceeded, the cached downloader's callback
+                // thread was still running and could dispatch a late
+                // onLoggedOn callback that mutated `authenticated`
+                // mid-query.
+                runCatching { downloader.cleanup() }
+                this.downloader = null
                 isAuthenticated = false
                 return false
             }
@@ -142,6 +177,11 @@ object WorkshopBrowseSession {
             val workshop = downloader.getSteamWorkshopHandler()
             if (workshop == null) {
                 WepWawetLogger.workshopWarn("$TAG: connected but SteamWorkshop handler is null")
+                // v0.5.32 (audit H3): same cleanup as above — the
+                // downloader connected but is unusable (no workshop
+                // handler). Don't leave it half-initialized.
+                runCatching { downloader.cleanup() }
+                this.downloader = null
                 isAuthenticated = false
                 return false
             }
@@ -192,12 +232,25 @@ object WorkshopBrowseSession {
 
             // Await the response with a timeout. AsyncJobSingle.await() returns the
             // ServiceMethodResponse when the callback manager dispatches it.
+            //
+            // v0.5.32 (audit H4): use the dedicated QUERY_TIMEOUT_MS (was
+            // AUTH_TIMEOUT_MS) and RESET isAuthenticated on timeout so the
+            // next call forces a reconnect — previously the session stayed
+            // marked "authenticated" after a query timeout and the user
+            // got stuck in a "session fine, every query takes 60s" loop.
             val response: ServiceMethodResponse<CPublishedFile_QueryFiles_Response.Builder> =
-                withTimeoutOrNull(AUTH_TIMEOUT_MS) {
+                withTimeoutOrNull(QUERY_TIMEOUT_MS) {
                     job.await()  // AsyncJobSingle.await() is suspend
-                } ?: return@withContext Result.failure(
-                    IllegalStateException("ISteamPublishedFile.QueryFiles timed out after $AUTH_TIMEOUT_MS ms")
-                )
+                } ?: run {
+                    WepWawetLogger.workshopWarn(
+                        "$TAG: queryFiles timed out — marking session for reconnect",
+                        "timeout_ms" to QUERY_TIMEOUT_MS,
+                    )
+                    isAuthenticated = false  // force reconnect on next call
+                    return@withContext Result.failure(
+                        IllegalStateException("ISteamPublishedFile.QueryFiles timed out after $QUERY_TIMEOUT_MS ms")
+                    )
+                }
 
             // Parse the response
             val body = response.body.build()
@@ -281,12 +334,22 @@ object WorkshopBrowseSession {
                 )
 
             val job = workshop.getUserFiles(details)
+            // v0.5.32 (audit H4): same fix as queryFiles — use
+            // QUERY_TIMEOUT_MS (was AUTH_TIMEOUT_MS) and RESET
+            // isAuthenticated on timeout to force reconnect on next call.
             val response: ServiceMethodResponse<CPublishedFile_GetUserFiles_Response.Builder> =
-                withTimeoutOrNull(AUTH_TIMEOUT_MS) {
+                withTimeoutOrNull(QUERY_TIMEOUT_MS) {
                     job.await()
-                } ?: return@withContext Result.failure(
-                    IllegalStateException("ISteamPublishedFile.GetUserFiles timed out after $AUTH_TIMEOUT_MS ms")
-                )
+                } ?: run {
+                    WepWawetLogger.workshopWarn(
+                        "$TAG: getUserFiles timed out — marking session for reconnect",
+                        "timeout_ms" to QUERY_TIMEOUT_MS,
+                    )
+                    isAuthenticated = false
+                    return@withContext Result.failure(
+                        IllegalStateException("ISteamPublishedFile.GetUserFiles timed out after $QUERY_TIMEOUT_MS ms")
+                    )
+                }
 
             val body = response.body.build()
             val items = body.publishedfiledetailsList.map { mapPublishedFileDetails(it) }

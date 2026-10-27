@@ -174,6 +174,13 @@ class WorkshopDownloader(
     private var steamClient: SteamClient? = null
     private var callbackManager: CallbackManager? = null
     private var steamUser: SteamUser? = null
+    // v0.5.32 (audit H2): keep the previous httpClient reference so we
+    // can shutdown its dispatcher's executor on reconnect. Previously
+    // this was a local variable in connectAndAuthenticate — each reconnect
+    // leaked an entire unbounded cached OkHttp thread pool (one thread
+    // per HTTP request that ever ran on the old client). After ~5-10
+    // reconnects the app accumulated a dozen orphaned pools.
+    @Volatile private var httpClient: OkHttpClient? = null
     private var licenseList: List<License> = emptyList()
     @Volatile private var isRunning = false
     @Volatile private var downloadError: Exception? = null
@@ -834,6 +841,26 @@ class WorkshopDownloader(
         // invisible — making it impossible to diagnose why a download hangs. ===
         JavaSteamLogBridge.installIfNeeded()
 
+        // === v0.5.32 (audit H2): Clean up the OLD SteamClient + OkHttp
+        // thread pool BEFORE creating new ones. ===
+        // Previously this function unconditionally created a brand new
+        // SteamClient (line 891) and a brand new okhttp3.Dispatcher with
+        // a fresh cached thread pool (line 880), without ever disconnecting
+        // the previous SteamClient or shutting down the previous OkHttp
+        // pool. The orphaned SteamClient may still hold a half-open TCP
+        // socket to a Steam CM, and the auto-reconnect thread spawned in
+        // onDisconnected keeps poking it. Each reconnect leaked an entire
+        // unbounded cached thread pool. After ~5-10 reconnects the app
+        // accumulated a dozen orphaned Steam TCP connections and stale
+        // OkHttp pools — Steam rate-limits by IP, so the user got
+        // RateLimitExceeded from the wrong (orphaned) session, blocking
+        // the new session.
+        runCatching { steamClient?.disconnect() }
+        runCatching {
+            (httpClient?.dispatcher?.executorService as? java.util.concurrent.ExecutorService)
+                ?.shutdownNow()
+        }
+
         // === Reset auth state from any previous session ===
         // CRITICAL: If this WorkshopDownloader instance is being REUSED (e.g.,
         // WorkshopBrowseSession reuses the same downloader across browse queries),
@@ -880,7 +907,10 @@ class WorkshopDownloader(
         val dispatcher = okhttp3.Dispatcher(Executors.newCachedThreadPool { r ->
             Thread(r, "JavaSteam-Http").apply { isDaemon = true }
         })
-        val httpClient = OkHttpClient.Builder()
+        // v0.5.32 (audit H2): store in field so the next connectAndAuthenticate
+        // call can shutdown the dispatcher's executor — see the cleanup at
+        // the top of this function.
+        httpClient = OkHttpClient.Builder()
             .dispatcher(dispatcher)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
@@ -888,7 +918,7 @@ class WorkshopDownloader(
             .build()
 
         appContext = context
-        steamClient = SteamClient(SteamConfiguration.create { it.withHttpClient(httpClient) })
+        steamClient = SteamClient(SteamConfiguration.create { it.withHttpClient(httpClient!!) })
         callbackManager = CallbackManager(steamClient!!)
         steamUser = steamClient!!.getHandler(SteamUser::class.java)
 
@@ -990,6 +1020,16 @@ class WorkshopDownloader(
     fun cleanup() {
         try { steamUser?.logOff() } catch (_: Exception) {}
         try { steamClient?.disconnect() } catch (_: Exception) {}
+        // v0.5.32 (audit H2): also shutdown the OkHttp dispatcher's
+        // executor so the cached thread pool doesn't leak daemon threads
+        // (one per HTTP request that ever ran on this client). Without
+        // this, even after cleanup() the OkHttp threads stay alive as
+        // daemons consuming file descriptors + memory.
+        try {
+            (httpClient?.dispatcher?.executorService as? java.util.concurrent.ExecutorService)
+                ?.shutdownNow()
+        } catch (_: Exception) {}
+        httpClient = null
         subscriptions.forEach { try { it.close() } catch (_: Exception) {} }
         subscriptions.clear()
         isRunning = false

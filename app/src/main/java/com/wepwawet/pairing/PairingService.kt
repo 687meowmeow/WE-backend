@@ -184,6 +184,11 @@ class PairingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         WepWawetLogger.proxy("PairingService.onStartCommand", "flags" to flags)
 
+        // Get PIN from intent (default "1234" matches the auto-start PIN
+        // used by MainActivity.onCreate and the PairingScreen default).
+        val pin = intent?.getStringExtra(EXTRA_PIN) ?: "1234"
+        WepWawetLogger.proxy("Starting pairing servers", "pin" to pin)
+
         // Start as foreground service immediately (Android 12+ requirement).
         // Use FOREGROUND_SERVICE_TYPE_SPECIAL_USE because:
         //   1. The pairing proxy is a long-running TCP server, not a short
@@ -192,7 +197,15 @@ class PairingService : Service() {
         //      with a property explaining the use case
         //   3. Android docs explicitly recommend specialUse for long-running
         //      foreground services
-        val notification = createNotification("WepWawet pairing proxy running")
+        //
+        // v0.5.32 (audit H5): Surface the auto-start PIN in the foreground
+        // notification text so the user can see it WITHOUT first opening
+        // the WepWawet Pairing tab. Previously the notification said just
+        // "WepWawet pairing proxy running" with no PIN — if the user
+        // opened the WE Android app's "Pair with Computer" screen BEFORE
+        // opening WepWawet's Pairing tab, they'd have to guess "1234".
+        // The notification now reads "WepWawet proxy running. PIN: <pin>".
+        val notification = createNotification("WepWawet proxy running. PIN: $pin")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIFICATION_ID, notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -202,10 +215,6 @@ class PairingService : Service() {
 
         // Stop any existing servers
         stopServers()
-
-        // Get PIN from intent
-        val pin = intent?.getStringExtra(EXTRA_PIN) ?: "1234"
-        WepWawetLogger.proxy("Starting pairing servers", "pin" to pin)
 
         // Start the pairing server (TCP 7889)
         try {
