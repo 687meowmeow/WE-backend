@@ -1298,9 +1298,16 @@ class WorkshopDownloader(
             WepWawetLogger.proxyError("$TAG: disconnect DURING download (likely WebSocket watchdog) — aborting immediately",
                 "user_initiated" to callback.isUserInitiated)
             if (downloadError == null) {
+                // v0.5.32 (audit C3 fix): Wrap the if-expression in parens
+                // so the trailing retry suffix concatenates correctly. Without
+                // the parens, Kotlin parses `String + if (cond) A else B + C`
+                // as `String + (if (cond) A else (B + C))` — so the suffix `C`
+                // ends up inside the `else` branch and is only included when
+                // the watchdog text is NOT (i.e., user-initiated disconnects).
+                // For the common watchdog case the retry hint was missing.
                 downloadError = java.lang.Exception(
                     "Steam connection dropped during download" +
-                    if (!callback.isUserInitiated) " (WebSocket watchdog — Steam was unresponsive for 30s)" else "" +
+                    (if (!callback.isUserInitiated) " (WebSocket watchdog — Steam was unresponsive for 30s)" else "") +
                     ". The DepotDownloader can't recover mid-download — please retry.")
             }
             updateStatus("Steam connection dropped during download — aborting (please retry)")
