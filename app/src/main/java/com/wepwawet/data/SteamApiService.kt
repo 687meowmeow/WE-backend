@@ -133,13 +133,41 @@ class SteamApiService(
         }
     }
 
-    /** Cursor for IPublishedFileService/QueryFiles pagination. */
-    @Volatile
-    private var _queryFilesCursor: String? = null
-
-    /** Reset the cursor (call when starting a new browse session). */
+    /**
+     * Cursor for IPublishedFileService/QueryFiles pagination.
+     *
+     * v0.5.32 (audit C5/M6 fix): this instance-level cursor cache was the
+     * root cause of the "downloads in other menus not updating" /
+     * "browse stops loading after JavaSteam→HTTP fallback" bug. The cache
+     * was updated ONLY by the HTTP `queryFiles()` path (never by the
+     * `queryFilesViaJavaSteam()` primary path). When the user browsed
+     * pages 1-N via JavaSteam (cursor stays at the initial "*" from
+     * startBrowse's reset) and then the JavaSteam path failed on page
+     * N+1, the HTTP fallback ran with cursor="*" — Steam ignored the
+     * `page=N+1` argument (per Steam docs: "When used [cursor], the
+     * page parameter will be ignored") and returned page 1 results.
+     * WorkshopRepository.applyClientFilters + distinctBy then stripped
+     * all 30 items (already in _browseItems), consecutiveEmptyPages++
+     * … after 20 such cycles hasMore=false and the user saw "no more
+     * results" despite thousands more existing on Steam.
+     *
+     * Fix: drop the cursor cache entirely. `queryFiles()` now takes an
+     * explicit `cursor` parameter (mirroring `queryFilesViaJavaSteam`).
+     * When the caller passes a null/blank cursor, we OMIT `&cursor=`
+     * from the URL so Steam uses the `&page=N` argument — making the
+     * HTTP path consistent with the JavaSteam path (both use page-based
+     * pagination). If a future caller wants cursor-based pagination,
+     * they can pass a non-null cursor and track it themselves.
+     */
+    @Deprecated(
+        "Cursor caching was removed in v0.5.32 (audit C5). " +
+            "Pass cursor explicitly to queryFiles() instead.",
+        level = DeprecationLevel.WARNING,
+    )
     fun resetQueryFilesCursor() {
-        _queryFilesCursor = null
+        // No-op — kept for source compatibility with WorkshopRepository
+        // which calls this from startBrowse()/refresh(). Safe to remove
+        // once those call sites are updated.
     }
 
     /**
@@ -297,6 +325,11 @@ class SteamApiService(
         excludedTags: List<String> = emptyList(),
         mobileCompatible: Boolean = true,
         query: String? = null,
+        // v0.5.32 (audit C5): cursor is now an explicit parameter (mirrors
+        // queryFilesViaJavaSteam) instead of instance state. When null/blank,
+        // we omit `&cursor=` from the URL so Steam uses `&page=N`. When
+        // non-blank, we pass it and Steam ignores the page parameter.
+        cursor: String? = null,
     ): Result<List<WorkshopItemTyped>> = withContext(Dispatchers.IO) {
         val key = apiKey
         if (key.isNullOrBlank()) {
@@ -312,6 +345,7 @@ class SteamApiService(
             "tags" to tags.joinToString(","),
             "excluded_tags" to excludedTags.joinToString(","),
             "mobile_compatible" to mobileCompatible,
+            "cursor" to (cursor ?: "page-mode"),
             "query" to (query ?: "none"))
 
         try {
@@ -322,9 +356,19 @@ class SteamApiService(
             val effectiveQueryType = if (query != null) Sort.MOST_RELEVANT.queryType else sort.queryType
             urlBuilder.append("&query_type=").append(effectiveQueryType)
             urlBuilder.append("&page=").append(page)
-            // Cursor-based pagination: use next_cursor from previous response
-            // For first page, cursor=* means "start from beginning"
-            urlBuilder.append("&cursor=").append(URLEncoder.encode(_queryFilesCursor ?: "*", "UTF-8"))
+            // v0.5.32 (audit C5): only append `&cursor=` when the caller
+            // explicitly passed a non-blank cursor. Per Steam docs
+            // (https://partner.steamgames.com/doc/webapi/IPublishedFileService):
+            //   "Prefer [cursor] over using the page parameter … When used,
+            //    the page parameter will be ignored."
+            // So passing cursor="*" (as the old code did unconditionally)
+            // makes Steam ignore page=N and always return page 1 — the
+            // root cause of the "browse stops loading after fallback" bug.
+            // Now we let Steam use page=N when the caller doesn't ask for
+            // cursor-based pagination.
+            if (!cursor.isNullOrBlank()) {
+                urlBuilder.append("&cursor=").append(URLEncoder.encode(cursor, "UTF-8"))
+            }
             urlBuilder.append("&numperpage=").append(PAGE_SIZE)
             urlBuilder.append("&appid=").append(WE_APP_ID)
             urlBuilder.append("&creator_appid=").append(WE_APP_ID)
@@ -386,17 +430,17 @@ class SteamApiService(
                 ?: return@withContext Result.failure(SteamApiException.ParseError("queryFiles parse failed", IllegalStateException("No response object in JSON")))
 
             val total = responseInner.get("total")?.asInt ?: 0
-            // Read next_cursor for pagination
+            // v0.5.32 (audit C5): read next_cursor only for logging — we
+            // no longer cache it in instance state. The caller can pass
+            // it explicitly to the next queryFiles() call if they want
+            // cursor-based pagination.
             val nextCursor = responseInner.get("next_cursor")?.asString
-            // Update the cursor for the next page
-            if (!nextCursor.isNullOrBlank()) {
-                _queryFilesCursor = nextCursor
-            }
             val fileList = responseInner.getAsJsonArray("publishedfiledetails")
                 ?: return@withContext Result.success(emptyList())
 
             WepWawetLogger.steamDebug("queryFiles response",
-                "total" to total, "items" to fileList.size())
+                "total" to total, "items" to fileList.size(),
+                "has_next_cursor" to (nextCursor?.isNotBlank() == true))
 
             if (fileList.size() == 0) {
                 WepWawetLogger.steam("queryFiles no results",
