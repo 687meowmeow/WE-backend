@@ -17,8 +17,8 @@ android {
         applicationId = "com.wepwawet"
         minSdk = 26  // Android 8.0 — required for the WE pairing protocol + ImageDecoderDecoder GIF path
         targetSdk = 35
-        versionCode = 65
-        versionName = "0.5.26-alpha"
+        versionCode = 66
+        versionName = "0.5.27-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {
             abiFilters += "arm64-v8a"
@@ -204,6 +204,12 @@ dependencies {
     implementation(libs.zstdJni) { artifact { type = "aar" } }
     implementation(libs.xz)      // required by JavaSteam for LZMA chunk decompression
     implementation(libs.lz4Java)  // LZ4 compression for .tex files (WE's compression=1 format)
+
+    // NOTE: FFmpegKit was removed (com.arthenica:ffmpeg-kit-full is no longer on
+    // Maven Central — the project was archived in 2024). Video transcoding is
+    // now done using Android's built-in MediaCodec API (hardware-accelerated,
+    // no external dependency, handles VP8/VP9 → H.264 transcoding natively).
+    // See VideoTranscoder.kt for the MediaCodec-based implementation.
 
     // WorkManager (for log persistence + background tasks)
     implementation(libs.androidx.work.runtime.ktx)

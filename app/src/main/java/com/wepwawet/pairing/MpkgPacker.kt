@@ -495,7 +495,72 @@ object MpkgPacker {
                 "size_increase_mb" to "%.1f".format((totalConvertedTexBytes - totalOriginalTexBytes) / 1024.0 / 1024.0))
         }
 
-        // Step 3d: Rewrite project.json + scene.json for the .mpkg's MPKG_VFS://
+        // Step 3d: Transcode .webm videos to .mp4 with H.264 (100% parity with WE PC)
+        //
+        // Real WE PC's transcoder writes `mp4_h264` as the codec identifier for
+        // video wallpapers (disasm line 14003f017). For .webm source files,
+        // WE PC uses `ffmpeg_mp4_h264` to transcode to .mp4 with H.264 codec.
+        // We do the same on-device using FFmpegKit.
+        //
+        // The Android app's VideoDrawable expects MP4 with H.264 codec. WebM
+        // files (VP8/VP9 + Vorbis/Opus) may not be supported by all Android
+        // VideoDrawable implementations.
+        if (type == "video" || type == "unknown") {
+            // Find any .webm entries and transcode them to .mp4
+            val webmEntries = entries.filter { it.first.endsWith(".webm", ignoreCase = true) }
+            if (webmEntries.isNotEmpty()) {
+                WepWawetLogger.proxy("MpkgPacker.packFromPkg: found .webm video(s) — will transcode to .mp4",
+                    "count" to webmEntries.size,
+                    "files" to webmEntries.map { it.first })
+                for ((webmName, webmBytes) in webmEntries) {
+                    val mp4Name = webmName.substringBeforeLast('.') + ".mp4"
+                    WepWawetLogger.proxy("MpkgPacker.packFromPkg: transcoding .webm → .mp4",
+                        "webm_name" to webmName,
+                        "mp4_name" to mp4Name,
+                        "webm_size" to webmBytes.size)
+
+                    // Write .webm to temp file, transcode, read .mp4 back
+                    val tempWebm = File.createTempFile("wepwawet_transcode_", ".webm")
+                    val tempMp4 = File.createTempFile("wepwawet_transcode_", ".mp4")
+                    try {
+                        tempWebm.writeBytes(webmBytes)
+                        if (VideoTranscoder.transcodeToMp4H264(tempWebm, tempMp4)) {
+                            val mp4Bytes = tempMp4.readBytes()
+                            // Replace the .webm entry with the .mp4 entry
+                            val webmIndex = entries.indexOfFirst { it.first == webmName }
+                            if (webmIndex >= 0) {
+                                entries[webmIndex] = mp4Name to mp4Bytes
+                                WepWawetLogger.proxy("MpkgPacker.packFromPkg: .webm transcoded to .mp4",
+                                    "webm_name" to webmName,
+                                    "mp4_name" to mp4Name,
+                                    "webm_size" to webmBytes.size,
+                                    "mp4_size" to mp4Bytes.size,
+                                    "size_ratio" to "%.2fx".format(mp4Bytes.size.toDouble() / webmBytes.size))
+                            }
+                            // Also update project.json's "file" field if it references the .webm
+                            val pjIndex = entries.indexOfFirst { it.first == "project.json" }
+                            if (pjIndex >= 0) {
+                                val pjStr = String(entries[pjIndex].second, Charsets.UTF_8)
+                                val updatedPj = pjStr.replace(webmName, mp4Name)
+                                if (updatedPj != pjStr) {
+                                    entries[pjIndex] = "project.json" to updatedPj.toByteArray(Charsets.UTF_8)
+                                    WepWawetLogger.proxy("MpkgPacker.packFromPkg: updated project.json file field",
+                                        "old" to webmName, "new" to mp4Name)
+                                }
+                            }
+                        } else {
+                            WepWawetLogger.proxyWarn("MpkgPacker.packFromPkg: .webm transcode FAILED — keeping .webm as-is",
+                                "webm_name" to webmName)
+                        }
+                    } finally {
+                        tempWebm.delete()
+                        tempMp4.delete()
+                    }
+                }
+            }
+        }
+
+        // Step 3e: Rewrite project.json + scene.json for the .mpkg's MPKG_VFS://
         // addressing scheme (100% parity with real WE PC's transcoder).
         //
         // Real WE PC's transcoder (function 0x14003d1e0 in wallpaperui.exe,
