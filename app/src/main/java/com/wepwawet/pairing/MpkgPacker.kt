@@ -3717,6 +3717,55 @@ vec4 blurRadial3a(vec2 u, vec2 center, float amt) {
             }
 
             // =========================================================================
+            // PASS K: v_TexCoord vec4→vec2 downgrade in .vert files (link fix).
+            //
+            // v0.5.33-alpha (solar system shader fix): Some .vert shaders declare
+            // `varying vec4 v_TexCoord;` but only write to `.xy` (never `.z`/`.w`).
+            // The corresponding .frag shader declares `varying vec2 v_TexCoord;`.
+            // GLSL ES 3.00 requires EXACT type matching between vertex outputs and
+            // fragment inputs. A vec4 vs vec2 mismatch causes a LINK error:
+            //   "output v_TexCoord type mismatch with other stage"
+            //
+            // The color_grading.vert shader (part of the Live Solar System wallpaper,
+            // workshop item 3637654840) has this exact issue:
+            //   .vert: `varying vec4 v_TexCoord;` — only writes `v_TexCoord.xy = a_TexCoord;`
+            //   .frag: `varying vec2 v_TexCoord;`
+            //
+            // Fix: In .vert files, if `varying vec4 v_TexCoord;` is declared but
+            // `.z`, `.w`, `.zw`, etc. are NEVER referenced anywhere in the file
+            // (outside the declaration itself), downgrade to `varying vec2 v_TexCoord;`.
+            //
+            // This is safe because:
+            //   1. The .vert only writes to .xy — the .zw parts are uninitialized garbage
+            //   2. The .frag declares vec2, so it only reads .xy
+            //   3. Changing to vec2 makes the types match → link succeeds
+            //   4. `v_TexCoord.xy = a_TexCoord;` is still valid for vec2 (writes to .xy
+            //      of a vec2, which IS the full vector)
+            //
+            // We do NOT downgrade if .z/.w/.zw ARE used (e.g., godrays_combine.vert,
+            // godrays_downsample2.vert, godrays_gaussian.vert legitimately use .zw
+            // for texture resolution scaling).
+            // =========================================================================
+            if (name.endsWith(".vert")) {
+                // Check if v_TexCoord is declared as vec4
+                val vec4DeclPattern = Regex("""\bvarying\s+vec4\s+v_TexCoord\s*;""")
+                if (vec4DeclPattern.containsMatchIn(modified)) {
+                    // Check if .z, .w, .zw are ever used OUTSIDE the declaration
+                    // Remove the declaration and search the body
+                    val bodyWithoutDecl = modified.replace(vec4DeclPattern, "")
+                    val zwUsagePattern = Regex("""v_TexCoord\s*\.\s*[zw]""")
+                    if (!zwUsagePattern.containsMatchIn(bodyWithoutDecl)) {
+                        // .z/.w/.zw never used → safe to downgrade to vec2
+                        modified = modified.replace(
+                            Regex("""\bvarying\s+vec4\s+v_TexCoord\s*;"""),
+                            "varying vec2 v_TexCoord;"
+                        )
+                        fixesApplied.add("v_TexCoord vec4→vec2 (only .xy used in .vert, matches .frag vec2)")
+                    }
+                }
+            }
+
+            // =========================================================================
             // PHASE 4: Shader-specific patches (WE PC's per-shader hotfixes).
             // These are derived from WE PC's wallpaperui.exe binary — WE PC has a
             // table of (shader_name, search_pattern, replacement_string) tuples that
