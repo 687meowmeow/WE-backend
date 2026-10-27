@@ -1,104 +1,28 @@
 /*
  * shader_transcoder_jni.cpp — JNI wrapper for glslang + SPIRV-Cross.
  *
- * Provides HLSL → SPIR-V → GLSL ES 3.00 shader transcoding, matching what
- * WE PC's transcoder does internally (wallpaperui.exe has its own HLSL→GLSL
- * converter; we use glslang + SPIRV-Cross as the open-source equivalent).
+ * Compiles GLSL/HLSL shaders to SPIR-V via glslang, then cross-compiles
+ * to GLSL ES 3.00 via SPIRV-Cross's C++ API.
  *
- * Functions:
- *   nativeTranscodeHlslToGlslEs(srcBytes, shaderStage) -> glslEsBytes
- *   nativeValidateGlslEs(srcBytes, shaderStage) -> boolean
- *
- * shaderStage: 0=vertex, 1=fragment
+ * This matches what WE PC's transcoder does internally — wallpaperui.exe has
+ * its own HLSL→GLSL converter, and we use the open-source Khronos Group tools
+ * (glslang + SPIRV-Cross) as the equivalent.
  */
 
 #include <jni.h>
 #include <string>
 #include <vector>
 #include <cstring>
-#include <cstdlib>
 
-// glslang includes
+// glslang includes — the include path is set in CMakeLists.txt to ${glslang_src_SOURCE_DIR}
 #include "glslang/Public/Shader.h"
 #include "glslang/Public/ResourceLimits.h"
-#include "glslang/Include/Types.h"
 #include "SPIRV/GlslangToSpv.h"
 
-// SPIRV-Cross includes
-#include "spirv_cross_c.h"
+// SPIRV-Cross C++ API — include path set to ${spirv_cross_src_SOURCE_DIR}/include
+#include "spirv_cross/spirv_cross.hpp"
 
-// Default GLSL ES resources (matches Android GLES 3.0 capabilities)
-static const TBuiltInResource DefaultResources = {
-    /* .maxLights = */ 32,
-    /* .maxClipPlanes = */ 6,
-    /* .maxTextureUnits = */ 32,
-    /* .maxTextureCoords = */ 32,
-    /* .maxVertexAttribs = */ 64,
-    /* .maxVertexUniformVectors = */ 256,
-    /* .maxVaryingFloats = */ 64,
-    /* .maxVertexTextureUnits = */ 32,
-    /* .maxCombinedTextureUnits = */ 80,
-    /* .maxTextureImageUnits = */ 32,
-    /* .maxFragmentUniformVectors = */ 256,
-    /* .maxDrawBuffers = */ 4,
-    /* .maxDualSourceDrawBuffers = */ 0,
-    /* .isGLCoreProfile = */ false,
-    /* .isESProfile = */ true,  // ← ES profile
-    /* .optSourceExtensions = */ nullptr,
-    /* .maxClipDistances = */ 8,
-    /* .maxGeometryTextureUnits = */ 16,
-    /* .maxGeometryOutputVertices = */ 256,
-    /* .maxGeometryTotalOutputComponents = */ 1024,
-    /* .maxGeometryUniformComponents = */ 1024,
-    /* .maxGeometryVaryingComponents = */ 64,
-    /* .maxTessControlTextureUnits = */ 16,
-    /* .maxTessControlUniformComponents = */ 1024,
-    /* .maxTessControlTotalOutputComponents = */ 4096,
-    /* .maxTessEvaluationTextureUnits = */ 16,
-    /* .maxTessEvaluationUniformComponents = */ 1024,
-    /* .maxTessEvaluationTotalOutputComponents = */ 1024,
-    /* .maxPatchVertices = */ 32,
-    /* .maxTessGenLevel = */ 64,
-    /* .maxViewports = */ 16,
-    /* .maxComputeWorkGroupCountX = */ 65535,
-    /* .maxComputeWorkGroupCountY = */ 65535,
-    /* .maxComputeWorkGroupCountZ = */ 65535,
-    /* .maxComputeWorkGroupSizeX = */ 1024,
-    /* .maxComputeWorkGroupSizeY = */ 1024,
-    /* .maxComputeWorkGroupSizeZ = */ 64,
-    /* .maxComputeUniformComponents = */ 1024,
-    /* .maxComputeTextureUnits = */ 16,
-    /* .maxComputeImageUniforms = */ 8,
-    /* .maxFragmentImageUniforms = */ 8,
-    /* .maxTessControlImageUniforms = */ 8,
-    /* .maxTessEvaluationImageUniforms = */ 8,
-    /* .maxGeometryImageUniforms = */ 8,
-    /* .maxVertexImageUniforms = */ 8,
-    /* .combinedImageUniforms = */ true,
-    /* .maxImageSamples = */ 8,
-    /* .maxMeshOutputVertices = */ 256,
-    /* .maxMeshOutputPrimitives = */ 256,
-    /* .maxMeshWorkGroupSizeX = */ 128,
-    /* .maxMeshWorkGroupSizeY = */ 128,
-    /* .maxMeshWorkGroupSizeZ = */ 128,
-    /* .maxTaskWorkGroupSizeX = */ 128,
-    /* .maxTaskWorkGroupSizeY = */ 128,
-    /* .maxTaskWorkGroupSizeZ = */ 128,
-    /* .maxMeshOutputMemory = */ 16384,
-    /* .maxTaskOutputMemory = */ 16384,
-    /* .maxMeshUniformComponents = */ 1024,
-    /* .maxTaskUniformComponents = */ 1024,
-    /* .limits = */ {
-        /* .nonInductiveForLoops = */ 1,
-        /* .whileLoops = */ 1,
-        /* .doWhileLoops = */ 1,
-        /* .generalUniformIndexing = */ 1,
-        /* .generalVertexMatrix = */ 1,
-        /* .generalSamplerMatrix = */ 1,
-        /* .generalUniformMatrix = */ 1,
-        /* .generalConstantMatrix = */ 1,
-    },
-};
+extern "C" {
 
 // Initialize glslang (must be called once before any compilation)
 static bool glslangInitialized = false;
@@ -109,21 +33,18 @@ static void ensureGlslangInit() {
     }
 }
 
-extern "C" {
-
 /*
  * Class:     com_wepwawet_pairing_ShaderTranscoder
- * Method:    nativeTranscodeHlslToGlslEs
- * Signature: ([BII)[B
+ * Method:    nativeTranscodeShader
+ * Signature: ([BIZ)[B
  *
- * Transcodes HLSL shader source to GLSL ES 3.00 via:
- *   HLSL → glslang → SPIR-V → SPIRV-Cross → GLSL ES 3.00
+ * Transcodes shader source (HLSL or GLSL) to GLSL ES 3.00 via:
+ *   source → glslang (compile to SPIR-V) → SPIRV-Cross (cross-compile to GLSL ES)
  *
  * Args:
- *   srcBytes    - byte[] of shader source code (HLSL or GLSL)
- *   srcLen       - length of source
- *   shaderStage  - 0=vertex, 1=fragment
- *   isHlsl       - 1 if source is HLSL, 0 if GLSL
+ *   srcBytes    - byte[] of shader source code
+ *   shaderStage - 0=vertex, 1=fragment
+ *   isHlsl      - true if source is HLSL, false if GLSL
  *
  * Returns: byte[] of GLSL ES 3.00 source, or null on failure.
  */
@@ -145,89 +66,71 @@ Java_com_wepwawet_pairing_ShaderTranscoder_nativeTranscodeShader(
 
     // Determine shader stage
     EShLanguage stage = (shaderStage == 0) ? EShLangVertex : EShLangFragment;
-    const char* stageName = (shaderStage == 0) ? "vertex" : "fragment";
 
     // Create glslang shader object
     glslang::TShader shader(stage);
     const char* sourceCStr = shaderSource.c_str();
     int sourceLen = (int)shaderSource.length();
     shader.setStringsWithLengths(&sourceCStr, &sourceLen, 1);
+
+    // Set source language (HLSL or GLSL) and target (SPIR-V 1.0)
     shader.setEnvInput(isHlsl ? glslang::EShSourceHlsl : glslang::EShSourceGlsl,
                        stage, glslang::EShClientVulkan, 100);
     shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_0);
     shader.setEnvTarget(glslang::EShTargetSpv_1_0);
 
-    // Set message options
-    shader.setMessages(
-        EShMsgDefault |
-        EShMsgReadHlsl |
-        EShMsgHlslOffsets |
-        (isHlsl ? EShMsgReadHlsl : EShMsgDefault)
-    );
-
     // Compile to SPIR-V
     std::string infoLog;
-    std::vector<unsigned int> spirv;
-    bool compiled = shader.parse(&DefaultResources, 100, false,
+    const TBuiltInResource* resources = GetDefaultResources();
+    bool compiled = shader.parse(resources, 100, false,
                                   EShMsgDefault, &infoLog);
 
     if (!compiled) {
-        // Compilation failed — return null (caller falls back to regex-based fixes)
-        env->ReleaseByteArrayElements(srcBytes, src, JNI_ABORT);
-        return nullptr;
+        return nullptr;  // Compilation failed — caller falls back to regex-based fixes
     }
 
     // Link (for single-shader compilation, this is trivial)
     glslang::TProgram program;
     program.addShader(&shader);
-    bool linked = program.link(EShMsgDefault);
-    if (!linked) {
+    if (!program.link(EShMsgDefault)) {
         return nullptr;
     }
 
     // Generate SPIR-V
+    std::vector<unsigned int> spirv;
     glslang::GlslangToSpv(*program.getIntermediate(stage), spirv);
     if (spirv.empty()) {
         return nullptr;
     }
 
-    // Cross-compile SPIR-V to GLSL ES 3.00 using SPIRV-Cross
-    spvc_context context = nullptr;
-    spvc_parsed_ir ir = nullptr;
-    spvc_compiler compiler = nullptr;
-    spvc_compiler_options options = nullptr;
-    const char* glslResult = nullptr;
+    // Cross-compile SPIR-V to GLSL ES 3.00 using SPIRV-Cross C++ API
+    spirv_cross::CompilerGLSL compiler(std::move(spirv));
 
-    if (spvc_context_create(&context) != SPVC_SUCCESS) return nullptr;
-    if (spvc_context_parse_spirv(context, spirv.data(), spirv.size(), &ir) != SPVC_SUCCESS) {
-        spvc_context_destroy(context);
-        return nullptr;
-    }
-    if (spvc_context_create_compiler(context, SPVC_BACKEND_GLSL, ir, SPVC_CAPTURE_MODE_TAKE_OWNERSHIP, &compiler) != SPVC_SUCCESS) {
-        spvc_context_destroy(context);
-        return nullptr;
-    }
-    if (spvc_compiler_create_compiler_options(compiler, &options) != SPVC_SUCCESS) {
-        spvc_context_destroy(context);
-        return nullptr;
-    }
-    spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_GLSL_VERSION, 300);
-    spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_TRUE);
-    spvc_compiler_install_compiler_options(compiler, options);
+    spirv_cross::CompilerGLSL::Options options;
+    options.version = 300;       // GLSL ES 3.00
+    options.es = true;           // ES profile
+    options.vulkan_semantics = false;  // Use GL semantics (not Vulkan)
+    compiler.set_options(options);
 
-    if (spvc_compiler_compile(compiler, &glslResult) != SPVC_SUCCESS) {
-        spvc_context_destroy(context);
+    std::string glslResult;
+    try {
+        glslResult = compiler.compile();
+    } catch (...) {
+        return nullptr;  // Cross-compilation failed
+    }
+
+    if (glslResult.empty()) {
         return nullptr;
     }
 
     // Copy result to Java byte array
-    jsize resultLen = (jsize)strlen(glslResult);
+    jsize resultLen = (jsize)glslResult.length();
     jbyteArray result = env->NewByteArray(resultLen);
     if (result != nullptr) {
-        env->SetByteArrayRegion(result, 0, resultLen, (const jbyte*)glslResult);
+        env->SetByteArrayRegion(result, 0, resultLen,
+            reinterpret_cast<const jbyte*>(glslResult.c_str()));
     }
 
-    spvc_context_destroy(context);
     return result;
 }
 

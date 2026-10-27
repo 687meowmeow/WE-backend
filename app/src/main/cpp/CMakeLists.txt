@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.18.1)
 
 project(wepwawet_etc2 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)  # glslang 14.x requires C++17
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ============================================================================
@@ -25,36 +25,25 @@ file(GLOB ETC_SOURCES
 # ============================================================================
 # glslang + SPIRV-Cross (for HLSL → GLSL ES shader compilation)
 # ============================================================================
-# These are fetched from GitHub via CMake FetchContent during the build.
-# glslang compiles GLSL/HLSL → SPIR-V, SPIRV-Cross cross-compiles SPIR-V → GLSL ES.
-#
-# This is used for full shader parity with WE PC's transcoder, which has its
-# own HLSL→GLSL converter. Our existing fixShadersForMobile handles most cases
-# with regex-based patching; glslang is the fallback for complex shaders.
-#
-# Build flags to minimize size:
-#   ENABLE_OPT=OFF          — don't require SPIRV-Tools optimizer
-#   ENABLE_HLSL=ON          — enable HLSL front-end
-#   BUILD_SHARED_LIBS=OFF   — build as static libs (linked into our .so)
-#   SKIP_SPIRV_TOOLS=ON     — skip SPIRV-Tools dependency
 include(FetchContent)
 
+# glslang — GLSL/HLSL → SPIR-V compiler
 FetchContent_Declare(
     glslang_src
     GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git
     GIT_TAG 14.3.0
     GIT_SHALLOW TRUE
 )
-
-# Set glslang build options BEFORE MakeAvailable
+# glslang build options (set BEFORE MakeAvailable)
 set(ENABLE_OPT OFF CACHE BOOL "Disable SPIRV-Tools optimizer" FORCE)
 set(ENABLE_HLSL ON CACHE BOOL "Enable HLSL front-end" FORCE)
+set(ENABLE_GLSL ON CACHE BOOL "Enable GLSL front-end" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static libs" FORCE)
 set(SKIP_SPIRV_TOOLS ON CACHE BOOL "Skip SPIRV-Tools" FORCE)
 set(ALLOW_EXTERNAL_SPIRV_TOOLS ON CACHE BOOL "" FORCE)
-
 FetchContent_MakeAvailable(glslang_src)
 
+# SPIRV-Cross — SPIR-V → GLSL/Metal/HLSL cross-compiler
 FetchContent_Declare(
     spirv_cross_src
     GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Cross.git
@@ -83,18 +72,23 @@ add_library(wepwawet_etc2 SHARED
     ${ETC_SOURCES}
 )
 
-# Link with ETC2, DXT, glslang, SPIRV-Cross, and Android log
-target_link_libraries(wepwawet_etc2
-    log
-    glslang                   # glslang core (GLSL/HLSL front-end + SPIR-V codegen)
-    SPIRV-Tools-opt-cpp       # SPIRV-Cross's GLSL output
-    spirv-cross-glsl         # SPIRV-Cross GLSL target
-)
-
 # Include paths for shader transcoder
+# glslang headers are at ${glslang_src_SOURCE_DIR}/glslang/Public/Shader.h
+# SPIRV-Cross headers are at ${spirv_cross_src_SOURCE_DIR}/include/spirv_cross_c.h
 target_include_directories(wepwawet_etc2 PRIVATE
     ${glslang_src_SOURCE_DIR}
     ${spirv_cross_src_SOURCE_DIR}/include
+)
+
+# Link with ETC2, glslang, SPIRV-Cross, and Android log
+target_link_libraries(wepwawet_etc2
+    log
+    glslang              # glslang core (GLSL/HLSL front-end)
+    SPIRV                # glslang's SPIR-V codegen (has GlslangToSpv)
+    HLSL                 # glslang's HLSL front-end
+    spirv-cross-core     # SPIRV-Cross core
+    spirv-cross-glsl     # SPIRV-Cross GLSL backend
+    spirv-cross-c        # SPIRV-Cross C API
 )
 
 # Compiler flags
