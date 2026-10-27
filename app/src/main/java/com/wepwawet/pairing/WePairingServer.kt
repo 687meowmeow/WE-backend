@@ -512,6 +512,21 @@ class WePairingServer {
     // Pending wallpaper transfers (queue of (file, title) pairs)
     private val pendingWallpapers = java.util.concurrent.LinkedBlockingQueue<Pair<java.io.File, String>>()
 
+    // v0.5.32 (audit C4): Lock for all writes to the per-connection
+    // `output` DataOutputStream. The transfer protocol is a multi-step
+    // transaction (beginUpload → transmissionStart → chunks → terminator)
+    // and must NOT be interleaved with command-loop responses (AuthOK etc.).
+    // Without this lock, spawning the transfer on a separate thread would
+    // let the command loop's AuthOK write slip in between two transfer
+    // messages and break the protocol.
+    private val outputLock = Any()
+
+    // v0.5.32 (audit C4): True while a wallpaper transfer is in flight
+    // on the transfer thread. The WE Android protocol supports only ONE
+    // transfer at a time (single tempWriteFile per session), so a second
+    // pending wallpaper must wait until the first finishes.
+    private val transferInProgress = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /**
      * Queue a wallpaper .mpkg file to be sent to the phone.
      * Called from the UI when the user selects a wallpaper to "send to phone".
@@ -536,9 +551,15 @@ class WePairingServer {
         val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
         cipher.init(Cipher.ENCRYPT_MODE, currentAesKey, currentIv)
         val ciphertext = cipher.doFinal(json.toByteArray(Charsets.UTF_8))
-        writeLeInt(output, ciphertext.size)
-        output.write(ciphertext)
-        output.flush()
+        // v0.5.32 (audit C4): synchronize write+flush to keep atomicity
+        // for the pairing phase (pre-transfer). During a transfer the
+        // outer transferWallpaper holds outputLock — re-entrant sync is
+        // safe and just no-ops here.
+        synchronized(outputLock) {
+            writeLeInt(output, ciphertext.size)
+            output.write(ciphertext)
+            output.flush()
+        }
     }
 
     /**
@@ -556,9 +577,11 @@ class WePairingServer {
         val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
         cipher.init(Cipher.ENCRYPT_MODE, currentAesKey, currentIv)
         val ciphertext = cipher.doFinal(data)
-        writeLeInt(output, ciphertext.size)
-        output.write(ciphertext)
-        output.flush()
+        synchronized(outputLock) {
+            writeLeInt(output, ciphertext.size)
+            output.write(ciphertext)
+            output.flush()
+        }
     }
 
     /**
@@ -574,6 +597,24 @@ class WePairingServer {
      * 5. Phone moves temp file to filesDir/downloads/wallpapers/X.mpkg
      */
     private fun transferWallpaper(
+        output: DataOutputStream,
+        mpkgFile: java.io.File,
+        title: String,
+    ) {
+        // v0.5.32 (audit C4): Hold outputLock for the ENTIRE transfer
+        // transaction. The transfer is a multi-step protocol:
+        //   beginUpload → transmissionStart → chunks → terminator
+        // If the command loop's AuthOK write interleaves between two
+        // transfer messages, the phone's command parser gets confused
+        // (it expects transmissionStart after beginUpload, not AuthOK).
+        // The lock is re-entrant so the inner sendEncryptedJson /
+        // sendEncryptedData calls don't deadlock.
+        synchronized(outputLock) {
+            transferWallpaperLocked(output, mpkgFile, title)
+        }
+    }
+
+    private fun transferWallpaperLocked(
         output: DataOutputStream,
         mpkgFile: java.io.File,
         title: String,
@@ -805,11 +846,35 @@ class WePairingServer {
                             WepWawetLogger.proxy("Heartbeat received",
                                 "count" to heartbeatCount)
                         }
-                        // Check for pending wallpaper transfers after every heartbeat
+                        // v0.5.32 (audit C4): Spawn the transfer on a
+                        // separate thread so this loop can keep READING
+                        // heartbeats. Previously `transferWallpaper` was
+                        // called synchronously, which writes ~1MB chunks
+                        // via sendEncryptedData for ~30s on Wi-Fi (100MB
+                        // wallpaper) — long enough for the phone's TCP
+                        // send buffer to fill up with unconsumed heartbeats
+                        // and the phone's connector thread to time out
+                        // and disconnect the pairing session mid-transfer.
+                        //
+                        // The AtomicBoolean prevents two parallel
+                        // transfers (the protocol supports only one
+                        // tempWriteFile per session); a second pending
+                        // is re-queued for the next heartbeat.
                         val pending = pendingWallpapers.poll()
                         if (pending != null) {
-                            WepWawetLogger.proxy("Processing pending wallpaper transfer (from heartbeat)")
-                            transferWallpaper(output, pending.first, pending.second)
+                            if (transferInProgress.compareAndSet(false, true)) {
+                                WepWawetLogger.proxy("Processing pending wallpaper transfer (from heartbeat, spawning on transfer thread)")
+                                thread(start = true, isDaemon = true, name = "wep-transfer") {
+                                    try {
+                                        transferWallpaper(output, pending.first, pending.second)
+                                    } finally {
+                                        transferInProgress.set(false)
+                                    }
+                                }
+                            } else {
+                                WepWawetLogger.proxy("Transfer already in progress — re-queueing pending wallpaper (from heartbeat)")
+                                pendingWallpapers.add(pending)
+                            }
                         }
                         continue
                     }
@@ -828,19 +893,37 @@ class WePairingServer {
                             "msg_index" to messageCount,
                             "decrypted_json" to commandJson.take(500))
 
-                        // Check for pending wallpaper transfers
+                        // v0.5.32 (audit C4): Spawn on transfer thread
+                        // (same fix as heartbeat branch above).
                         val pending = pendingWallpapers.poll()
                         if (pending != null) {
-                            WepWawetLogger.proxy("Processing pending wallpaper transfer")
-                            transferWallpaper(output, pending.first, pending.second)
+                            if (transferInProgress.compareAndSet(false, true)) {
+                                WepWawetLogger.proxy("Processing pending wallpaper transfer (from command, spawning on transfer thread)")
+                                thread(start = true, isDaemon = true, name = "wep-transfer") {
+                                    try {
+                                        transferWallpaper(output, pending.first, pending.second)
+                                    } finally {
+                                        transferInProgress.set(false)
+                                    }
+                                }
+                            } else {
+                                WepWawetLogger.proxy("Transfer already in progress — re-queueing pending wallpaper (from command)")
+                                pendingWallpapers.add(pending)
+                            }
                         } else {
-                            // No pending wallpaper — send generic response
+                            // No pending wallpaper — send generic response.
+                            // v0.5.32 (audit C4): synchronized on outputLock
+                            // so this write can't interleave with an
+                            // in-flight transfer thread's writes (which
+                            // would break the phone's command parser).
                             val encCipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
                             encCipher.init(Cipher.ENCRYPT_MODE, currentAesKey, currentIv)
                             val respBytes = encCipher.doFinal("""{"status":"AuthOK"}""".toByteArray(Charsets.UTF_8))
-                            writeLeInt(output, respBytes.size)
-                            output.write(respBytes)
-                            output.flush()
+                            synchronized(outputLock) {
+                                writeLeInt(output, respBytes.size)
+                                output.write(respBytes)
+                                output.flush()
+                            }
                         }
                     }
                 }
