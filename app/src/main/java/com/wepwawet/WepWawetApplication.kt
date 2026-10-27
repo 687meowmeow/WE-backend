@@ -82,6 +82,9 @@ class WepWawetApplication : Application(), Configuration.Provider, ImageLoaderFa
     }
 
     override fun onCreate() {
+        // Set singleton instance FIRST (before anything else might need it)
+        instance = this
+
         // Step 1: Install crash handler FIRST so we never miss a crash from the rest of onCreate.
         // This must succeed even if the rest of onCreate fails — wrap in try-catch and log
         // via logcat (the only always-available sink at this point).
@@ -284,6 +287,14 @@ class WepWawetApplication : Application(), Configuration.Provider, ImageLoaderFa
     companion object {
         private const val TAG = "WepWawet-App"
         const val CHANNEL_PROXY = "wepwawet.proxy"
+
+        /**
+         * Singleton Application instance. Set in onCreate(). Used by
+         * MpkgPacker.texCacheLookup/texCacheStore to access cacheDir
+         * without passing Context through the call chain.
+         */
+        lateinit var instance: WepWawetApplication
+            private set
 
         /**
          * App-scoped CoroutineScope. Initialized in onCreate. Use for
