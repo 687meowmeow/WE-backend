@@ -2409,7 +2409,8 @@ object MpkgPacker {
                     }
                 } else if (value.isJsonArray) {
                     val arr = value.asJsonArray
-                    for (i in arr.indices) {
+                    val size = arr.size()
+                    for (i in 0 until size) {
                         arr[i] = rewriteValue(arr[i])
                     }
                 }
@@ -2423,7 +2424,8 @@ object MpkgPacker {
                 val files = root.get("files")
                 if (files.isJsonArray) {
                     val arr = files.asJsonArray
-                    for (i in arr.indices) {
+                    val size = arr.size()
+                    for (i in 0 until size) {
                         arr[i] = rewriteValue(arr[i])
                     }
                 } else if (files.isJsonObject) {
