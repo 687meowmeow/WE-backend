@@ -147,8 +147,15 @@ object PkgReader {
                 val pathBytes = ByteArray(pathLen)
                 raf.readFully(pathBytes)
                 val path = String(pathBytes, Charsets.UTF_8)
-                val offset = readU32Le(raf).toLong().and(0xFFFFFFFF)
-                val size = readU32Le(raf).toLong().and(0xFFFFFFFF)
+                // v0.5.32 (audit M2): use L suffix on the mask literal.
+                // Previously `.and(0xFFFFFFFF)` (Int) is functionally a
+                // no-op for in-range u32 values (which readU32Le always
+                // returns), but the intent is clearly to mask to 32 bits.
+                // Using `.and(0xFFFFFFFFL)` (Long) makes the intent explicit
+                // and would actually mask if readU32Le ever returned an
+                // out-of-range Long.
+                val offset = readU32Le(raf).and(0xFFFFFFFFL)
+                val size = readU32Le(raf).and(0xFFFFFFFFL)
                 entries.add(Triple(path, offset, size))
                 totalPathBytes += pathLen
                 if (i < 5 || i == entryCount - 1) {
@@ -246,8 +253,8 @@ object PkgReader {
                 val pathBytes = ByteArray(pathLen)
                 raf.readFully(pathBytes)
                 val path = String(pathBytes, Charsets.UTF_8)
-                val offset = readU32Le(raf).toLong().and(0xFFFFFFFF)
-                val size = readU32Le(raf).toLong().and(0xFFFFFFFF)
+                val offset = readU32Le(raf).and(0xFFFFFFFFL)
+                val size = readU32Le(raf).and(0xFFFFFFFFL)
                 entries.add(VfsEntry(path, offset, size))
             }
             val dataSectionStart = raf.filePointer

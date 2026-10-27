@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import com.wepwawet.BuildConfig
 import com.wepwawet.log.WepWawetLogger
 import com.wepwawet.pairing.SteamCredentialsStore
+import com.wepwawet.pairing.WorkshopBrowseSession
 import com.wepwawet.pairing.WorkshopDownloader
 import kotlinx.coroutines.launch
 
@@ -192,6 +193,20 @@ fun SettingsScreen(
                     },
                     onClear = {
                         SteamCredentialsStore.clearCredentials(context)
+                        // v0.5.32 (audit L5): also disconnect the browse
+                        // session singleton so its cached WorkshopDownloader
+                        // (which holds an open TCP connection to a Steam CM
+                        // and the user's now-invalidated refresh token) is
+                        // cleaned up. Without this, the singleton downloader
+                        // stays alive for the rest of the app process,
+                        // holding a stale Steam connection + stale auth
+                        // state. The next browse query would either fail
+                        // (token invalid) or worse, dispatch a late
+                        // onLoggedOn callback that mutates `authenticated`
+                        // mid-query. The disconnect() docstring already
+                        // specified this intent ("Used when the user logs
+                        // out of Steam in Settings") — this wires it up.
+                        WorkshopBrowseSession.disconnect()
                         WepWawetLogger.appInfo("settings_steam_credentials_cleared")
                         steamUsername = ""
                         steamPassword = ""

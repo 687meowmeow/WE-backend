@@ -1079,16 +1079,41 @@ class SteamApiService(
      */
     private fun extractWorkshopIdsFromHtml(html: String): List<String> {
         val ids = mutableListOf<String>()
-        val regexes = listOf(
-            Regex("sharedfiles/filedetails/\\?id=(\\d+)"),
-            Regex("data-publishedfileid=\"(\\d+)\""),
-            Regex("data-publishedfileid='(\\d+)'"),
+        // v0.5.32 (audit L3): do a SINGLE pass over the HTML with a combined
+        // regex so the result order matches Steam's actual browse order.
+        //
+        // Previously this used three separate `regex.findAll(html)` calls
+        // (one per pattern), so all `sharedfiles/filedetails/?id=N` matches
+        // were appended first (in HTML order), then all
+        // `data-publishedfileid="N"` matches (in HTML order), then all
+        // single-quote variants. If the HTML mixed both patterns (which
+        // Steam's HTML does — each item appears as both a link URL and a
+        // data attribute on the same row), the deduplication filter
+        // `id !in ids` would keep the URL-based position and silently drop
+        // the data-attribute position, but items that ONLY appeared via the
+        // data attribute (rare, but happens for some creator-card layouts)
+        // would be appended at the END of the list — out of HTML order.
+        //
+        // With a single combined regex using alternation, `findAll` walks
+        // the HTML left-to-right and emits matches in encounter order,
+        // regardless of which alternative matched.
+        //
+        // The third alternative uses a backreference (\2) to require that
+        // the closing quote matches the opening quote — so
+        // `data-publishedfileid="12345'` (open double, close single) does
+        // NOT match, preserving the original strictness.
+        val combined = Regex(
+            "sharedfiles/filedetails/\\?id=(\\d+)" +
+            "|data-publishedfileid=([\"'])(\\d+)\\2"
         )
-        for (regex in regexes) {
-            regex.findAll(html).forEach { match ->
-                val id = match.groupValues[1]
-                if (id.length >= 4 && id !in ids) ids.add(id)
-            }
+        combined.findAll(html).forEach { match ->
+            // groupValues[1] is the first capture group (URL form) —
+            // empty if the second alternative matched.
+            // groupValues[3] is the third capture group (data-attr form) —
+            // empty if the first alternative matched.
+            // (groupValues[2] is the quote char, which we discard.)
+            val id = match.groupValues[1].ifEmpty { match.groupValues[3] }
+            if (id.length >= 4 && id !in ids) ids.add(id)
         }
         return ids
     }
@@ -1174,8 +1199,16 @@ class SteamApiService(
         const val BATCH_SIZE = 50            // Steam API limit per request
         const val PAGE_SIZE = 30             // Steam browse HTML page size
         const val USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 13; WepWawet/0.1) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+            // v0.5.32 (audit L2): use a DESKTOP Chrome UA instead of a mobile
+            // UA so Steam serves the standard desktop HTML layout for
+            // steamcommunity.com/workshop/browse (which the
+            // extractWorkshopIdsFromHtml regex parser expects). A mobile UA
+            // may cause Steam to serve a different layout that breaks the
+            // regex-based ID extraction. Verified working today with the
+            // mobile UA, but the layout is fragile to Steam markup changes
+            // — switching to the standard desktop UA removes that fragility.
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
         /** Default OkHttp client. */
         fun defaultClient(): OkHttpClient {

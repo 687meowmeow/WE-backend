@@ -74,12 +74,55 @@ object WorkshopDownloadJob {
     //     navigated to an empty screen. Now that the screen delegates to
     //     launchSendToPhone/launchDebugDownload (v0.4.14 pattern, restored
     //     in R1 fix), we wire DownloadManager at these strategic points.
-    //     Progress mirroring is intentionally minimal (start/complete/fail/
-    //     cancel only) — the granular progress bar is already shown on the
-    //     detail screen via state.collectAsState(); the Downloads screen just
-    //     needs to know WHICH items are in flight vs done vs failed. ===
+    //
+    // === v0.5.32-alpha (audit §1 fix): EXTEND the mirror to PROGRESS +
+    //     STATUS updates, not just start/complete/fail/cancel. The original
+    //     R8 mirror was start/complete/fail/cancel only, with the rationale
+    //     that "the granular progress bar is already shown on the detail
+    //     screen". But the Downloads screen (DownloadManagerScreen) ALSO
+    //     renders `download.progress` as a progress bar + percentage text,
+    //     and the WallpaperCard overlay ALSO renders `activeDownload.progress`
+    //     as a progress bar + status message. So with the R8-only mirror,
+    //     both UI surfaces got stuck at the initial "0% / Connecting to
+    //     Steam…" state for the entire download duration until the entry
+    //     was removed by completeDownload()/failDownload(). The user
+    //     perceived this as "the download is frozen".
+    //
+    //     Fix: call DownloadManager.updateProgress() from the onProgress
+    //     and onStatusUpdate callbacks of WorkshopDownloader.downloadWorkshopPkg,
+    //     AND from each `_state.update { ... }` call in the packing /
+    //     saving / queueing phases (so the Downloads screen sees the same
+    //     phase transitions as the detail screen). ===
     private fun onDownloadStarted(item: WorkshopItemTyped) {
         com.wepwawet.data.DownloadManager.startDownload(item)
+    }
+
+    /**
+     * Mirror a progress + status update into [com.wepwawet.data.DownloadManager].
+     *
+     * Called from the onProgress / onStatusUpdate callbacks of
+     * [WorkshopDownloader.downloadWorkshopPkg] AND from each phase
+     * transition in [launchDebugDownload] / [launchSendToPhone] (downloading →
+     * packing → saving / queueing).
+     *
+     * If the item is no longer in [com.wepwawet.data.DownloadManager.activeDownloads]
+     * (e.g., the user pressed Cancel from the Downloads screen, or the
+     * download has already completed/failed), [com.wepwawet.data.DownloadManager.updateProgress]
+     * is a no-op — see its `current[itemId] ?: return@update current` guard.
+     * So this is safe to call even after the active entry has been removed.
+     */
+    private fun onDownloadProgress(
+        itemId: String,
+        progress: Float,
+        status: com.wepwawet.data.DownloadStatus,
+        statusMessage: String,
+    ) {
+        com.wepwawet.data.DownloadManager.updateProgress(
+            itemId = itemId,
+            progress = progress,
+            status = status,
+            statusMessage = statusMessage,
+        )
     }
 
     private fun onDownloadCompleted(item: WorkshopItemTyped, fileSizeBytes: Long, deviceName: String) {
@@ -172,6 +215,20 @@ object WorkshopDownloadJob {
                         progress = coerced,
                         hasChunkProgress = true,
                     ) }
+                    // v0.5.32 (audit §1): mirror the progress + a fresh
+                    // status message into DownloadManager so the Downloads
+                    // screen + WallpaperCard overlay update live (previously
+                    // they got stuck at the initial "0% / Connecting to
+                    // Steam…" state for the entire download duration).
+                    val statusMsg = if (coerced > 0f)
+                        "Downloading… ${(coerced * 100).toInt()}%"
+                    else "Connecting to Steam…"
+                    onDownloadProgress(
+                        itemId = item.id,
+                        progress = coerced,
+                        status = com.wepwawet.data.DownloadStatus.DOWNLOADING,
+                        statusMessage = statusMsg,
+                    )
                     // Log every 10% increment so we can see progress in logs
                     // (not every callback, which would be very spammy for 6MB
                     // files arriving in many small chunks).
@@ -184,6 +241,15 @@ object WorkshopDownloadJob {
                 },
                 onStatusUpdate = { status ->
                     _state.update { s -> s.copy(status = status) }
+                    // v0.5.32 (audit §1): mirror the status string too so
+                    // the Downloads screen's statusMessage text stays in
+                    // sync with the detail screen.
+                    onDownloadProgress(
+                        itemId = item.id,
+                        progress = _state.value.progress,
+                        status = com.wepwawet.data.DownloadStatus.DOWNLOADING,
+                        statusMessage = status,
+                    )
                     WepWawetLogger.workshop("WorkshopDownloadJob: status update",
                         "status" to status.take(150))
                 },
@@ -211,6 +277,13 @@ object WorkshopDownloadJob {
             }
 
             _state.update { s -> s.copy(status = "Packing content → .mpkg…", progress = 0.85f) }
+            // v0.5.32 (audit §1): mirror the packing phase transition.
+            onDownloadProgress(
+                itemId = item.id,
+                progress = 0.85f,
+                status = com.wepwawet.data.DownloadStatus.PACKING,
+                statusMessage = "Packing content → .mpkg…",
+            )
             val cacheMpkg = File(appContext.cacheDir, "${item.id}_${sendId}_debug.mpkg")
             val installDir = File(appContext.cacheDir, "workshop_downloads/${item.id}")
             // === v0.4.9: Detect video via MAGIC BYTES, not file extension.
@@ -308,6 +381,16 @@ object WorkshopDownloadJob {
             }
 
             _state.update { s -> s.copy(status = "Saving to Downloads…", progress = 0.95f) }
+            // v0.5.32 (audit §1): mirror the "saving to Downloads" phase
+            // transition so the Downloads screen shows what's happening
+            // (otherwise it would still show "Packing content → .mpkg…"
+            // until the download completes).
+            onDownloadProgress(
+                itemId = item.id,
+                progress = 0.95f,
+                status = com.wepwawet.data.DownloadStatus.PACKING,
+                statusMessage = "Saving to Downloads…",
+            )
             WepWawetLogger.workshop("WorkshopDownloadJob: reading mpkg bytes",
                 "file" to cacheMpkg.absolutePath,
                 "expected_size" to mpkgSize)
@@ -490,6 +573,19 @@ object WorkshopDownloadJob {
                             progress = (coerced * 0.8f),
                             hasChunkProgress = true,
                         ) }
+                        // v0.5.32 (audit §1): mirror progress + status
+                        // message into DownloadManager so the Downloads
+                        // screen + WallpaperCard overlay update live.
+                        val mirroredProgress = coerced * 0.8f
+                        val statusMsg = if (coerced > 0f)
+                            "Downloading… ${(coerced * 100).toInt()}%"
+                        else "Connecting to Steam…"
+                        onDownloadProgress(
+                            itemId = item.id,
+                            progress = mirroredProgress,
+                            status = com.wepwawet.data.DownloadStatus.DOWNLOADING,
+                            statusMessage = statusMsg,
+                        )
                         val pctInt = (coerced * 100).toInt()
                         if (pctInt % 10 == 0) {
                             WepWawetLogger.workshop("WorkshopDownloadJob.send: progress",
@@ -498,6 +594,13 @@ object WorkshopDownloadJob {
                     },
                     onStatusUpdate = { status ->
                         _state.update { s -> s.copy(status = status) }
+                        // v0.5.32 (audit §1): mirror the status string too.
+                        onDownloadProgress(
+                            itemId = item.id,
+                            progress = _state.value.progress,
+                            status = com.wepwawet.data.DownloadStatus.DOWNLOADING,
+                            statusMessage = status,
+                        )
                         WepWawetLogger.workshop("WorkshopDownloadJob.send: status",
                             "status" to status.take(150))
                     },
@@ -538,6 +641,14 @@ object WorkshopDownloadJob {
                     status = "Packing content → .mpkg (same as debug download)…",
                     progress = 0.85f,
                 ) }
+                // v0.5.32 (audit §1): mirror the packing phase transition
+                // (same as the debug download path).
+                onDownloadProgress(
+                    itemId = item.id,
+                    progress = 0.85f,
+                    status = com.wepwawet.data.DownloadStatus.PACKING,
+                    statusMessage = "Packing content → .mpkg (same as debug download)…",
+                )
                 val cacheMpkg = File(appContext.cacheDir, "${item.id}_${sendId}_send.mpkg")
                 val installDir = File(appContext.cacheDir, "workshop_downloads/${item.id}")
                 val isVideo = detectVideoByMagicBytes(downloadedPkg)
@@ -628,6 +739,18 @@ object WorkshopDownloadJob {
                     status = "Queuing for transfer to phone…",
                     progress = 0.95f,
                 ) }
+                // v0.5.32 (audit §1): mirror the "queueing for transfer"
+                // phase transition. Uses the QUEUING status (distinct from
+                // PACKING) so the Downloads screen can show a different
+                // status string while the file waits for the phone to
+                // pick it up via the WePairingServer heartbeat-driven
+                // transfer loop.
+                onDownloadProgress(
+                    itemId = item.id,
+                    progress = 0.95f,
+                    status = com.wepwawet.data.DownloadStatus.QUEUING,
+                    statusMessage = "Queuing for transfer to phone…",
+                )
                 val deviceName = PairingService.pairedDeviceName ?: "phone"
                 WepWawetLogger.workshop("WorkshopDownloadJob.send: queueing for transfer",
                     "file" to cacheMpkg.name,

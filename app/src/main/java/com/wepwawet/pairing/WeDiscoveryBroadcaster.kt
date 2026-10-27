@@ -132,14 +132,30 @@ class WeDiscoveryBroadcaster(private val context: Context) {
 
                 Thread.sleep(BROADCAST_INTERVAL_MS)
             }
-
-            socket.close()
+            // NOTE: socket.close() moved to finally block (audit M1 fix below).
         } catch (e: Exception) {
             if (running) {
                 WepWawetLogger.proxyError("Discovery broadcaster error",
                     "exception" to e.javaClass.name, exception = e)
             }
         } finally {
+            // v0.5.32 (audit M1): Always close the socket + release the
+            // multicast lock in finally, regardless of how the loop exits.
+            //
+            // Previously socket.close() was at line 136 (after the while
+            // loop), so it only ran when the loop exited normally
+            // (running=false). If anything threw an uncaught exception
+            // — e.g., socket.receive() throwing a non-SocketTimeoutException
+            // (the inner catch only handles SocketTimeoutException, so
+            // SocketException from stop() closing the socket mid-receive
+            // propagates to the outer catch), or Thread.sleep() throwing
+            // InterruptedException — the socket file descriptor leaked
+            // until GC finalized it (which on Android can take minutes).
+            //
+            // stop() may have already closed + nulled multicastSocket;
+            // runCatching handles that gracefully (no-op on null/closed).
+            runCatching { multicastSocket?.close() }
+            multicastSocket = null
             runCatching { multicastLock?.let { if (it.isHeld) it.release() } }
         }
     }

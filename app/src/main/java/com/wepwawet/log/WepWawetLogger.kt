@@ -3,13 +3,9 @@ package com.wepwawet.log
 import android.content.Context
 import android.util.Log
 import androidx.core.content.edit
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -65,7 +61,13 @@ object WepWawetLogger {
     private const val PREF_NAME = "wepwawet_logger"
     private const val PREF_MIN_LEVEL = "min_level"
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // v0.5.32 (audit L4): removed the unused `private val scope = CoroutineScope(...)`
+    // field. It was declared here but never referenced anywhere in the
+    // codebase (searched `WepWawetLogger.scope` and `scope\.` — zero hits).
+    // The compiler didn't warn because CoroutineScope holds a SupervisorJob
+    // + Dispatchers.IO reference, so it was alive (just idle) for the entire
+    // app process. Removing it frees a small but unnecessary coroutine context.
+
     private val _events = MutableSharedFlow<LogEntry>(
         replay = 0,
         extraBufferCapacity = 256,

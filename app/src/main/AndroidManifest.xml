@@ -11,8 +11,14 @@
 
     <!-- Foreground service (post-Android 14 typed) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <!-- The emulated Wine process is long-running — this is "specialUse" per Android 14 -->
+    <!-- v0.5.32 (audit L1): removed unused FOREGROUND_SERVICE_DATA_SYNC
+         permission declaration — our foreground service uses the "specialUse"
+         type (see the <service> declaration below), not "dataSync". Play
+         Store only checks that you have the permission for the type you
+         actually use, so declaring an unused type is just bloat. The
+         FOREGROUND_SERVICE_SPECIAL_USE permission below is the one we
+         actually need (it's matched to the service's foregroundServiceType
+         attribute). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- Wake lock so the Wine process doesn't sleep mid-render -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />

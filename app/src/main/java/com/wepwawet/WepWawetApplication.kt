@@ -82,6 +82,22 @@ class WepWawetApplication : Application(), Configuration.Provider, ImageLoaderFa
     }
 
     override fun onCreate() {
+        // v0.5.32 (audit M4): Initialize appScope FIRST, before any
+        // other initialization step. Previously appScope was initialized
+        // at line 159 (the very LAST step of onCreate) — if any earlier
+        // step (CrashHandler.install, writeBootBreadcrumb, WepWawetLogger.init,
+        // createNotificationChannels) ever touched appScope (directly or
+        // transitively), the app would crash with
+        // UninitializedPropertyAccessException *before* the user-visible
+        // UI initialized.
+        //
+        // In practice nothing hits appScope during onCreate today, so this
+        // was latent — but it's fragile. A future change (e.g., a
+        // CrashHandler that wants to log via a coroutine) would crash on
+        // boot with no obvious cause. Moving appScope init to the very
+        // first line of onCreate eliminates the risk.
+        appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
         // Set singleton instance FIRST (before anything else might need it)
         instance = this
 
@@ -151,13 +167,8 @@ class WepWawetApplication : Application(), Configuration.Provider, ImageLoaderFa
         runCatching {
             appendToBootBreadcrumb("onCreate complete\n")
         }
-
-        // Initialize the application-scoped coroutine supervisor. This survives
-        // Activity/Fragment/Composable destruction — used by WorkshopDownloadJob
-        // so that downloads continue even if the user navigates away from the
-        // detail screen while a download is in flight.
-        appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        WepWawetLogger.appInfo("appScope initialized")
+        // NOTE: appScope was initialized at the TOP of onCreate (audit M4).
+        // The old init at this point has been removed.
     }
 
     /**
@@ -248,8 +259,28 @@ class WepWawetApplication : Application(), Configuration.Provider, ImageLoaderFa
     private fun findBootFile(collection: Uri): Uri? {
         val resolver = contentResolver
         val projection = arrayOf(MediaStore.MediaColumns._ID)
-        val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ?"
-        val args = arrayOf("boot.txt")
+        // v0.5.32 (audit M5): filter by RELATIVE_PATH too — otherwise
+        // this query matches any file named "boot.txt" anywhere in the
+        // user's Downloads collection (including unrelated apps' files).
+        // If another app also writes a boot.txt to Downloads, we'd
+        // return that app's URI instead of WepWawet's, then
+        // appendToBootBreadcrumb would write WepWawet's "onCreate
+        // complete" line into the OTHER app's file, and the user's
+        // Downloads/WepWawet/boot.txt would stop getting updates.
+        // NOTE: Android's MediaStore trims leading/trailing slashes from
+        // RELATIVE_PATH on both write and store (per Android docs:
+        // https://developer.android.com/reference/android/provider/MediaStore.MediaColumns#RELATIVE_PATH
+        // — "trims leading/trailing slashes before being stored"). The
+        // write-side code at line 207 uses "Download/WepWawet" (no trailing
+        // slash), and the stored value is also normalized to that form.
+        // The query selection must therefore also use "Download/WepWawet"
+        // (no trailing slash) — using "Download/WepWawet/" would cause the
+        // SQL comparison `RELATIVE_PATH = 'Download/WepWawet/'` to fail to
+        // match the stored "Download/WepWawet" value, and we'd fall through
+        // to the createNewFile path on every onCreate call.
+        val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND " +
+            "${MediaStore.MediaColumns.RELATIVE_PATH} = ?"
+        val args = arrayOf("boot.txt", "Download/WepWawet")
         resolver.query(collection, projection, selection, args, null)?.use { c ->
             if (c.moveToFirst()) {
                 val id = c.getLong(0)

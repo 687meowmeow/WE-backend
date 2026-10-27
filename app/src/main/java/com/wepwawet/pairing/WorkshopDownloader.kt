@@ -139,6 +139,33 @@ class WorkshopDownloader(
         private const val KEY_REFRESH_TOKEN = "refresh_token"
         private const val KEY_ACCOUNT_NAME = "account_name"
 
+        // v0.5.32 (audit M7): Previously loginID was hardcoded to 149 at
+        // both refresh-token login (line ~1091) and modern-auth login
+        // (line ~1149). Both WorkshopBrowseSession (singleton downloader
+        // for browse queries) and WorkshopDownloadJob (per-download
+        // downloader) used the same loginID — so when the user started
+        // a download while BrowseSession was connected, the new logOn
+        // collided with the existing session and Steam kicked the older
+        // one with EResult.LogonSessionReplaced.
+        //
+        // Fix: each WorkshopDownloader instance gets a distinct random
+        // loginID in [1, Int.MAX_VALUE]. Steam's docs say loginID is
+        // a client-side identifier (any positive int is fine — the
+        // JavaSteam sample _023_downloadapp uses 149 as an arbitrary
+        // example, not as a required value). Random per-instance
+        // values eliminate the collision.
+        //
+        // LOGIN_ID_RNG lives in the companion object (a single shared
+        // Random is fine — Random is thread-safe). steamLoginID MUST
+        // be an instance field (declared AFTER the companion object
+        // below) so each WorkshopDownloader gets a different loginID —
+        // putting it inside the companion would make it shared (defeating
+        // the fix). Putting it between the companion's `}` and testLogin
+        // (as the initial M7 fix did) was a brace-balancing bug that
+        // closed the class prematurely — see the corrected placement
+        // after testLogin.
+        private val LOGIN_ID_RNG = java.util.Random()
+
         /**
          * Test Steam login — connects, authenticates, saves refresh token.
          * Returns a result message (success or error).
@@ -170,6 +197,19 @@ class WorkshopDownloader(
             result
         }
     }
+
+    /**
+     * Per-instance Steam loginID — distinct across WorkshopDownloader instances.
+     *
+     * v0.5.32 (audit M7): see the comment above [LOGIN_ID_RNG] for context.
+     * Each WorkshopDownloader instance gets its own loginID so that two
+     * concurrent logins (e.g., WorkshopBrowseSession's singleton + a
+     * WorkshopDownloadJob's per-download downloader) don't collide and
+     * trigger EResult.LogonSessionReplaced.
+     *
+     * Placed AFTER the companion object (instance field, not shared static).
+     */
+    private val steamLoginID: Int = LOGIN_ID_RNG.nextInt(1, Int.MAX_VALUE)
 
     private var steamClient: SteamClient? = null
     private var callbackManager: CallbackManager? = null
@@ -1088,7 +1128,13 @@ class WorkshopDownloader(
                 //   details.setLoginID(149);
                 // https://github.com/687meowmeow/JavaSteam samples
                 details.shouldRememberPassword = true
-                details.loginID = 149
+                // v0.5.32 (audit M7): use a per-instance random loginID instead
+                // of hardcoded 149. WorkshopBrowseSession's singleton downloader
+                // and WorkshopDownloadJob's per-download downloader both use the
+                // same Steam credentials — using the same loginID = 149 caused
+                // Steam to kick the older session with EResult.LogonSessionReplaced
+                // when a download was started while a browse session was active.
+                details.loginID = steamLoginID
                 usedRefreshToken = true
                 steamUser!!.logOn(details)
                 return  // Wait for onLoggedOn callback — if it fails, we'll fall back
@@ -1146,7 +1192,11 @@ class WorkshopDownloader(
                     // requested. Without this, Steam may invalidate the refresh
                     // token after one use → next attempt = AccessDenied. ===
                     details.shouldRememberPassword = true
-                    details.loginID = 149
+                    // v0.5.32 (audit M7): use per-instance steamLoginID here too
+                    // (see the comment in connectAndAuthenticate above) — using
+                    // hardcoded 149 here collides with the BrowseSession's loginID
+                    // if a download is started while a browse session is connected.
+                    details.loginID = steamLoginID
                     steamUser!!.logOn(details)
                 } catch (e: Exception) {
                     // Don't fail if we're retrying (TryAnotherCM causes CancellationException)

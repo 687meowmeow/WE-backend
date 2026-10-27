@@ -103,35 +103,63 @@ object DownloadManager {
      * Mark a download as failed.
      */
     fun failDownload(itemId: String, errorMessage: String) {
+        // v0.5.32 (audit M3): Atomically remove from active AND capture
+        // the existing entry's metadata in ONE update call. Previously
+        // the code did two separate _activeDownloads.update calls:
+        //   1. Set status=FAILED (but keep in active)
+        //   2. Read _activeDownloads.value[itemId]
+        //   3. Add to completed under completedLock
+        //   4. Remove from active
+        // Between step 1 and step 4, a concurrent updateProgress() call
+        // could see the entry still in active, hit `existing ?: return`,
+        // and overwrite FAILED with new progress — the user would see
+        // the download flip from "Failed" back to "Downloading…" in the
+        // UI. (Once §1's progress-mirroring fix is applied and
+        // updateProgress is actually called, this race becomes reachable.)
+        //
+        // The fix: skip the "set FAILED in active" intermediate step
+        // entirely (the FAILED status is captured in the completed
+        // entry's `status` field, not in active). Atomically remove
+        // from active and capture the entry's metadata (title,
+        // previewUrl, creator, type) in one update. After this point,
+        // any concurrent updateProgress sees itemId is missing from
+        // active and returns early — no race.
+        var captured: DownloadProgress? = null
         _activeDownloads.update { current ->
-            val existing = current[itemId] ?: return@update current
-            current + (itemId to existing.copy(
-                status = DownloadStatus.FAILED,
-                statusMessage = errorMessage,
-                progress = 0f,
-            ))
-        }
-        // Move failed downloads to completed after a short delay (or immediately)
-        val failed = _activeDownloads.value[itemId]
-        if (failed != null) {
-            synchronized(completedLock) {
-                val completed = CompletedDownload(
-                    itemId = itemId,
-                    title = failed.title,
-                    previewUrl = failed.previewUrl,
-                    creator = failed.creator,
-                    type = failed.type,
-                    completedAt = System.currentTimeMillis(),
-                    fileSizeBytes = 0,
-                    deviceName = "",
-                    status = DownloadStatus.FAILED,
-                    errorMessage = errorMessage,
-                )
-                _completedDownloads.update { existing ->
-                    (listOf(completed) + existing.filter { it.itemId != itemId })
-                }
+            val existing = current[itemId]
+            if (existing == null) {
+                // Not in active — leave captured as null, no change.
+                current
+            } else {
+                // Capture metadata for the completed list, then remove.
+                captured = existing
+                current - itemId
             }
-            _activeDownloads.update { it - itemId }
+        }
+
+        val snapshot = captured ?: run {
+            // itemId wasn't in active — nothing to fail. Log and return.
+            WepWawetLogger.workshopWarn("DownloadManager: failDownload no-op — itemId not in active",
+                "item_id" to itemId, "error" to errorMessage)
+            return
+        }
+
+        synchronized(completedLock) {
+            val completed = CompletedDownload(
+                itemId = itemId,
+                title = snapshot.title,
+                previewUrl = snapshot.previewUrl,
+                creator = snapshot.creator,
+                type = snapshot.type,
+                completedAt = System.currentTimeMillis(),
+                fileSizeBytes = 0,
+                deviceName = "",
+                status = DownloadStatus.FAILED,
+                errorMessage = errorMessage,
+            )
+            _completedDownloads.update { existing ->
+                (listOf(completed) + existing.filter { it.itemId != itemId })
+            }
         }
         WepWawetLogger.workshopWarn("DownloadManager: failed download",
             "item_id" to itemId, "error" to errorMessage)
