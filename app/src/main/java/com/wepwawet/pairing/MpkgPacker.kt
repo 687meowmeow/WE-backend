@@ -2240,6 +2240,42 @@ object MpkgPacker {
             writeLeIntToStream(out, lz4Compressed.size) // compressed_size
             out.write(lz4Compressed)                // LZ4-compressed ETC2 RGBA8 data
 
+            // ---- Step 7g: Preserve TEXS0003 section (animated texture sequences) ----
+            //
+            // Per the Ghidra decompilation of FUN_1400de870 (the .tex parser at
+            // line 152127), the parser checks for TEXI0001, TEXB0003/0004, and
+            // TEXS0003 sections in a loop. The TEXS section contains per-frame
+            // UV coordinates for animated texture atlases (handled by FUN_1400de440).
+            //
+            // If the original .tex has a TEXS section after the TEXB body, we must
+            // preserve it in the output .tex — the Android app's libscenejni.so
+            // reads it to know which UV region of the texture atlas to display
+            // at each animation frame.
+            //
+            // The TEXS section starts with "TEXS0003\0" (9 bytes) followed by
+            // the animation frame data (a stream of floats read by FUN_1400de440).
+            val texbBodyEnd = 91 + byteCount
+            if (texbBodyEnd < texData.size) {
+                // Check if the remaining data starts with "TEXS"
+                val remainingStart = texbBodyEnd
+                if (remainingStart + 4 <= texData.size) {
+                    val sectionMagic = String(texData, remainingStart, 4, Charsets.US_ASCII)
+                    if (sectionMagic == "TEXS") {
+                        val texsBytes = texData.copyOfRange(remainingStart, texData.size)
+                        out.write(texsBytes)
+                        WepWawetLogger.proxy("MpkgPacker.convertTexDxtToEtc2: preserved TEXS section",
+                            "name" to name,
+                            "texs_size" to texsBytes.size,
+                            "texs_magic" to String(texsBytes, 0, minOf(8, texsBytes.size), Charsets.US_ASCII))
+                    } else {
+                        WepWawetLogger.proxyDebug("MpkgPacker.convertTexDxtToEtc2: trailing data after TEXB is not TEXS",
+                            "name" to name,
+                            "trailing_size" to (texData.size - texbBodyEnd),
+                            "trailing_magic" to sectionMagic)
+                    }
+                }
+            }
+
             val result = out.toByteArray()
 
             // ---- Step 8: Verify by reading back the structure ----
@@ -2374,6 +2410,34 @@ object MpkgPacker {
                 modified = true
                 WepWawetLogger.proxy("MpkgPacker.rewriteProjectJsonForMobile: set maximumprojectid",
                     "value" to maxObjectId)
+            }
+
+            // 4. Set "alignmentposition" for video wallpapers
+            // (per transcoder disasm line 14003f27b)
+            //
+            // The transcoder wraps the value in {"value": <int>} format:
+            //   - Line 14003f2a5: loads int from struct (r13+0xb0)
+            //   - Line 14003f2b6: converts int to string
+            //   - Line 14003f2be: concatenates "{"value":" + int_string + "}"
+            //   - Sets as the "alignmentposition" field value
+            //
+            // The value represents the video's alignment position (0=centered,
+            // 1=top-left, etc.). Without this field, the Android app uses a
+            // default centered alignment.
+            //
+            // We only set this for video wallpapers (type=video). For scene
+            // wallpapers, the field is not relevant.
+            val currentType = root.get("type")?.asString?.lowercase() ?: "unknown"
+            if (currentType == "video") {
+                if (!root.has("alignmentposition")) {
+                    // Default: 0 (centered) — matches what the transcoder sets
+                    // when the source doesn't specify a custom alignment.
+                    root.addProperty("alignmentposition", "{\"value\": 0}")
+                    modified = true
+                    WepWawetLogger.proxy("MpkgPacker.rewriteProjectJsonForMobile: set alignmentposition",
+                        "value" to "{\"value\": 0}",
+                        "note" to "default centered (video wallpaper)")
+                }
             }
 
             // NOTE: "file" and "preview" fields are PRESERVED as-is (no MPKG_VFS:// prefix).
