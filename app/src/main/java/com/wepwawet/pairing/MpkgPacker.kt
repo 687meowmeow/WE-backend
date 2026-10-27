@@ -502,8 +502,10 @@ object MpkgPacker {
         // see research/we-transcoder/02_transcoder_14003d1e0.asm) rewrites
         // project.json and scene.json during the .pkg -> .mpkg transcoding step:
         //   - project.json: "file" → "MPKG_VFS://...", "preview" → "MPKG_VFS://...",
-        //     removes "video" section, sets "type", "title", "workshopurl"
-        //     (disasm lines 14003ea47, 14003eacc, 14003eb31, 14003eb70, 14003eb80)
+        //     removes "video" section, sets "type", "title", "workshopurl",
+        //     "maximumprojectid" (max object ID from scene.json's "objects" array)
+        //     (disasm lines 14003ea47, 14003eacc, 14003eb31, 14003eb70, 14003eb80,
+        //      1400416b8, 14003fceb)
         //   - scene.json: iterates over "files" array and prefixes each entry's
         //     "value" with "MPKG_VFS://"
         //     (disasm lines 14004104e, 1400410cd, 140041125-14004116a)
@@ -511,15 +513,33 @@ object MpkgPacker {
         // The MPKG_VFS:// scheme is what the Android native lib (libscenejni.so)
         // uses to address files within the .mpkg's virtual file system.
         // Without this prefix, the Android app may not find files inside the .mpkg.
+        //
+        // First: compute maxObjectId from scene.json (needed for project.json's
+        // "maximumprojectid" field). We need to do this BEFORE rewriting project.json,
+        // and we should use the rewritten scene.json (with MPKG_VFS:// paths) —
+        // but the "id" field values are integers, not paths, so the rewrite doesn't
+        // affect them. We can use either the original or rewritten scene.json.
+        var maxObjectId = -1
+        for ((name, blob) in entries) {
+            if (name == "scene.json") {
+                maxObjectId = computeMaxObjectId(blob)
+                if (maxObjectId >= 0) {
+                    WepWawetLogger.proxy("MpkgPacker.packFromPkg: computed maxObjectId from scene.json",
+                        "max_object_id" to maxObjectId)
+                }
+                break
+            }
+        }
         for (i in entries.indices) {
             val (name, blob) = entries[i]
             if (name == "project.json") {
-                val rewritten = rewriteProjectJsonForMobile(blob)
+                val rewritten = rewriteProjectJsonForMobile(blob, maxObjectId)
                 if (rewritten != null && !rewritten.contentEquals(blob)) {
                     entries[i] = name to rewritten
                     WepWawetLogger.proxy("MpkgPacker.packFromPkg: rewrote project.json for MPKG_VFS scheme",
                         "original_size" to blob.size,
-                        "rewritten_size" to rewritten.size)
+                        "rewritten_size" to rewritten.size,
+                        "max_object_id" to maxObjectId)
                 }
             } else if (name == "scene.json") {
                 val rewritten = rewriteSceneJsonForMobile(blob)
@@ -2229,9 +2249,11 @@ object MpkgPacker {
      *   6. Sets the "workshopurl" field
      *      (transcoder disasm line 1400416b8)
      *   7. Sets the "alignmentposition" field (for video wallpapers)
-     *      (transcoder disasm line 14003f27b)
+     *      (transcoder disasm line 14003f27b — value wrapped in {"value": <int>})
      *   8. Sets the "maximumprojectid" field
-     *      (transcoder disasm line 14003fceb)
+     *      (transcoder disasm line 14003fceb — value is the max object ID
+     *       from scene.json's "objects" array, used by the Android side to
+     *       pre-allocate object slots)
      *
      * The MPKG_VFS:// scheme is what the Android native lib (libscenejni.so)
      * uses to address files within the .mpkg's virtual file system. Without
@@ -2247,10 +2269,13 @@ object MpkgPacker {
      *     version, visibility) are preserved unchanged.
      *
      * @param projectJsonBytes The original project.json bytes from the .pkg.
+     * @param maxObjectId The maximum object ID computed from scene.json's
+     *                    "objects" array (for setting "maximumprojectid").
+     *                    Pass -1 to skip setting this field.
      * @return The rewritten project.json bytes, or null on failure (caller
      *         should use the original bytes in that case).
      */
-    private fun rewriteProjectJsonForMobile(projectJsonBytes: ByteArray): ByteArray? {
+    private fun rewriteProjectJsonForMobile(projectJsonBytes: ByteArray, maxObjectId: Int = -1): ByteArray? {
         return try {
             val jsonStr = String(projectJsonBytes, Charsets.UTF_8)
             val root = JsonParser.parseString(jsonStr).asJsonObject
@@ -2307,7 +2332,17 @@ object MpkgPacker {
                 }
             }
 
-            // 5. Set "workshopurl" if missing
+            // 5. Set "maximumprojectid" (per transcoder disasm line 14003fceb)
+            // Value is the max object ID across scene.json's "objects" array.
+            // This tells the Android side how many object slots to pre-allocate.
+            if (maxObjectId >= 0) {
+                root.addProperty("maximumprojectid", maxObjectId)
+                modified = true
+                WepWawetLogger.proxy("MpkgPacker.rewriteProjectJsonForMobile: set maximumprojectid",
+                    "value" to maxObjectId)
+            }
+
+            // 6. Set "workshopurl" if missing
             // WE PC's transcoder sets workshopurl to the Steam community URL.
             // If the .pkg's project.json doesn't have it, we leave it unset
             // (the Android app will just not show a "View on Workshop" link).
@@ -2341,6 +2376,59 @@ object MpkgPacker {
             WepWawetLogger.proxyError("MpkgPacker.rewriteProjectJsonForMobile FAILED — using original",
                 "exception" to e.javaClass.name, "message" to (e.message ?: ""))
             null
+        }
+    }
+
+    /**
+     * Compute the maximum object ID from scene.json's "objects" array.
+     *
+     * Per the transcoder disasm (line 14003fceb), WE PC sets the
+     * "maximumprojectid" field in project.json to the max object ID
+     * across scene.json's objects. This tells the Android side how many
+     * object slots to pre-allocate (avoids dynamic array growth).
+     *
+     * The "objects" array contains entries like:
+     *   { "id": 1, "effects": [{ "id": 17, ... }] }
+     *
+     * We walk the entire tree and find the maximum "id" value.
+     *
+     * @param sceneJsonBytes The scene.json bytes.
+     * @return The maximum "id" value found, or -1 if no ids found or on error.
+     */
+    private fun computeMaxObjectId(sceneJsonBytes: ByteArray): Int {
+        return try {
+            val root = JsonParser.parseString(String(sceneJsonBytes, Charsets.UTF_8)).asJsonObject
+            var maxId = -1
+            /**
+             * Recursively walk the JSON tree and find all "id" fields.
+             */
+            fun walkIdFields(value: com.google.gson.JsonElement) {
+                if (value.isJsonObject) {
+                    val obj = value.asJsonObject
+                    val idField = obj.get("id")
+                    if (idField != null && idField.isJsonPrimitive) {
+                        try {
+                            val id = idField.asInt
+                            if (id > maxId) maxId = id
+                        } catch (_: Exception) { /* not a number, skip */ }
+                    }
+                    for (key in obj.keySet()) {
+                        walkIdFields(obj.get(key))
+                    }
+                } else if (value.isJsonArray) {
+                    val arr = value.asJsonArray
+                    val size = arr.size()
+                    for (i in 0 until size) {
+                        walkIdFields(arr[i])
+                    }
+                }
+            }
+            walkIdFields(root)
+            maxId
+        } catch (e: Exception) {
+            WepWawetLogger.proxyWarn("MpkgPacker.computeMaxObjectId FAILED — returning -1",
+                "exception" to e.javaClass.name, "message" to (e.message ?: ""))
+            -1
         }
     }
 
