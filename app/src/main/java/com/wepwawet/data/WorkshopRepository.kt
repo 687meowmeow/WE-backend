@@ -395,6 +395,15 @@ class WorkshopRepository constructor(
                     currentSearchPage = 0
                     searchHasMore = true
                     _searchItems.value = emptyList()
+                    // v0.5.32 (audit H1): reset consecutiveEmptyPages too.
+                    // The counter is shared between search and browse paths
+                    // (loadNextPageLocked checks it). If the previous browse
+                    // session ran the counter up to 19/20, then the user
+                    // switched to search and pulled-to-refresh, the stale
+                    // counter would make the very next transient Steam miss
+                    // trigger hasMore=false prematurely. Reset on every
+                    // refresh — same as startBrowse/startSearch would.
+                    consecutiveEmptyPages = 0
                     loadNextSearchPageLocked()
                 }
             } else if (filter != null) {
@@ -402,6 +411,13 @@ class WorkshopRepository constructor(
                 browseLock.withLock {
                     currentPage = 0
                     hasMore = true
+                    // v0.5.32 (audit H1): reset consecutiveEmptyPages on
+                    // refresh — otherwise a restrictive filter that ran the
+                    // counter to 19/20 leaves it there, and the very next
+                    // transient Steam miss triggers hasMore=false permanently.
+                    // The user has to fully exit the screen and re-enter to
+                    // recover.
+                    consecutiveEmptyPages = 0
                     steamApi.resetQueryFilesCursor()
                     _browseItems.value = emptyList()
                     loadNextPageLocked()
