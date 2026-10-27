@@ -72,15 +72,22 @@ if(ENABLE_GLSLANG)
     set(SPIRV_CROSS_SKIP_INSTALL ON CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(spirv_cross_src)
 
-    # Verify the source directories are set
-    if(DEFINED glslang_src_SOURCE_DIR AND DEFINED spirv_cross_src_SOURCE_DIR)
+    # Verify the source directories are set AND the header files actually exist
+    if(EXISTS "${glslang_src_SOURCE_DIR}/glslang/Public/Shader.h" AND
+       EXISTS "${spirv_cross_src_SOURCE_DIR}/include/spirv_cross/spirv_cross.hpp")
         set(GLSLANG_AVAILABLE TRUE)
         list(APPEND JNI_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/shader_transcoder_jni.cpp)
         message(STATUS "glslang+SPIRV-Cross available — shader transcoder enabled")
         message(STATUS "  glslang source: ${glslang_src_SOURCE_DIR}")
         message(STATUS "  spirv-cross source: ${spirv_cross_src_SOURCE_DIR}")
     else()
-        message(WARNING "glslang or SPIRV-Cross source dir not set — shader transcoder DISABLED")
+        message(WARNING "glslang/Public/Shader.h or spirv_cross.hpp not found — shader transcoder DISABLED")
+        message(STATUS "  glslang src dir: ${glslang_src_SOURCE_DIR}")
+        message(STATUS "  checking: EXISTS ${glslang_src_SOURCE_DIR}/glslang/Public/Shader.h = ${EXISTS}")
+        if(NOT EXISTS "${glslang_src_SOURCE_DIR}/glslang/Public/Shader.h")
+            file(GLOB GLOSLANG_FILES "${glslang_src_SOURCE_DIR}/*")
+            message(STATUS "  glslang src dir contents: ${GLOSLANG_FILES}")
+        endif()
     endif()
 endif()
 
