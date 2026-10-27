@@ -337,10 +337,28 @@ object PkgReader {
         WepWawetLogger.proxy("$TAG.detectWallpaperType",
             "project_json_size" to projectJson.size,
             "project_json_preview" to json.take(300))
-        // Find "type" : "value"
-        val typeRegex = Regex("\"type\"\\s*:\\s*\"([a-zA-Z]+)\"")
-        val match = typeRegex.find(json)
-        val type = match?.groupValues?.get(1)?.lowercase() ?: "unknown"
+        // Use proper JSON parsing instead of regex. The regex approach was broken:
+        // it matched the FIRST occurrence of `"type":"<value>"` anywhere in the
+        // project.json text — including inside string fields like "description"
+        // that contain JS code (e.g., the Saturn wallpaper's description contains
+        // `"type":"bool"` which caused type detection to return "bool" instead
+        // of "scene").
+        val type = try {
+            val root = com.google.gson.JsonParser.parseString(json).asJsonObject
+            val typeField = root.get("type")
+            if (typeField != null && typeField.isJsonPrimitive) {
+                typeField.asString.lowercase()
+            } else {
+                "unknown"
+            }
+        } catch (e: Exception) {
+            // Fall back to regex if JSON parsing fails (malformed JSON)
+            WepWawetLogger.proxyWarn("$TAG.detectWallpaperType: JSON parse failed, falling back to regex",
+                "exception" to e.javaClass.name)
+            val typeRegex = Regex("\"type\"\\s*:\\s*\"([a-zA-Z]+)\"")
+            val match = typeRegex.find(json)
+            match?.groupValues?.get(1)?.lowercase() ?: "unknown"
+        }
         WepWawetLogger.proxy("$TAG.detectWallpaperType done",
             "type" to type)
         return type

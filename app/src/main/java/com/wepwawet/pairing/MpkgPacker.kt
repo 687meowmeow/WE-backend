@@ -1097,9 +1097,7 @@ object MpkgPacker {
             append("{\r\n")
             append("\t\"contentrating\" : \"Everyone\",\r\n")
             append("\t\"description\" : \"$description\",\r\n")
-            // Use MPKG_VFS:// scheme for parity with real WE PC's transcoder output
-            // (wallpaperui.exe function 0x14003d1e0, disasm line 14003ea47)
-            append("\t\"file\" : \"MPKG_VFS://scene.json\",\r\n")
+            append("\t\"file\" : \"scene.json\",\r\n")
             append("\t\"general\" : \r\n")
             append("\t{\r\n")
             append("\t\t\"properties\" : \r\n")
@@ -1113,8 +1111,7 @@ object MpkgPacker {
             append("\t\t\t}\r\n")
             append("\t\t}\r\n")
             append("\t},\r\n")
-            // Use MPKG_VFS:// scheme for the preview too (disasm line 14003eacc)
-            append("\t\"preview\" : \"MPKG_VFS://preview.jpg\",\r\n")
+            append("\t\"preview\" : \"preview.jpg\",\r\n")
             append("\t\"tags\" : [ $tags ],\r\n")
             append("\t\"title\" : \"$title\",\r\n")
             append("\t\"type\" : \"scene\",\r\n")
@@ -1256,8 +1253,7 @@ object MpkgPacker {
             append("{\r\n")
             append("\t\"contentrating\" : \"Everyone\",\r\n")
             append("\t\"description\" : \"$description\",\r\n")
-            // Use MPKG_VFS:// scheme for parity with real WE PC's transcoder output
-            append("\t\"file\" : \"MPKG_VFS://wallpaper.mp4\",\r\n")
+            append("\t\"file\" : \"wallpaper.mp4\",\r\n")
             append("\t\"general\" : \r\n")
             append("\t{\r\n")
             append("\t\t\"properties\" : \r\n")
@@ -1271,8 +1267,7 @@ object MpkgPacker {
             append("\t\t\t}\r\n")
             append("\t\t}\r\n")
             append("\t},\r\n")
-            // Use MPKG_VFS:// scheme for the preview too (disasm line 14003eacc)
-            append("\t\"preview\" : \"MPKG_VFS://preview.jpg\",\r\n")
+            append("\t\"preview\" : \"preview.jpg\",\r\n")
             append("\t\"tags\" : [ $tags ],\r\n")
             append("\t\"title\" : \"$title\",\r\n")
             append("\t\"type\" : \"video\",\r\n")
@@ -2281,33 +2276,7 @@ object MpkgPacker {
             val root = JsonParser.parseString(jsonStr).asJsonObject
             var modified = false
 
-            // 1. Rewrite "file" field with MPKG_VFS:// prefix
-            val fileField = root.get("file")
-            if (fileField != null && fileField.isJsonPrimitive) {
-                val filePath = fileField.asString
-                if (filePath.isNotBlank() && !filePath.startsWith("MPKG_VFS://")) {
-                    root.addProperty("file", "MPKG_VFS://$filePath")
-                    modified = true
-                    WepWawetLogger.proxy("MpkgPacker.rewriteProjectJsonForMobile: rewrote file field",
-                        "original" to filePath,
-                        "rewritten" to "MPKG_VFS://$filePath")
-                }
-            }
-
-            // 2. Rewrite "preview" field with MPKG_VFS:// prefix
-            val previewField = root.get("preview")
-            if (previewField != null && previewField.isJsonPrimitive) {
-                val previewPath = previewField.asString
-                if (previewPath.isNotBlank() && !previewPath.startsWith("MPKG_VFS://")) {
-                    root.addProperty("preview", "MPKG_VFS://$previewPath")
-                    modified = true
-                    WepWawetLogger.proxy("MpkgPacker.rewriteProjectJsonForMobile: rewrote preview field",
-                        "original" to previewPath,
-                        "rewritten" to "MPKG_VFS://$previewPath")
-                }
-            }
-
-            // 3. Remove the "video" key if present (per transcoder disasm line 14003eb70)
+            // 1. Remove the "video" key if present (per transcoder disasm line 14003eb70)
             // The .pkg's project.json may have a "video" section (with codec/codec params)
             // that the .mpkg's project.json does NOT have. WE PC's transcoder removes it.
             if (root.has("video")) {
@@ -2316,7 +2285,7 @@ object MpkgPacker {
                 WepWawetLogger.proxy("MpkgPacker.rewriteProjectJsonForMobile: removed video section (per WE PC transcoder)")
             }
 
-            // 4. Set "type" explicitly to lowercase (preserves existing value, just normalized)
+            // 2. Set "type" explicitly to lowercase (preserves existing value, just normalized)
             // Real WE PC's .mpkg uses lowercase "scene" or "video" (per the extracted
             // project.json from the Mordred wallpaper's .pkg). The Android side expects
             // lowercase too (per libscenejni.so strings analysis).
@@ -2332,7 +2301,7 @@ object MpkgPacker {
                 }
             }
 
-            // 5. Set "maximumprojectid" (per transcoder disasm line 14003fceb)
+            // 3. Set "maximumprojectid" (per transcoder disasm line 14003fceb)
             // Value is the max object ID across scene.json's "objects" array.
             // This tells the Android side how many object slots to pre-allocate.
             if (maxObjectId >= 0) {
@@ -2342,15 +2311,12 @@ object MpkgPacker {
                     "value" to maxObjectId)
             }
 
-            // 6. Set "workshopurl" if missing
-            // WE PC's transcoder sets workshopurl to the Steam community URL.
-            // If the .pkg's project.json doesn't have it, we leave it unset
-            // (the Android app will just not show a "View on Workshop" link).
-            // The .pkg's project.json typically already has workshopurl set,
-            // so we just preserve it.
-            if (!root.has("workshopurl")) {
-                WepWawetLogger.proxyDebug("MpkgPacker.rewriteProjectJsonForMobile: workshopurl field is missing — leaving unset")
-            }
+            // NOTE: "file" and "preview" fields are PRESERVED as-is (no MPKG_VFS:// prefix).
+            // The Android app's libscenejni.so looks up files by their relative paths
+            // in the .mpkg VFS (e.g., "scene.json", "preview.gif", "materials/sun.tex").
+            // Adding MPKG_VFS:// prefix breaks the file lookups → black image.
+            // (Tested in v0.5.24-alpha — adding MPKG_VFS:// prefix caused the Saturn
+            //  wallpaper to render as a completely black image. Reverted in v0.5.26-alpha.)
 
             if (!modified) {
                 WepWawetLogger.proxyDebug("MpkgPacker.rewriteProjectJsonForMobile: no changes needed (already in mobile format)")
@@ -2358,9 +2324,6 @@ object MpkgPacker {
             }
 
             // Serialize back to JSON with WE PC's formatting (tabs + \r\n line endings)
-            // This matches the .json formatting that real WE PC produces (verified from
-            // the Mordred wallpaper's project.json extracted from the .pkg side, which
-            // uses tabs and \r\n).
             val result = com.google.gson.GsonBuilder()
                 .setPrettyPrinting()
                 .serializeNulls()
@@ -2458,96 +2421,26 @@ object MpkgPacker {
      *         should use the original bytes in that case).
      */
     private fun rewriteSceneJsonForMobile(sceneJsonBytes: ByteArray): ByteArray? {
-        return try {
-            val jsonStr = String(sceneJsonBytes, Charsets.UTF_8)
-            val root = JsonParser.parseString(jsonStr).asJsonObject
-            var modifiedCount = 0
-
-            // Patterns that look like file paths within the .mpkg VFS
-            val pathPrefixes = listOf(
-                "materials/", "shaders/", "models/", "effects/",
-                "sounds/", "fonts/", "scene/", "preview",
-                "wallpaper."
-            )
-
-            /**
-             * Recursively walk the JSON tree and rewrite any string value that
-             * looks like a relative file path to use the MPKG_VFS:// prefix.
-             */
-            fun rewriteValue(value: com.google.gson.JsonElement): com.google.gson.JsonElement {
-                if (value.isJsonPrimitive) {
-                    val prim = value.asJsonPrimitive
-                    if (prim.isString) {
-                        val s = prim.asString
-                        if (s.isNotBlank() &&
-                            !s.startsWith("MPKG_VFS://") &&
-                            !s.startsWith("http://") &&
-                            !s.startsWith("https://") &&
-                            !s.startsWith("/") &&
-                            pathPrefixes.any { s.startsWith(it) }) {
-                            modifiedCount++
-                            return com.google.gson.JsonPrimitive("MPKG_VFS://$s")
-                        }
-                    }
-                } else if (value.isJsonObject) {
-                    val obj = value.asJsonObject
-                    val keys = obj.keySet().toList()  // snapshot to avoid ConcurrentMod
-                    for (key in keys) {
-                        obj.add(key, rewriteValue(obj.get(key)))
-                    }
-                } else if (value.isJsonArray) {
-                    val arr = value.asJsonArray
-                    val size = arr.size()
-                    for (i in 0 until size) {
-                        arr[i] = rewriteValue(arr[i])
-                    }
-                }
-                return value
-            }
-
-            // First: rewrite the "files" array specifically (if present)
-            // Per transcoder disasm line 14004104e, the "files" array contains
-            // entries with file paths that need MPKG_VFS:// prefixing.
-            if (root.has("files")) {
-                val files = root.get("files")
-                if (files.isJsonArray) {
-                    val arr = files.asJsonArray
-                    val size = arr.size()
-                    for (i in 0 until size) {
-                        arr[i] = rewriteValue(arr[i])
-                    }
-                } else if (files.isJsonObject) {
-                    root.add("files", rewriteValue(files))
-                }
-            }
-
-            // Then: walk the ENTIRE JSON tree and rewrite any other path-like strings
-            // (covers materials' "file" field, effects' "file" field, etc.)
-            for (key in root.keySet().toList()) {
-                root.add(key, rewriteValue(root.get(key)))
-            }
-
-            if (modifiedCount == 0) {
-                WepWawetLogger.proxyDebug("MpkgPacker.rewriteSceneJsonForMobile: no path-like strings found — no rewrite")
-                return sceneJsonBytes
-            }
-
-            val result = com.google.gson.GsonBuilder()
-                .setPrettyPrinting()
-                .serializeNulls()
-                .create()
-                .toJson(root)
-                .toByteArray(Charsets.UTF_8)
-            WepWawetLogger.proxy("MpkgPacker.rewriteSceneJsonForMobile: rewrite complete",
-                "original_size" to sceneJsonBytes.size,
-                "rewritten_size" to result.size,
-                "rewritten_path_count" to modifiedCount)
-            result
-        } catch (e: Exception) {
-            WepWawetLogger.proxyError("MpkgPacker.rewriteSceneJsonForMobile FAILED — using original",
-                "exception" to e.javaClass.name, "message" to (e.message ?: ""))
-            null
-        }
+        // REVERTED in v0.5.26-alpha: The recursive path rewriting (adding MPKG_VFS://
+        // prefix to all path-like strings in scene.json) was causing the Saturn
+        // wallpaper to render as a completely black image on Android.
+        //
+        // The Android app's libscenejni.so looks up textures by their RELATIVE
+        // paths in the .mpkg VFS (e.g., "materials/sun.tex"). Adding the
+        // MPKG_VFS:// prefix changed these to "MPKG_VFS://materials/sun.tex"
+        // which does NOT exist as a VFS entry name → no textures found → black.
+        //
+        // The fixSceneJsonTextureBindings function (called earlier in packFromPkg)
+        // already handles the null texture bindings. No further scene.json rewrite
+        // is needed for the Android app to correctly render Scene wallpapers.
+        //
+        // The transcoder disasm at lines 14004104e/1400410cd/140041125 does
+        // iterate over a "files" array and set "value" fields, but this appears
+        // to be for an INTERNAL data structure used during transcoding (not
+        // written to the .mpkg's scene.json). The .mpkg's scene.json should
+        // preserve the same texture paths as the .pkg's scene.json.
+        WepWawetLogger.proxyDebug("MpkgPacker.rewriteSceneJsonForMobile: no-op (recursive rewrite reverted to prevent black image)")
+        return sceneJsonBytes
     }
 
     /**
