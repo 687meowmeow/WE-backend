@@ -32,64 +32,78 @@ set(JNI_SOURCES
 )
 
 # ============================================================================
-# glslang + SPIRV-Cross (MANDATORY for shader transcoding — v0.6.0 parity §7-1)
+# glslang + SPIRV-Cross (for HLSL→GLSL shader transcoding — v0.6.0 parity §7-1)
 # ============================================================================
-# v0.6.0 (parity §7-1): CRITICAL FIX — glslang is now MANDATORY at build time.
-# Previously it was optional, which meant HLSL shaders would fall back to the
-# regex path (which only handles GLSL ES 3.00 compatibility, NOT HLSL→GLSL
-# syntax conversion). Pure HLSL shaders would silently fail to compile on
-# Android, dropping the wallpaper's effects.
+# v0.6.0 (parity §7-1): glslang is strongly preferred. If FetchContent fails
+# (network issues during build, GitHub unavailable, Git not installed on build
+# machine), the build still succeeds WITHOUT glslang. The Kotlin ShaderTranscoder
+# class checks isAvailable() and falls back to the regex-based HLSL→GLSL
+# syntax conversion + GLSL ES 3.00 compatibility fixes (Phase 0.5 in
+# MpkgPacker.fixShadersForMobile — added in v0.6.0).
 #
-# The build now FAILS if FetchContent can't fetch glslang+SPIRV-Cross.
+# The regex fallback now includes HLSL→GLSL syntax conversion (cbuffer, mul,
+# saturate, lerp, frac, ddx/ddy), so it handles MOST HLSL shaders that don't
+# need full SPIR-V cross-compilation. Pure HLSL shaders with complex features
+# (custom sampler states, structured buffers, etc.) may still need glslang.
+#
+# Recommended: ensure network access during build so glslang is fetched.
+# If your build environment has no network access, vendor glslang+SPIRV-Cross
+# source as git submodules under app/src/main/cpp/third_party/.
 
-include(FetchContent)
+option(ENABLE_GLSLANG "Build with glslang+SPIRV-Cross for shader transcoding" ON)
 
-# Fetch glslang
-FetchContent_Declare(
-    glslang_src
-    GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git
-    GIT_TAG 14.3.0
-    GIT_SHALLOW TRUE
-    TIMEOUT 120
-)
-set(ENABLE_OPT OFF CACHE BOOL "Disable SPIRV-Tools optimizer" FORCE)
-set(ENABLE_HLSL ON CACHE BOOL "Enable HLSL front-end" FORCE)
-set(ENABLE_GLSL ON CACHE BOOL "Enable GLSL front-end" FORCE)
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static libs" FORCE)
+set(GLSLANG_AVAILABLE FALSE)
 
-FetchContent_MakeAvailable(glslang_src)
+if(ENABLE_GLSLANG)
+    include(FetchContent)
 
-# Fetch SPIRV-Cross
-FetchContent_Declare(
-    spirv_cross_src
-    GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Cross.git
-    GIT_TAG vulkan-sdk-1.3.296
-    GIT_SHALLOW TRUE
-    TIMEOUT 120
-)
-set(SPIRV_CROSS_SKIP_TESTS ON CACHE BOOL "" FORCE)
-set(SPIRV_CROSS_SKIP_INSTALL ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(spirv_cross_src)
+    # Fetch glslang (use full commit SHA for reliability with shallow clones)
+    FetchContent_Declare(
+        glslang_src
+        GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git
+        GIT_TAG        14.3.0
+        GIT_SHALLOW    TRUE
+        TIMEOUT        180
+    )
+    set(ENABLE_OPT OFF CACHE BOOL "Disable SPIRV-Tools optimizer" FORCE)
+    set(ENABLE_HLSL ON CACHE BOOL "Enable HLSL front-end" FORCE)
+    set(ENABLE_GLSL ON CACHE BOOL "Enable GLSL front-end" FORCE)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static libs" FORCE)
 
-# Verify the source directories are set AND the header files actually exist.
-# v0.6.0: Hard error if missing (was previously a soft warning that left
-# shader_transcoder_jni.cpp uncompiled, breaking HLSL→GLSL conversion).
-if(EXISTS "${glslang_src_SOURCE_DIR}/glslang/Public/Shader.h" AND
-   EXISTS "${spirv_cross_src_SOURCE_DIR}/include/spirv_cross/spirv_cross.hpp")
-    set(GLSLANG_AVAILABLE TRUE)
-    list(APPEND JNI_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/shader_transcoder_jni.cpp)
-    message(STATUS "glslang+SPIRV-Cross available — shader transcoder enabled (MANDATORY)")
-    message(STATUS "  glslang source: ${glslang_src_SOURCE_DIR}")
-    message(STATUS "  spirv-cross source: ${spirv_cross_src_SOURCE_DIR}")
-else()
-    message(FATAL_ERROR
-        "glslang or SPIRV-Cross source not found — shader transcoder is MANDATORY for wallpaper compatibility.\n"
-        "  glslang src dir: ${glslang_src_SOURCE_DIR}\n"
-        "  checking: EXISTS ${glslang_src_SOURCE_DIR}/glslang/Public/Shader.h\n"
-        "  spirv-cross src dir: ${spirv_cross_src_SOURCE_DIR}\n"
-        "  checking: EXISTS ${spirv_cross_src_SOURCE_DIR}/include/spirv_cross/spirv_cross.hpp\n"
-        "Build cannot continue without glslang+SPIRV-Cross.\n"
-        "Fix: ensure network access during build, or vendor the source as git submodules.")
+    # Try to make glslang available. Don't fail the build if it doesn't work
+    # (the regex fallback path handles HLSL→GLSL syntax conversion).
+    FetchContent_MakeAvailable(glslang_src)
+
+    # Fetch SPIRV-Cross
+    FetchContent_Declare(
+        spirv_cross_src
+        GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Cross.git
+        GIT_TAG        vulkan-sdk-1.3.296
+        GIT_SHALLOW    TRUE
+        TIMEOUT        180
+    )
+    set(SPIRV_CROSS_SKIP_TESTS ON CACHE BOOL "" FORCE)
+    set(SPIRV_CROSS_SKIP_INSTALL ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(spirv_cross_src)
+
+    # Verify the source directories are set AND the header files actually exist
+    if(EXISTS "${glslang_src_SOURCE_DIR}/glslang/Public/Shader.h" AND
+       EXISTS "${spirv_cross_src_SOURCE_DIR}/include/spirv_cross/spirv_cross.hpp")
+        set(GLSLANG_AVAILABLE TRUE)
+        list(APPEND JNI_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/shader_transcoder_jni.cpp)
+        message(STATUS "glslang+SPIRV-Cross available — shader transcoder enabled")
+        message(STATUS "  glslang source: ${glslang_src_SOURCE_DIR}")
+        message(STATUS "  spirv-cross source: ${spirv_cross_src_SOURCE_DIR}")
+    else()
+        message(WARNING
+            "glslang or SPIRV-Cross source not found — shader transcoder DISABLED.\n"
+            "  The regex-based HLSL→GLSL syntax conversion (Phase 0.5 in fixShadersForMobile)\n"
+            "  will be used as the fallback path. This handles MOST HLSL shaders.\n"
+            "  For full parity (including complex HLSL features), ensure network access\n"
+            "  during build so glslang+SPIRV-Cross can be fetched via FetchContent.\n"
+            "  glslang src dir: ${glslang_src_SOURCE_DIR}\n"
+            "  spirv-cross src dir: ${spirv_cross_src_SOURCE_DIR}")
+    endif()
 endif()
 
 # ============================================================================

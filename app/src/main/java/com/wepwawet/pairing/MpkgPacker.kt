@@ -2636,14 +2636,14 @@ object MpkgPacker {
             //       [4-byte uncompressed_size][4-byte byteCount]
             //       [byteCount bytes of data]
             //   [TEXS0003\0 ... animation frames] (optional)
-            val mipmapCount = readU32Le(texData, 67).toInt().coerceAtLeast(1)
+            val texsMipmapCount = readU32Le(texData, 67).toInt().coerceAtLeast(1)
             // Walk all mipmaps to find the actual end of the TEXB body.
             // Mipmap layout (after the 4-byte mipmap_count at offset 67):
             //   offset 71: mipmap 0 header (20 bytes: width+height+compression+uncompressed_size+byteCount)
             //   offset 91: mipmap 0 body (byteCount bytes)
             //   then mipmap 1 header (20 bytes) + body (byteCount bytes), etc.
             var mipPos = 71  // start of mipmap 0's header
-            for (m in 0 until mipmapCount) {
+            for (m in 0 until texsMipmapCount) {
                 // Mipmap header: width(4) + height(4) + compression(4) + uncompressed_size(4) + byteCount(4) = 20 bytes
                 // Then byteCount bytes of data
                 if (mipPos + 20 > texData.size) break
@@ -2652,7 +2652,7 @@ object MpkgPacker {
             }
             WepWawetLogger.proxy("MpkgPacker.convertTexDxtToEtc2: walked mipmaps for TEXS",
                 "name" to name,
-                "mipmap_count" to mipmapCount,
+                "mipmap_count" to texsMipmapCount,
                 "texb_body_end" to mipPos,
                 "tex_size" to texData.size,
                 "trailing_bytes" to (texData.size - mipPos))
@@ -2665,7 +2665,7 @@ object MpkgPacker {
                         "name" to name,
                         "texs_size" to texsBytes.size,
                         "texs_magic" to String(texsBytes, 0, minOf(8, texsBytes.size), Charsets.US_ASCII),
-                        "mipmap_count_walked" to mipmapCount)
+                        "mipmap_count_walked" to texsMipmapCount)
                 } else {
                     WepWawetLogger.proxyDebug("MpkgPacker.convertTexDxtToEtc2: trailing data after last mipmap is not TEXS",
                         "name" to name,
