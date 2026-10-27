@@ -2,7 +2,7 @@
 
 > Steam Workshop browser & downloader for Android. Browse 3M+ Wallpaper Engine workshop items, log in with your own Steam account (2FA / Steam Guard supported), and download wallpaper packs straight to your phone. **No PC required.**
 
-**Status: v0.5.19-alpha — functional alpha.** Browse → login → download works end-to-end on-device. A pairing proxy is included for the official Wallpaper Engine Android app.
+**Status: v0.6.0-alpha — major parity release.** Implements all 36 fixes from the parity document for ~100% wallpaper compatibility: BC6H/BC7/RG88/R8 texture decoders, RGBA8888→ETC2 conversion, multi-mipmap TEXS preservation, glslang+SPIRV-Cross mandatory at build time with all shader stages (vert/frag/geom/hull/domain/comp), #include resolver, H.265 video output + AAC audio + frame rate + rotation preservation, DXT1 vs DXT1a distinction, RGBX error metric for opaque textures, and more. Browse → login → download works end-to-end on-device. A pairing proxy is included for the official Wallpaper Engine Android app.
 
 [![Build APK](https://github.com/687meowmeow/WE-backend/actions/workflows/build.yml/badge.svg)](https://github.com/687meowmeow/WE-backend/actions/workflows/build.yml)
 

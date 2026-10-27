@@ -50,11 +50,15 @@ object Etc2Encoder {
      * @param rgbaBytes Input pixel data, RGBA8888 (R,G,B,A per pixel, row-major top-down)
      * @param width Image width in pixels
      * @param height Image height in pixels
+     * @param isOpaque v0.6.0 (parity §6 6-7): If true, the encoder uses ErrorMetric::RGBX
+     *                 (treats alpha as don't-care), gaining ~0.5 dB PSNR on RGB channels.
+     *                 Default false for backward compatibility.
      * @return ETC2 RGBA8 block data (16 bytes per 4x4 block), no header
      * @throws IllegalStateException if native library failed to load
      * @throws RuntimeException if encoding failed
      */
-    fun encodeRgba8888(rgbaBytes: ByteArray, width: Int, height: Int): ByteArray {
+    fun encodeRgba8888(rgbaBytes: ByteArray, width: Int, height: Int,
+                        isOpaque: Boolean = false): ByteArray {
         if (!isLoaded) {
             throw IllegalStateException("Native ETC2 encoder library not loaded")
         }
@@ -63,7 +67,7 @@ object Etc2Encoder {
             throw IllegalArgumentException(
                 "RGBA bytes too small: ${rgbaBytes.size} < $expectedSize (width=$width, height=$height)")
         }
-        val result = nativeEncodeEtc2Rgba8(rgbaBytes, width, height)
+        val result = nativeEncodeEtc2Rgba8(rgbaBytes, width, height, if (isOpaque) 1 else 0)
         if (result == null) {
             throw RuntimeException("ETC2 encoding returned null (see logs for details)")
         }
@@ -76,10 +80,12 @@ object Etc2Encoder {
     fun isAvailable(): Boolean = isLoaded
 
     // Native function declaration
+    // v0.6.0: added isOpaque parameter for RGBX error metric (parity §6 6-7)
     @JvmStatic
     private external fun nativeEncodeEtc2Rgba8(
         rgbaBytes: ByteArray,
         width: Int,
         height: Int,
+        isOpaque: Int,
     ): ByteArray?
 }

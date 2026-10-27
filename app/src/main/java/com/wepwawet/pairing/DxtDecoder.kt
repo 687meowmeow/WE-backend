@@ -11,6 +11,8 @@ import com.wepwawet.log.WepWawetLogger
  *   - DXT5 (BC3) — 16 bytes per 4x4 block, RGB + 8-bit interpolated alpha
  *   - BC4  (RGTC1) — 8 bytes per 4x4 block, single channel
  *   - BC5  (RGTC2) — 16 bytes per 4x4 block, two channels (R+G)
+ *   - BC6H (BPTC float) — 16 bytes per 4x4 block, HDR RGB float (v0.6.0)
+ *   - BC7  (BPTC) — 16 bytes per 4x4 block, high-quality 8-mode RGBA (v0.6.0)
  *
  * Used by MpkgPacker to transcode PC-format .tex files (which contain DXT
  * block-compressed pixel data) to ETC2_RGBA8 + LZ4 for the WE Android renderer.
@@ -32,27 +34,42 @@ object DxtDecoder {
      * The `id` value matches the formatId expected by the native JNI call
      * (see dxt_jni.cpp). It does NOT match the .tex format field values —
      * use [formatForTexFormat] to convert from .tex format → DxtFormat.
+     *
+     * v0.6.0: Added BC6H (HDR RGB float) and BC7 (high-quality 8-mode) —
+     * per Khronos KHR_texture_compression_bptc spec.
      */
     enum class Format(val id: Int, val displayName: String, val blockSize: Int) {
         DXT1(1, "DXT1 (BC1)", 8),
         DXT3(3, "DXT3 (BC2)", 16),
         DXT5(5, "DXT5 (BC3)", 16),
         BC4(4, "BC4 (RGTC1)", 8),
-        BC5(6, "BC5 (RGTC2)", 16);
+        BC5(6, "BC5 (RGTC2)", 16),
+        BC6H(7, "BC6H (BPTC float, HDR RGB)", 16),  // v0.6.0 (parity §6 6-9)
+        BC7(8, "BC7 (BPTC, 8-mode high-quality)", 16);  // v0.6.0 (parity §6 6-10)
     }
 
-    /** Reverse map of .tex TexI format field → DxtFormat. */
+    /**
+     * Reverse map of .tex TexI format field → DxtFormat.
+     *
+     * v0.6.0 (parity §6 6-1): CRITICAL FIX — format codes 13 and 14 are BC6H and BC7
+     * respectively (NOT FIF_PNG/FIF_JPEG as previously documented). The previous
+     * comment was wrong, derived from a misinterpretation of the repkg source.
+     * The actual PNG/JPEG-encoded .tex files have TexI format=0 (FIF_UNKNOWN)
+     * with TexB format=13 (FIF_PNG) or 2 (FIF_JPEG) — they're handled by
+     * convertTexPngToEtc2 via magic-byte detection.
+     *
+     * Per the repkg TexFormat enum (https://github.com/notscuffed/repkg):
+     *   0=RGBA8888, 4=DXT5, 6=DXT3, 7=DXT1, 8=RG88, 9=R8, 11=BC4, 12=BC5,
+     *   13=BC6H (HDR), 14=BC7 (high-quality), 20=ETC2_RGBA8
+     */
     private val TEX_FORMAT_TO_DXT = mapOf(
-        // Per repkg's TexFormat enum (from research-1b/repkg_texheader.cs):
-        //   0=RGBA8888, 4=DXT5, 6=DXT3, 7=DXT1, 8=RG88, 9=R8
         4 to Format.DXT5,    // repkg: DXT5
         6 to Format.DXT3,    // repkg: DXT3
         7 to Format.DXT1,    // repkg: DXT1
-        // We also accept the more modern BC enum codes (used by some new .pkg files):
-        // BC4 (a.k.a. ATI1, RGTC1) — single channel
-        11 to Format.BC4,
-        // BC5 (a.k.a. ATI2, RGTC2) — two channels
-        12 to Format.BC5,
+        11 to Format.BC4,    // BC4 (RGTC1)
+        12 to Format.BC5,    // BC5 (RGTC2)
+        13 to Format.BC6H,   // v0.6.0: BC6H (HDR RGB float) — was incorrectly routed to FIF_PNG
+        14 to Format.BC7,    // v0.6.0: BC7 (high-quality 8-mode) — was incorrectly routed to FIF_JPEG
     )
 
     /**
@@ -96,10 +113,15 @@ object DxtDecoder {
      * @param width Image width in pixels.
      * @param height Image height in pixels.
      * @param format The DXT/BCn format.
+     * @param use1BitAlpha For DXT1 only: true = DXT1a (1-bit alpha mode), false = DXT1 (4-color opaque).
+     *                     Ignored for other formats. Default true for backward compatibility.
+     *                     v0.6.0 (parity §6 6-4): caller should pass false when the .tex flags
+     *                     field's HasAlpha bit (bit 3) is unset.
      * @return RGBA8888 pixel data (length = width * height * 4 bytes), or null on failure.
      *         Row-major, top-down (pixel 0 = top-left).
      */
-    fun decodeToRgba8888(srcBytes: ByteArray, width: Int, height: Int, format: Format): ByteArray? {
+    fun decodeToRgba8888(srcBytes: ByteArray, width: Int, height: Int, format: Format,
+                          use1BitAlpha: Boolean = true): ByteArray? {
         if (!isLoaded) {
             WepWawetLogger.proxyError("$TAG.decodeToRgba8888 FAILED — native library not loaded",
                 "format" to format.displayName, "width" to width, "height" to height)
@@ -124,7 +146,7 @@ object DxtDecoder {
         }
 
         return try {
-            val out = nativeDecodeDxt(srcBytes, width, height, format.id)
+            val out = nativeDecodeDxt(srcBytes, width, height, format.id, use1BitAlpha)
             if (out == null) {
                 WepWawetLogger.proxyError("$TAG.decodeToRgba8888 FAILED — native call returned null",
                     "format" to format.displayName, "width" to width, "height" to height)
@@ -140,11 +162,13 @@ object DxtDecoder {
     }
 
     // Native function declaration
+    // v0.6.0: added use1BitAlpha parameter for DXT1 vs DXT1a distinction
     @JvmStatic
     private external fun nativeDecodeDxt(
         srcBytes: ByteArray,
         width: Int,
         height: Int,
         formatId: Int,
+        use1BitAlpha: Boolean,
     ): ByteArray?
 }

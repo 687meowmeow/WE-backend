@@ -78,10 +78,14 @@ extern "C" {
 /*
  * Class:     com_wepwawet_pairing_Etc2Encoder
  * Method:    nativeEncodeEtc2Rgba8
- * Signature: ([BII)[B
+ * Signature: ([BIII)[B
  *
  * Encodes RGBA8888 pixel data (R,G,B,A per pixel, row-major, top-down) as
  * ETC2 RGBA8 block-compressed data.
+ *
+ * v0.6.0 (parity §6 6-7): Added isOpaque parameter. When true, the encoder
+ * uses ErrorMetric::RGBX (treats alpha as don't-care), gaining ~0.5 dB PSNR
+ * on RGB channels. This matches what real WE PC does for opaque textures.
  *
  * Input: byte[] of RGBA8888 pixels (4 bytes per pixel, length = width*height*4)
  * Returns: byte[] of ETC2 RGBA8 data (16 bytes per 4x4 block, no header)
@@ -89,7 +93,7 @@ extern "C" {
 JNIEXPORT jbyteArray JNICALL
 Java_com_wepwawet_pairing_Etc2Encoder_nativeEncodeEtc2Rgba8(
     JNIEnv *env, jclass /* cls */, jbyteArray rgba_bytes,
-    jint width, jint height) {
+    jint width, jint height, jint isOpaque) {
 
     // Get RGBA bytes from Java
     jsize input_size = env->GetArrayLength(rgba_bytes);
@@ -127,10 +131,15 @@ Java_com_wepwawet_pairing_Etc2Encoder_nativeEncodeEtc2Rgba8(
     // Release the input bytes (we have our own copy now)
     env->ReleaseByteArrayElements(rgba_bytes, input_bytes, JNI_ABORT);
 
+    // v0.6.0 (parity §6 6-7): Pick error metric based on isOpaque flag.
+    // RGBX treats alpha as don't-care (better quality for opaque textures).
+    // RGBA considers all 4 channels equally (default for alpha-textured).
+    Etc::ErrorMetric metric = (isOpaque != 0) ? Etc::ErrorMetric::RGBX : Etc::ErrorMetric::RGBA;
+
     // Create EtcImage with the float RGBA pixels
     Etc::Image image(rgba_floats.data(),
                      (unsigned int)width, (unsigned int)height,
-                     Etc::ErrorMetric::RGBA);
+                     metric);
 
     // Compute effort and jobs based on texture size and CPU count
     float effort = computeEffort(width, height);
@@ -139,7 +148,7 @@ Java_com_wepwawet_pairing_Etc2Encoder_nativeEncodeEtc2Rgba8(
     // Encode as ETC2 RGBA8
     Etc::Image::EncodingStatus encStatus = image.Encode(
         Etc::Image::Format::RGBA8,  // ETC2 RGBA8 (format=5 in .tex header)
-        Etc::ErrorMetric::RGBA,    // consider all 4 channels (R, G, B, A)
+        metric,
         effort,                     // size-based effort (10-40)
         jobs,                       // oversubscribed job count (8-32)
         1024                        // uiMaxJobs

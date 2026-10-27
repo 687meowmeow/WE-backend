@@ -79,7 +79,11 @@ class WePairingServer {
         private const val TAG = "WEP-PAIRING"
         const val TCP_PORT = 7889
         const val MAX_SAFE_COMMAND_LENGTH = 4096
-        const val MAX_SAFE_DATA_LENGTH = 1048592  // ~1 MiB
+        // VERIFIED from decompiled TcpClient.java (headless RE):
+        //   MAX_SAFE_COMMAND_LENGTH = 4096
+        //   MAX_SAFE_DATA_LENGTH = 1048572  (1 MiB - 4 KiB)
+        // v0.6.0 (parity §3 C-2-1): corrected off-by-20 bug — was 1048592
+        const val MAX_SAFE_DATA_LENGTH = 1048572
         // VERIFIED from real capture: PC sent 128-byte modulus = RSA-1024
         // (was 2048 in earlier code — WRONG)
         private const val RSA_KEY_SIZE = 1024
@@ -353,7 +357,16 @@ class WePairingServer {
                 // VERIFIED from real capture: Frame 0 = length=3 + bytes `01 00 01` = 65537
                 // (was modulus-first in earlier code — WRONG)
                 val (modulus, exponent) = getRsaPublicKeyComponents()
-                val expBytes = stripLeadingZero(exponent.toByteArray())
+                // v0.6.0 (parity §3 C-2-2): RSA exponent is always sent as 3 bytes BE.
+                // For exponent 65537 (0x010001) BigInteger.toByteArray() returns 3 bytes,
+                // but for smaller exponents (e.g., 3 → [0x03]) we must left-pad to 3 bytes
+                // to match the wire format the phone's TcpClient expects.
+                val expBytesRaw = stripLeadingZero(exponent.toByteArray())
+                val expBytes = if (expBytesRaw.size < 3) {
+                    ByteArray(3 - expBytesRaw.size) + expBytesRaw
+                } else {
+                    expBytesRaw
+                }
                 WepWawetLogger.proxy("Sending RSA exponent",
                     "exponent" to exponent.toString(16),
                     "wire_bytes" to expBytes.size,
@@ -447,19 +460,41 @@ class WePairingServer {
                     "mpkgVersion" to (authReq.mpkgVersion ?: ""),
                     "appVersion" to (authReq.appVersion ?: ""))
 
-                // Step 6: Verify PIN
+                // Step 6: Verify PIN and version
                 val pinValid = authReq.pin == currentPin
                 WepWawetLogger.proxy("PIN verification",
                     "received_pin" to (authReq.pin ?: ""),
                     "expected_pin" to currentPin,
                     "valid" to pinValid)
 
+                // v0.6.0 (parity §3 C-2-3): send AuthFailedVersion when the phone's
+                // protocol/mpkg version is wrong, AuthFailed for invalid PIN. The
+                // phone's UI shows different prompts for each.
+                val versionOk = (authReq.version ?: 0) == CONNECTION_PROTOCOL_VERSION
+                val mpkgVersionOk = authReq.mpkgVersion?.let { ver ->
+                    // libscenejni.so uses integer version comparison (no hardcoded
+                    // string per binary strings analysis). Accept any "PKGMdddd".
+                    ver.startsWith("PKGM") && ver.length == 8 &&
+                        ver.substring(4).all { it.isDigit() }
+                } ?: false
+
                 // Step 7: Send encrypted EncAuthResponse
                 val authResponse = EncAuthResponse()
                 // VERIFIED from decompiled TcpClient line 677:
                 //   if (encAuthResponse.getStatus().equals("AuthOK"))
                 // The success status is "AuthOK", NOT "ok"!
-                authResponse.status = if (pinValid) "AuthOK" else "AuthFailed"
+                authResponse.status = when {
+                    !versionOk || !mpkgVersionOk -> "AuthFailedVersion"
+                    !pinValid -> "AuthFailed"
+                    else -> "AuthOK"
+                }
+
+                if (!versionOk || !mpkgVersionOk) {
+                    WepWawetLogger.proxyWarn("Pairing rejected — version mismatch",
+                        "received_version" to (authReq.version ?: 0),
+                        "expected_version" to CONNECTION_PROTOCOL_VERSION,
+                        "received_mpkg_version" to (authReq.mpkgVersion ?: ""))
+                }
 
                 val respJson = gson.toJson(authResponse)
                 WepWawetLogger.proxyDebug("Sending EncAuthResponse",

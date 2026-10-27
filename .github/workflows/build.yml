@@ -2,14 +2,10 @@ name: Build WepWawet APK
 
 on:
   push:
-    # v0.5.11-alpha: workflow ONLY triggers on tag pushes (v*), NOT on
-    # branch pushes. This saves CI minutes — the user doesn't need a
-    # fresh APK build on every dev-branch commit, only on tagged releases.
-    # To verify a dev-branch commit builds, use `workflow_dispatch` (the
-    # manual "Run workflow" button on GitHub Actions UI) OR push a
-    # pre-release tag like v0.5.12-alpha-rc1.
-    # Previous (v0.5.10-alpha): branches: [main, dev] + tags: ['v*'] —
-    # every dev push triggered a build (wasted minutes + parallel CI runs).
+    # v0.6.0-alpha: workflow now triggers on BOTH dev-branch pushes AND tag pushes.
+    # This is needed because v0.6.0-alpha is a major parity release that the user
+    # wants CI to verify builds successfully.
+    branches: [ dev, main ]
     tags: ['v*']
   workflow_dispatch:
 

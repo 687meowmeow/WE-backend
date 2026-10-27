@@ -14,6 +14,10 @@ import com.wepwawet.log.WepWawetLogger
  * handles most GLSL ES compatibility issues. This is used for complex
  * shaders that can't be fixed with regex (e.g., pure HLSL shaders).
  *
+ * v0.6.0 (parity §7-2): Added support for ALL shader stages (vertex, fragment,
+ * geometry, hull, domain, compute). Previously only vertex + fragment were
+ * supported, dropping tessellation and compute effects on Android.
+ *
  * Native library: libwepwawet_etc2.so (shared with ETC2 encoder + DXT decoder,
  * built from app/src/main/cpp/ via CMakeLists.txt which fetches glslang +
  * SPIRV-Cross via FetchContent).
@@ -21,10 +25,19 @@ import com.wepwawet.log.WepWawetLogger
 object ShaderTranscoder {
     private const val TAG = "ShaderTranscoder"
 
+    // v0.6.0 (parity §7-2): All shader stages supported
     /** Shader stage: vertex shader. */
     const val STAGE_VERTEX = 0
     /** Shader stage: fragment shader. */
     const val STAGE_FRAGMENT = 1
+    /** Shader stage: geometry shader (rare in WE wallpapers). */
+    const val STAGE_GEOMETRY = 2
+    /** Shader stage: hull / tessellation control shader (rare). */
+    const val STAGE_HULL = 3
+    /** Shader stage: domain / tessellation evaluation shader (rare). */
+    const val STAGE_DOMAIN = 4
+    /** Shader stage: compute shader (rare in WE wallpapers). */
+    const val STAGE_COMPUTE = 5
 
     private val isLoaded: Boolean by lazy {
         try {
@@ -50,25 +63,39 @@ object ShaderTranscoder {
      * Flow: source → glslang (compile to SPIR-V) → SPIRV-Cross (cross-compile to GLSL ES)
      *
      * @param shaderSource The shader source code (HLSL or GLSL)
-     * @param shaderStage 0=vertex, 1=fragment
+     * @param shaderStage 0=vertex, 1=fragment, 2=geometry, 3=hull, 4=domain, 5=compute
      * @param isHlsl true if source is HLSL, false if GLSL
      * @return GLSL ES 3.00 source, or null on failure
      */
     fun transcodeShader(shaderSource: String, shaderStage: Int, isHlsl: Boolean): String? {
+        // v0.6.0 (parity §7-2): Validate shader stage
+        require(shaderStage in STAGE_VERTEX..STAGE_COMPUTE) {
+            "Invalid shaderStage: $shaderStage (must be $STAGE_VERTEX..$STAGE_COMPUTE)"
+        }
         if (!isLoaded) return null
         val srcBytes = shaderSource.toByteArray(Charsets.UTF_8)
         return try {
             val result = nativeTranscodeShader(srcBytes, shaderStage, isHlsl)
             if (result != null) {
+                val stageName = when (shaderStage) {
+                    STAGE_VERTEX -> "vertex"
+                    STAGE_FRAGMENT -> "fragment"
+                    STAGE_GEOMETRY -> "geometry"
+                    STAGE_HULL -> "hull"
+                    STAGE_DOMAIN -> "domain"
+                    STAGE_COMPUTE -> "compute"
+                    else -> "unknown"
+                }
                 WepWawetLogger.proxy("$TAG.transcodeShader SUCCESS",
-                    "stage" to if (shaderStage == STAGE_VERTEX) "vertex" else "fragment",
+                    "stage" to stageName,
                     "is_hlsl" to isHlsl,
                     "input_size" to srcBytes.size,
                     "output_size" to result.size)
                 String(result, Charsets.UTF_8)
             } else {
+                val stageName = if (shaderStage == STAGE_VERTEX) "vertex" else "fragment"
                 WepWawetLogger.proxyWarn("$TAG.transcodeShader FAILED — native call returned null (glslang may not be compiled in)",
-                    "stage" to if (shaderStage == STAGE_VERTEX) "vertex" else "fragment",
+                    "stage" to stageName,
                     "is_hlsl" to isHlsl)
                 null
             }

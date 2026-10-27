@@ -9,17 +9,24 @@
  *   - DXT5  (BC3, 16 bytes per 4x4 block) — RGB + interpolated 8-bit alpha
  *   - BC4   (RGTC1, 8 bytes per 4x4 block) — single-channel (R only)
  *   - BC5   (RGTC2, 16 bytes per 4x4 block) — two-channel (R + G)
+ *   - BC6H  (BPTC float, 16 bytes per 4x4 block) — HDR RGB float (UF16 / SF16)
+ *   - BC7   (BPTC, 16 bytes per 4x4 block) — high-quality, 8 modes
  *
  * These are the formats used by Wallpaper Engine PC for Scene wallpaper
  * textures stored in .pkg files. When WE PC sends a wallpaper to WE Android,
  * it transcodes DXT -> ETC2_RGBA8 using resourcecompiler64.exe.
  *
- * This decoder lets our app do the same transcode on-device.
+ * v0.6.0 (parity §6 6-9 / 6-10): Added BC6H and BC7 decoders. BC6H HDR
+ * textures (format=13) and BC7 high-quality textures (format=14) are used by
+ * post-2019 Workshop wallpapers.
  *
  * Algorithm references:
  *  - Microsoft DirectX SDK docs: BC1, BC2, BC3 (DXT1/3/5)
  *  - Khronos KHR_texture_compression specs
+ *  - Khronos KHR_texture_compression_bptc (BC6H + BC7)
  *  - Wikipedia: S3 Texture Compression
+ *  - iOrange/bc7dec reference decoder (BC7)
+ *  - nicebyte/bc6henc reference decoder (BC6H)
  *
  * Block layout for DXT1 (8 bytes):
  *   - color0 (u16 RGB565 LE)
@@ -83,6 +90,8 @@ enum class DxtFormat {
     DXT5 = 5,  // BC3 — 16 bytes per block, RGB + 8-bit interpolated alpha
     BC4  = 4,  // RGTC1 — 8 bytes per block, single channel (R)
     BC5  = 6,  // RGTC2 — 16 bytes per block, two channels (R + G). NOTE: NOT 5 (collides with DXT5)
+    BC6H = 7,  // BPTC float — 16 bytes per block, HDR RGB (UF16 only — SF16 rare in Workshop)
+    BC7  = 8,  // BPTC — 16 bytes per block, high-quality 8-mode RGBA
 };
 
 /**
@@ -95,6 +104,8 @@ inline int dxtBlockSize(DxtFormat fmt) {
         case DxtFormat::DXT5: return 16;
         case DxtFormat::BC4:  return 8;
         case DxtFormat::BC5:  return 16;
+        case DxtFormat::BC6H: return 16;
+        case DxtFormat::BC7:  return 16;
     }
     return 0;
 }
@@ -107,16 +118,18 @@ inline int dxtBlockSize(DxtFormat fmt) {
  * @param srcLen  Length of srcData in bytes.
  * @param width   Image width in pixels (must match the texture's width).
  * @param height  Image height in pixels.
- * @param fmt     DXT format to decode (DXT1, DXT3, DXT5, BC4, BC5).
+ * @param fmt     DXT format to decode (DXT1, DXT3, DXT5, BC4, BC5, BC6H, BC7).
  * @param outRgba Pointer to a buffer of at least width*height*4 bytes
  *                where the RGBA8888 output will be written.
  * @param outLen  Length of outRgba in bytes.
+ * @param use1BitAlpha For DXT1 only: true = DXT1a (1-bit alpha), false = DXT1 (4-color opaque)
  * @return true on success, false on bad input.
  */
 bool decodeDxt(const uint8_t* srcData, size_t srcLen,
                 int width, int height,
                 DxtFormat fmt,
-                uint8_t* outRgba, size_t outLen);
+                uint8_t* outRgba, size_t outLen,
+                bool use1BitAlpha = true);
 
 } // namespace wepwawet
 
