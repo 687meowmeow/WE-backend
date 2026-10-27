@@ -1089,9 +1089,14 @@ object MpkgPacker {
         outputFile: File,
     ): Long {
         // Build final entry list: modified entries + unmodified (from VFS) + standalone
+        // CRITICAL: Standalone files (project.json, preview.gif) that were added from
+        // the install directory but are NOT in the .pkg's VFS table MUST be included
+        // in the .mpkg. Without project.json, the Android app can't load the wallpaper
+        // → BLACK SCREEN.
         data class FinalEntry(val name: String, val size: Int, val data: ByteArray?, val vfsOffset: Long)
         val finalEntries = mutableListOf<FinalEntry>()
         val modifiedNames = modifiedEntries.keys
+        val vfsPaths = vfsEntries.map { it.path }.toHashSet()
 
         for (vfs in vfsEntries) {
             if (vfs.path in modifiedNames) {
@@ -1100,6 +1105,19 @@ object MpkgPacker {
             } else {
                 // Unmodified — stream from .pkg
                 finalEntries.add(FinalEntry(vfs.path, vfs.size.toInt(), null, vfs.offset))
+            }
+        }
+
+        // Add standalone files that are NOT in the .pkg's VFS table.
+        // These are files like project.json and preview.gif that exist in the
+        // install directory but not inside the .pkg. Without these, the .mpkg
+        // is incomplete and the Android app can't load the wallpaper.
+        for ((name, data) in modifiedEntries) {
+            if (name !in vfsPaths) {
+                finalEntries.add(FinalEntry(name, data.size, data, 0))
+                WepWawetLogger.proxy("MpkgPacker.streamPack: added standalone entry (not in .pkg VFS)",
+                    "name" to name,
+                    "size" to data.size)
             }
         }
 
