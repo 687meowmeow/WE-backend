@@ -2843,21 +2843,37 @@ object MpkgPacker {
             // (include inlining).
 
             // --- Fix 1A: For-loop int counter → float counter ---
-            // WE PC pattern: `for \(int (.+) = 0; i < sampleCount;` → `for (float $1 = 0.0; i < sampleCount;`
-            // This converts `for (int i = 0; i < sampleCount; ...)` to `for (float i = 0.0; i < sampleCount; ...)`
+            // WE PC pattern: `for \(int (.+) = 0; i < sampleCount;` → `for (float $1 = 0.0; i < float(sampleCount);`
+            // This converts `for (int i = 0; i < sampleCount; ...)` to `for (float i = 0.0; i < float(sampleCount); ...)`
             // We MUST do this BEFORE the general int→float regex, otherwise `for (int i = 0;`
             // becomes `for (int i = 0.0;` which is invalid (can't assign float to int).
+            //
+            // v0.5.33-alpha (solar system shader fix): THREE critical improvements over v0.5.31:
+            //   1. Match ANY integer init value (not just 0) — the solar system shaders
+            //      have `for (int i = 1; i <= NUM_SAMPLES;` (starts at 1, uses `<=`).
+            //      The old regex `=\s*0\s*;` only matched init=0, missing these loops,
+            //      which then got corrupted by PASS J's comparisonRegex (matching `=`
+            //      as a comparison operator → `for (int float(i) = 1.0;`).
+            //   2. Match ALL comparison operators (`<=`, `>=`, `<`, `>`) — the old regex
+            //      only matched `<`. Shaders using `<=` were missed.
+            //   3. Wrap the LIMIT variable with `float()` — without this, `i < LIGHT_SAMPLES`
+            //      (where LIGHT_SAMPLES is `#define ... 8`, an int) becomes `float < int`
+            //      after the counter is converted to float, which is a GLSL ES 3.00 error.
+            //      Wrapping with `float()` makes it `float < float(int)`, which is valid.
             val forLoopBeforeCount = Regex("""for\s*\(\s*int\s+""").findAll(modified).count()
             modified = modified.replace(
-                Regex("""for\s*\(\s*int\s+(\w+)\s*=\s*0\s*;\s*(\w+)\s*<\s*(\w+)\s*;""")
+                Regex("""for\s*\(\s*int\s+(\w+)\s*=\s*(\d+)\s*;\s*(\w+)\s*(<=|>=|<|>)\s*(\w+)\s*;""")
             ) { mr ->
                 val iVar = mr.groupValues[1]
-                val condVar = mr.groupValues[2]
-                val limitVar = mr.groupValues[3]
+                val initVal = mr.groupValues[2]
+                val condVar = mr.groupValues[3]
+                val op = mr.groupValues[4]
+                val limitVar = mr.groupValues[5]
                 // Only convert if the loop variable matches the condition variable
                 if (iVar == condVar) {
-                    val result = "for (float $iVar = 0.0; $condVar < $limitVar;"
-                    fixesApplied.add("for(int $iVar=0;)→for(float $iVar=0.0;)")
+                    val initFloat = "${initVal}.0"
+                    val result = "for (float $iVar = $initFloat; $condVar $op float($limitVar);"
+                    fixesApplied.add("for(int $iVar=$initVal; $condVar$op$limitVar;)→for(float $iVar=$initFloat; $condVar$op float($limitVar);)")
                     result
                 } else {
                     mr.value
@@ -2869,6 +2885,44 @@ object MpkgPacker {
                     "file" to name, "before" to forLoopBeforeCount, "after" to forLoopAfterCount)
             }
 
+            // --- Fix 1A2: Wrap LIMIT with float() for already-converted for-loops ---
+            // v0.5.33-alpha (solar system shader fix): This handles for-loops that were
+            // ALREADY converted to `float` by Fix 1A (or by the HLSL→GLSL transpiler),
+            // but whose LIMIT variable wasn't wrapped with `float()`.
+            //
+            // Example: `for (float i = 0.0; i < LIGHT_SAMPLES;` where LIGHT_SAMPLES is
+            // `#define LIGHT_SAMPLES 8` (an int). After macro expansion, this becomes
+            // `i < 8` (float < int), which is a GLSL ES 3.00 error.
+            //
+            // Fix: wrap LIMIT with `float()`: `for (float i = 0.0; i < float(LIGHT_SAMPLES);`
+            // After macro expansion: `i < float(8)` (float < float), which is valid.
+            //
+            // This must run AFTER Fix 1A (so we don't double-process) but BEFORE
+            // the rest of Phase 1 (so the for-loop is fixed before other passes).
+            modified = modified.replace(
+                Regex("""for\s*\(\s*float\s+(\w+)\s*=\s*(\d+\.\d+)\s*;\s*(\w+)\s*(<=|>=|<|>)\s*(\w+)\s*;""")
+            ) { mr ->
+                val iVar = mr.groupValues[1]
+                val initVal = mr.groupValues[2]
+                val condVar = mr.groupValues[3]
+                val op = mr.groupValues[4]
+                val limitVar = mr.groupValues[5]
+                // Only wrap if the loop variable matches the condition variable
+                if (iVar == condVar) {
+                    // Only wrap if LIMIT is not already float() and not a numeric literal
+                    // (numeric literals would have been caught by Fix 1D's int→float conversion)
+                    if (!limitVar.startsWith("float(") && !limitVar.first().isDigit()) {
+                        val result = "for (float $iVar = $initVal; $condVar $op float($limitVar);"
+                        fixesApplied.add("for(float $iVar=$initVal; $condVar$op$limitVar;)→...$op float($limitVar);)")
+                        result
+                    } else {
+                        mr.value
+                    }
+                } else {
+                    mr.value
+                }
+            }
+
             // --- Fix 1B: `const int sampleCount` → `const float sampleCount` ---
             // WE PC pattern: `(\s*const )int( sampleCount)` → `$1float$2`
             modified = modified.replace(
@@ -2878,7 +2932,22 @@ object MpkgPacker {
                 fixesApplied.add("'const int sampleCount'→'const float sampleCount'")
                 result
             }
-            // Also catch `const int N = ...;` for other common loop-limit names
+            // Also catch `const int N = X;` for other common loop-limit names
+            // v0.5.33-alpha (solar system shader fix): Also convert the int VALUE to
+            // float (e.g., `const int NUM_SAMPLES = 14;` → `const float NUM_SAMPLES = 14.0;`).
+            // Without this, `const float NUM_SAMPLES = 14;` (int value) fails with
+            // "non-matching or non-convertible constant type for const initializer"
+            // because you can't assign an int literal to a const float variable.
+            modified = modified.replace(
+                Regex("""(\s*const\s+)int\s+(sampleCount|kernelSize|NUM_TAPS|TAP_COUNT|SAMPLE_COUNT|NUM_SAMPLES)\s*=\s*(\d+)\s*;""")
+            ) { mr ->
+                val constName = mr.groupValues[2]
+                val intVal = mr.groupValues[3]
+                val result = "${mr.groupValues[1]}float $constName = ${intVal}.0;"
+                fixesApplied.add("'const int $constName = $intVal;'→'const float $constName = ${intVal}.0;'")
+                result
+            }
+            // Legacy: catch `const int N =` (without value) for the original names
             modified = modified.replace(
                 Regex("""(\s*const\s+)int\s+(sampleCount|kernelSize|NUM_TAPS|TAP_COUNT|SAMPLE_COUNT)\s*=""")
             ) { mr ->
@@ -3033,7 +3102,25 @@ object MpkgPacker {
             // WE PC pattern: `([\d\.]e[-]*[\d]+)\.0` (matches `1.0e3.0` which is invalid)
             // Some shaders produce `1.0e3` after the int→float regex runs on `1e3`.
             // We normalize to `1.0e3` (without trailing `.0`).
-            val sciNotationRegex = Regex("""(\d+\.\d+e[-]?\d+)\.0""")
+            //
+            // v0.5.33-alpha (solar system shader fix): The old regex
+            // `(\d+\.\d+e[-]?\d+)\.0` only matched the `1.0e3.0` form (with a leading
+            // decimal point). But Fix 1D's int→float regex also matches the EXPONENT
+            // part of scientific notation numbers like `1e-6` — it sees the `6`
+            // (preceded by `-`, which is in the operator char class) and adds `.0`,
+            // producing `1e-6.0` (INVALID — you can't have `.0` after the exponent).
+            //
+            // The dqss2.frag shader (part of the Live Solar System wallpaper) has
+            // `max(den, 1e-6)` which became `max(den, 1e-6.0)` — a syntax error that
+            // prevented the entire shader from compiling.
+            //
+            // Fix: extend the regex to ALSO match the `1e-6.0` form (no leading
+            // decimal point). The new regex `(\d+(?:\.\d+)?e[-+]?\d+)\.0` matches:
+            //   - `1.0e3.0` → `1.0e3` (group 1 = `1.0e3`, suffix `.0` removed)
+            //   - `1e-6.0`  → `1e-6`  (group 1 = `1e-6`,  suffix `.0` removed)
+            //   - `1.5e-3.0`→ `1.5e-3`(group 1 = `1.5e-3`, suffix `.0` removed)
+            // The `(?:\.\d+)?` makes the decimal part optional, so both forms match.
+            val sciNotationRegex = Regex("""(\d+(?:\.\d+)?e[-+]?\d+)\.0""")
             var sciCount = 0
             modified = modified.replace(sciNotationRegex) { mr ->
                 sciCount++
@@ -3528,24 +3615,74 @@ vec4 blurRadial3a(vec2 u, vec2 center, float amt) {
             // float contexts with `float()` casts. Specifically:
             //   1. `if (int_var <op> float_lit)` → `if (float(int_var) <op> float_lit)`
             //   2. `int_var = float_lit;` → `int_var = int(float_lit);`
-            //   3. `int_var <op> float_lit` (arithmetic) → `float(int_var) <op> float_lit`
+            //   3. `int_var <op> float_lit` (arithmetic) → for whole-number floats,
+            //      convert the float to int (preserves int type for function call args);
+            //      for non-whole-number floats, wrap int_var with `float()`.
             //
             // We detect int variables by scanning for `int <varname>` declarations.
+            //
+            // v0.5.33-alpha (solar system shader fix): THREE critical bug fixes in
+            // the regex patterns. The v0.5.31-alpha version of PASS J had bugs that
+            // corrupted 5+ shaders in the Live Solar System wallpaper:
+            //
+            //   BUG 1 (comparisonRegex matched `=`):
+            //     Old: `\b$varName\s*([<>=!]+)\s*(\d+\.\d+)`
+            //     The char class `[<>=!]+` includes single `=` (assignment operator).
+            //     So `NUM_SAMPLES = 14.0` (a const declaration) matched as a
+            //     "comparison", producing `float(NUM_SAMPLES) = 14.0`. Combined with
+            //     the `const int` prefix, this became `const int float(NUM_SAMPLES) = 14.0;`
+            //     — a syntax error that broke guidao.frag, guidao2.frag, wxguidao.frag,
+            //     wxguidao5678.frag (all solar system orbit shaders).
+            //     Fix: use `(==|!=|<=|>=|<(?!=)|>(?!=))` which matches comparison
+            //     operators ONLY, never a single `=`.
+            //
+            //   BUG 2 (arithRegex broke function call args):
+            //     Old: `\b$varName\s*([+\-*/])\s*(\d+\.\d+)` → `float($varName) $op $float`
+            //     For `getAudioValueByBand(index - 1.0)`, this produced
+            //     `getAudioValueByBand(float(index) - 1.0)` — passing a FLOAT to a
+            //     function that expects INT. GLSL ES 3.00 has no implicit conversion.
+            //     Fix: for whole-number float literals (e.g., `1.0`), convert to int
+            //     (`1`) instead of wrapping the int variable. This preserves the int
+            //     type, so `getAudioValueByBand(index - 1)` is int - int = int. ✓
+            //     Non-whole-number floats (e.g., `1.5`) still use the float() wrap.
+            //
+            //   BUG 3 (for-loop init matched by comparisonRegex):
+            //     `for (int i = 1.0;` — the `i = 1.0` part matched comparisonRegex
+            //     (because `=` was in the char class), producing
+            //     `for (int float(i) = 1.0;` — invalid syntax.
+            //     Fix: same as BUG 1 — don't match single `=`.
             val intVarPattern = Regex("""\bint\s+(\w+)\s*[=;,)]""")
             val intVars = intVarPattern.findAll(modified).map { it.groupValues[1] }.toSet()
             if (intVars.isNotEmpty()) {
                 var intFixCount = 0
                 for (varName in intVars) {
-                    // Skip common false positives
-                    if (varName in setOf("main", "return", "void", "if", "else", "for", "while")) continue
+                    // Skip common false positives (keywords, type names)
+                    if (varName in setOf("main", "return", "void", "if", "else", "for", "while",
+                                         "float", "int", "vec2", "vec3", "vec4", "uint", "bool",
+                                         "mat2", "mat3", "mat4", "sampler2D", "sampler3D",
+                                         "uvec2", "uvec3", "uvec4", "ivec2", "ivec3", "ivec4",
+                                         "bvec2", "bvec3", "bvec4")) continue
+
                     // Pattern 1: if (varName <op> floatLit) → if (float(varName) <op> floatLit)
+                    // v0.5.33-alpha: ONLY match real comparison operators (==, !=, <=, >=, <, >),
+                    // NOT a single `=` (which is assignment). The old `[<>=!]+` char class
+                    // incorrectly matched `=`, corrupting const declarations and for-loop inits.
+                    val comparisonRegex = Regex("""\b$varName\s*(==|!=|<=|>=|<(?!=)|>(?!=))\s*(\d+\.\d+)""")
                     // Pattern 2: varName = floatLit; → varName = int(floatLit);
-                    // Pattern 3: varName <op> floatLit (arithmetic) → float(varName) <op> floatLit
-                    // Only fix when the right side is a float literal (has a decimal point)
-                    val comparisonRegex = Regex("""\b$varName\s*([<>=!]+)\s*(\d+\.\d+)""")
                     val assignmentRegex = Regex("""\b$varName\s*=\s*(\d+\.\d+)\s*;""")
-                    val arithRegex = Regex("""\b$varName\s*([+\-*/])\s*(\d+\.\d+)""")
-                    val reverseArithRegex = Regex("""(\d+\.\d+)\s*([+\-*/])\s*\b$varName\b""")
+                    // Pattern 3: varName <op> whole_float → varName <op> int
+                    // v0.5.33-alpha: For whole-number float literals (e.g., `1.0`), convert
+                    // to int (e.g., `1`) instead of wrapping with float(). This preserves
+                    // the int type, which is needed when the result is passed to a function
+                    // that expects int (e.g., getAudioValueByBand(int index)).
+                    val arithWholeRegex = Regex("""\b$varName\s*([+\-*/])\s*(\d+)\.0\b""")
+                    // Pattern 3b: varName <op> non_whole_float → float(varName) <op> float
+                    // For non-whole-number floats (e.g., `1.5`), we can't convert to int
+                    // (would lose precision). Fall back to wrapping with float().
+                    val arithRegex = Regex("""\b$varName\s*([+\-*/])\s*(\d+\.\d+[5-9]\d*)""")
+                    // Reverse arith patterns (float <op> varName)
+                    val reverseArithWholeRegex = Regex("""(\d+)\.0\b\s*([+\-*/])\s*\b$varName\b""")
+                    val reverseArithRegex = Regex("""(\d+\.\d+[5-9]\d*)\s*([+\-*/])\s*\b$varName\b""")
 
                     modified = modified.replace(comparisonRegex) { mr ->
                         intFixCount++
@@ -3555,9 +3692,19 @@ vec4 blurRadial3a(vec2 u, vec2 center, float amt) {
                         intFixCount++
                         "$varName = int(${mr.groupValues[1]});"
                     }
+                    // Whole-number floats: convert to int (preserves int type)
+                    modified = modified.replace(arithWholeRegex) { mr ->
+                        intFixCount++
+                        "$varName ${mr.groupValues[1]} ${mr.groupValues[2]}"
+                    }
+                    // Non-whole-number floats: wrap var with float()
                     modified = modified.replace(arithRegex) { mr ->
                         intFixCount++
                         "float($varName) ${mr.groupValues[1]} ${mr.groupValues[2]}"
+                    }
+                    modified = modified.replace(reverseArithWholeRegex) { mr ->
+                        intFixCount++
+                        "${mr.groupValues[1]} ${mr.groupValues[2]} $varName"
                     }
                     modified = modified.replace(reverseArithRegex) { mr ->
                         intFixCount++
