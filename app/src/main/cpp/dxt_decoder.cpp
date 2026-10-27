@@ -16,7 +16,7 @@
  *
  *  For DXT1/BC4, the lookup word is 32 bits (LE) and bits_per_index=2.
  *  For DXT3 alpha, the lookup is 8 bytes (64 bits) packed 2 pixels per byte.
- *  For DXT5 alpha + BC4/BC5, the lookup is 6 bytes (48 bits) packed 4-bit.
+ *  For DXT5 alpha + BC4/BC5, the lookup is 6 bytes (48 bits) = 16 x 3-bit indices.
  */
 
 #include "dxt_decoder.h"
@@ -51,7 +51,8 @@ static inline void rgb565ToRgba8888(uint16_t c, uint8_t* outRgba) {
 // and color0 <= color1 and lookup = 3.
 static void decodeDxt1ColorBlock(const uint8_t* block,
                                   uint8_t* outRgbaTile, // 16*4 bytes
-                                  bool use1BitAlpha) {
+                                  bool use1BitAlpha,
+                                  bool forceFourColor = false) {
     uint16_t color0 = readU16LE(block);
     uint16_t color1 = readU16LE(block + 2);
     uint32_t lookup = readU32LE(block + 4);
@@ -62,7 +63,9 @@ static void decodeDxt1ColorBlock(const uint8_t* block,
     rgb565ToRgba8888(color1, palette[1]);
 
     // Determine which mode (4-color or 3-color + transparent)
-    bool useTransparent = (color0 <= color1);
+    // BC2/BC3 (DXT3/DXT5) reuse the BC1 colour block but ALWAYS decode it in
+    // 4-colour mode; the colour0 <= colour1 3-colour+transparent switch is BC1-only.
+    bool useTransparent = (color0 <= color1) && !forceFourColor;
 
     if (!useTransparent) {
         // 4-color mode: c2 = (2*c0 + c1) / 3, c3 = (c0 + 2*c1) / 3
@@ -111,9 +114,8 @@ static void decodeDxt3AlphaBlock(const uint8_t* alphaBlock,
 }
 
 // --- decode DXT5 interpolated alpha block (8 bytes) ---
-// 8 bytes = alpha0 (1) + alpha1 (1) + 6 bytes of 4-bit lookups (16 pixels * 4 bits = 64 bits = 8 bytes total)
-// Actually: alpha0 (1 byte) + alpha1 (1 byte) + 6 bytes (48 bits) of 4-bit indices = 8 bytes total.
-// The 6 bytes form a 48-bit LE value. Index for pixel i = (val48 >> (i*4)) & 0xF.
+// 8 bytes = alpha0 (1) + alpha1 (1) + 6 bytes (48 bits) of 3-bit indices (16 pixels * 3 bits).
+// The 6 bytes form a 48-bit LE value. Index for pixel i = (val48 >> (i*3)) & 0x7.
 //
 // Palette (when alpha0 > alpha1):
 //   a0 = alpha0, a1 = alpha1
@@ -167,7 +169,7 @@ static void decodeDxt5AlphaBlock(const uint8_t* alphaBlock,
 
     // Apply alpha lookup to each pixel
     for (int i = 0; i < 16; i++) {
-        uint8_t idx = (uint8_t)((lookup >> (i * 4)) & 0xF);
+        uint8_t idx = (uint8_t)((lookup >> (i * 3)) & 0x7);
         outRgbaTile[i * 4 + 3] = palette[idx];
     }
 }
@@ -206,7 +208,7 @@ static void decodeBc4Block(const uint8_t* block,
     }
 
     for (int i = 0; i < 16; i++) {
-        uint8_t idx = (uint8_t)((lookup >> (i * 4)) & 0xF);
+        uint8_t idx = (uint8_t)((lookup >> (i * 3)) & 0x7);
         uint8_t v = palette[idx];
         outRgbaTile[i * 4 + 0] = v;  // R
         outRgbaTile[i * 4 + 1] = v;  // G (grayscale)
@@ -260,8 +262,8 @@ static void decodeBc5Block(const uint8_t* block,
     palette(g0, g1, gPalette);
 
     for (int i = 0; i < 16; i++) {
-        uint8_t rIdx = (uint8_t)((rLookup >> (i * 4)) & 0xF);
-        uint8_t gIdx = (uint8_t)((gLookup >> (i * 4)) & 0xF);
+        uint8_t rIdx = (uint8_t)((rLookup >> (i * 3)) & 0x7);
+        uint8_t gIdx = (uint8_t)((gLookup >> (i * 3)) & 0x7);
         outRgbaTile[i * 4 + 0] = rPalette[rIdx]; // R
         outRgbaTile[i * 4 + 1] = gPalette[gIdx]; // G
         outRgbaTile[i * 4 + 2] = 0;               // B (BC5 has no blue channel)
@@ -306,11 +308,11 @@ bool decodeDxt(const uint8_t* srcData, size_t srcLen,
                 decodeDxt1ColorBlock(block, tile, /*use1BitAlpha=*/true);
             } else if (isDxt3) {
                 // DXT3: 8 bytes alpha + 8 bytes color
-                decodeDxt1ColorBlock(block + 8, tile, /*use1BitAlpha=*/false);
+                decodeDxt1ColorBlock(block + 8, tile, /*use1BitAlpha=*/false, /*forceFourColor=*/true);
                 decodeDxt3AlphaBlock(block, tile);
             } else if (isDxt5) {
                 // DXT5: 8 bytes alpha + 8 bytes color
-                decodeDxt1ColorBlock(block + 8, tile, /*use1BitAlpha=*/false);
+                decodeDxt1ColorBlock(block + 8, tile, /*use1BitAlpha=*/false, /*forceFourColor=*/true);
                 decodeDxt5AlphaBlock(block, tile);
             } else if (isBC4) {
                 // BC4: 8 bytes single channel

@@ -109,6 +109,7 @@ target_compile_options(wepwawet_etc2 PRIVATE
 
 target_compile_definitions(wepwawet_etc2 PRIVATE
     ETC2_COMP_STATIC=1
+    NDEBUG  # Strip asserts in release builds for faster encoding
 )
 
 # Link with standard libraries

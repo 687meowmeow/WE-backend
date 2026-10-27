@@ -85,6 +85,18 @@ object MpkgPacker {
 
     const val MAGIC = "PKGM0020"  // bumped from PKGM0014 to match the latest wallpaperui.exe (2026-06-29 build)
     const val HEADER_MARKER = 8
+
+    /**
+     * Bump whenever the DXT decoder, ETC2 encoder, effort policy, or .tex
+     * output format changes. This invalidates the texture conversion cache
+     * so stale entries are not reused after a code change.
+     *
+     * v2: fix-dxt-decoder.patch (3-bit DXT5/BC4/BC5 indices + forceFourColor
+     *     for DXT3/DXT5 color blocks) + size-based effort (10/25/40) + more
+     *     jobs (oversubscribed) + NDEBUG.
+     */
+    const val CONVERTER_VERSION = 2
+
     /** PNG magic bytes — used to detect PNG data inside .tex files. */
     private val PNG_MAGIC = byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47) // \x89PNG
     private val JPEG_MAGIC = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()) // JPEG SOI marker (FFD8FF)
@@ -1721,6 +1733,13 @@ object MpkgPacker {
     private fun convertTexPngToEtc2(texData: ByteArray, name: String): ByteArray? {
         // Try ETC2 path first
         try {
+            // ---- Cache lookup ----
+            texCacheLookup(texData, name)?.let { cached ->
+                WepWawetLogger.proxy("MpkgPacker.convertTexPngToEtc2: using cached conversion",
+                    "name" to name, "cached_size" to cached.size)
+                return cached
+            }
+
             // Check if ETC2 native encoder is available
             if (!Etc2Encoder.isAvailable()) {
                 WepWawetLogger.proxyWarn("MpkgPacker.convertTexPngToEtc2: native ETC2 encoder not available, falling back to RGBA8888",
@@ -1888,6 +1907,7 @@ object MpkgPacker {
                 "rgba_bytes" to largest.rgba.size)
 
             // ---- Step 3: Encode RGBA8888 → ETC2 RGBA8 (via native library) ----
+            val etc2EncodeStartMs = System.currentTimeMillis()
             val etc2Bytes = try {
                 Etc2Encoder.encodeRgba8888(largest.rgba, largest.width, largest.height)
             } catch (e: Exception) {
@@ -1895,6 +1915,8 @@ object MpkgPacker {
                     "name" to name, "exception" to e.javaClass.name, "message" to (e.message ?: ""))
                 return convertTexPngToRgba(texData, name)
             }
+            val etc2ElapsedMs = System.currentTimeMillis() - etc2EncodeStartMs
+            logEtc2Timing(name, largest.width, largest.height, etc2ElapsedMs)
 
             // Expected size: blocks_x * blocks_y * 16
             val blocksX = (largest.width + 3) / 4
@@ -2011,6 +2033,9 @@ object MpkgPacker {
                 "verify_data_starts_at" to 91,
                 "verify_first_8_bytes_hex" to (if (result.size >= 99) result.copyOfRange(91, 99).joinToString("") { "%02x".format(it) } else "file_too_small"))
 
+            // ---- Store result in texture conversion cache ----
+            texCacheStore(texData, result, name)
+
             return result
         } catch (e: Exception) {
             WepWawetLogger.proxyError("MpkgPacker.convertTexPngToEtc2 FAILED — falling back to RGBA8888",
@@ -2041,9 +2066,143 @@ object MpkgPacker {
      * Returns: the new .tex bytes, or null on failure (caller should fall back to
      *          convertTexPngToRgba or leave the original .tex unchanged).
      */
+
+    // ========================================================================
+    // Texture conversion cache
+    // ========================================================================
+    // Caches converted .tex files (DXT→ETC2, PNG→ETC2) by SHA-256 hash of
+    // the source .tex bytes + CONVERTER_VERSION. On a cache hit, the
+    // converted .tex is read from disk instead of re-encoding. The cache
+    // is capped at ~2 GB, evicting least-recently-used files.
+    //
+    // This is especially useful when the user re-downloads the same wallpaper
+    // or when multiple .pkg files share common textures.
+
+    private const val TEX_CACHE_MAX_BYTES = 2L * 1024 * 1024 * 1024 // 2 GB
+    private const val TEX_CACHE_DIR_NAME = "tex_cache"
+
+    /**
+     * Look up the texture conversion cache for a previously-converted .tex.
+     *
+     * @param texData The source .tex bytes (before conversion)
+     * @param name The .tex file name (for logging only)
+     * @return The cached converted .tex bytes, or null on cache miss
+     */
+    private fun texCacheLookup(texData: ByteArray, name: String): ByteArray? {
+        return try {
+            val cacheDir = File(com.wepwawet.WepWawetApplication.instance.cacheDir, TEX_CACHE_DIR_NAME)
+            val key = texCacheKey(texData)
+            val cacheFile = File(cacheDir, "$key.tex")
+            if (cacheFile.exists() && cacheFile.length() > 0) {
+                val data = cacheFile.readBytes()
+                WepWawetLogger.proxy("MpkgPacker.texCacheLookup: CACHE HIT",
+                    "name" to name,
+                    "cache_key" to key.take(16),
+                    "cache_size" to data.size)
+                // Update last-modified for LRU
+                cacheFile.setLastModified(System.currentTimeMillis())
+                data
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            WepWawetLogger.proxyDebug("MpkgPacker.texCacheLookup: error (cache miss)",
+                "name" to name, "exception" to e.javaClass.name)
+            null
+        }
+    }
+
+    /**
+     * Store a converted .tex in the cache.
+     */
+    private fun texCacheStore(texData: ByteArray, convertedData: ByteArray, name: String) {
+        try {
+            val cacheDir = File(com.wepwawet.WepWawetApplication.instance.cacheDir, TEX_CACHE_DIR_NAME)
+            cacheDir.mkdirs()
+            val key = texCacheKey(texData)
+            val cacheFile = File(cacheDir, "$key.tex")
+            cacheFile.writeBytes(convertedData)
+            WepWawetLogger.proxyDebug("MpkgPacker.texCacheStore: stored",
+                "name" to name,
+                "cache_key" to key.take(16),
+                "cache_size" to convertedData.size)
+            // Evict LRU entries if cache exceeds max size
+            texCacheEvictIfNeeded(cacheDir)
+        } catch (e: Exception) {
+            WepWawetLogger.proxyDebug("MpkgPacker.texCacheStore: error (ignored)",
+                "name" to name, "exception" to e.javaClass.name)
+        }
+    }
+
+    /**
+     * Compute the cache key: SHA-256 of source .tex bytes + CONVERTER_VERSION.
+     */
+    private fun texCacheKey(texData: ByteArray): String {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        md.update(texData)
+        // Append converter version to invalidate cache on code changes
+        md.update(byteArrayOf(CONVERTER_VERSION.toByte()))
+        return md.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /**
+     * Evict least-recently-used cache files if total size exceeds TEX_CACHE_MAX_BYTES.
+     */
+    private fun texCacheEvictIfNeeded(cacheDir: File) {
+        try {
+            val files = cacheDir.listFiles { f -> f.isFile && f.name.endsWith(".tex") } ?: return
+            var totalSize = files.sumOf { it.length() }
+            if (totalSize <= TEX_CACHE_MAX_BYTES) return
+            // Sort by last-modified ascending (oldest first)
+            val sorted = files.sortedBy { it.lastModified() }
+            for (f in sorted) {
+                if (totalSize <= TEX_CACHE_MAX_BYTES) break
+                totalSize -= f.length()
+                f.delete()
+            }
+        } catch (e: Exception) {
+            // Cache eviction errors are non-fatal
+        }
+    }
+
+    // ========================================================================
+    // Timing logs for ETC2 encoding
+    // ========================================================================
+
+    /**
+     * Log timing for an ETC2 encode operation.
+     */
+    private fun logEtc2Timing(name: String, width: Int, height: Int, elapsedMs: Long) {
+        val pixels = width.toLong() * height.toLong()
+        val megapixels = pixels / 1_000_000.0
+        val mpPerSec = if (elapsedMs > 0) (megapixels / (elapsedMs / 1000.0)) else 0.0
+        val effort = when {
+            pixels <= 1048576 -> 40
+            pixels <= 4194304 -> 25
+            else -> 10
+        }
+        val jobs = minOf(maxOf(Runtime.getRuntime().availableProcessors() * 2, 8), 32)
+        WepWawetLogger.proxy("MpkgPacker: ETC2 encode timing",
+            "name" to name,
+            "width" to width,
+            "height" to height,
+            "megapixels" to "%.2f".format(megapixels),
+            "effort" to effort,
+            "jobs" to jobs,
+            "elapsed_ms" to elapsedMs,
+            "mp_per_sec" to "%.2f".format(mpPerSec))
+    }
+
     private fun convertTexDxtToEtc2(texData: ByteArray, name: String): ByteArray? {
         try {
-            // ---- Step 0: Verify native libraries are available ----
+            // ---- Step 0a: Check texture conversion cache ----
+            texCacheLookup(texData, name)?.let { cached ->
+                WepWawetLogger.proxy("MpkgPacker.convertTexDxtToEtc2: using cached conversion",
+                    "name" to name, "cached_size" to cached.size)
+                return cached
+            }
+
+            // ---- Step 0b: Verify native libraries are available ----
             if (!Etc2Encoder.isAvailable() || !DxtDecoder.isAvailable()) {
                 WepWawetLogger.proxyWarn("MpkgPacker.convertTexDxtToEtc2: native libs not available",
                     "name" to name,
@@ -2182,6 +2341,7 @@ object MpkgPacker {
                     "(${rgbaBytes[0].toInt() and 0xFF},${rgbaBytes[1].toInt() and 0xFF},${rgbaBytes[2].toInt() and 0xFF},${rgbaBytes[3].toInt() and 0xFF})")
 
             // ---- Step 5: Encode RGBA8888 → ETC2_RGBA8 (via native library) ----
+            val etc2EncodeStartMs = System.currentTimeMillis()
             val etc2Bytes = try {
                 Etc2Encoder.encodeRgba8888(rgbaBytes, texWidth, texHeight)
             } catch (e: Exception) {
@@ -2189,6 +2349,8 @@ object MpkgPacker {
                     "name" to name, "exception" to e.javaClass.name, "message" to (e.message ?: ""))
                 return null
             }
+            val etc2ElapsedMs = System.currentTimeMillis() - etc2EncodeStartMs
+            logEtc2Timing(name, texWidth, texHeight, etc2ElapsedMs)
             val blocksX = (texWidth + 3) / 4
             val blocksY = (texHeight + 3) / 4
             val expectedEtc2Size = blocksX * blocksY * 16
@@ -2311,6 +2473,9 @@ object MpkgPacker {
                 "verify_compressed_size" to vCompSize,
                 "verify_data_starts_at" to 91,
                 "verify_first_8_bytes_hex" to (if (result.size >= 99) result.copyOfRange(91, 99).joinToString("") { "%02x".format(it) } else "file_too_small"))
+
+            // ---- Step 9: Store result in texture conversion cache ----
+            texCacheStore(texData, result, name)
 
             return result
         } catch (e: Exception) {

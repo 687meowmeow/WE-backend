@@ -1,6 +1,7 @@
 package com.wepwawet.pairing
 
 import android.content.Context
+import android.os.PowerManager
 import com.wepwawet.WepWawetApplication
 import com.wepwawet.data.model.WorkshopItemTyped
 import com.wepwawet.log.WepWawetLogger
@@ -225,47 +226,63 @@ object WorkshopDownloadJob {
                 "input_size" to downloadedPkg.length(),
                 "mpkg_output" to cacheMpkg.absolutePath,
                 "is_video" to isVideo)
-            val mpkgSize = runCatching {
-                if (isVideo) {
-                    WepWawetLogger.workshop("WorkshopDownloadJob: calling packVideoWallpaper",
-                        "video_file" to downloadedPkg.name,
-                        "video_size" to downloadedPkg.length())
-                    // For video, look for preview.jpg in install dir
-                    val previewFile = File(installDir, "preview.jpg")
-                        .takeIf { it.exists() }
-                        ?: File(installDir, "preview.gif")
+            // Acquire a PARTIAL_WAKE_LOCK during packing to prevent CPU from
+            // sleeping. ETC2 encoding is CPU-intensive and can take minutes
+            // for large textures — without a wake lock, the device may throttle
+            // or sleep mid-pack, drastically increasing pack time.
+            val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            val wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "WepWawet:MpkgPacker")
+            wakeLock.setReferenceCounted(false)
+            wakeLock.acquire(10 * 60 * 1000L) // 10 minute timeout
+            WepWawetLogger.workshop("WorkshopDownloadJob: acquired wake lock for packing",
+                "timeout_ms" to (10 * 60 * 1000L))
+            val mpkgSize = try {
+                runCatching {
+                    if (isVideo) {
+                        WepWawetLogger.workshop("WorkshopDownloadJob: calling packVideoWallpaper",
+                            "video_file" to downloadedPkg.name,
+                            "video_size" to downloadedPkg.length())
+                        val previewFile = File(installDir, "preview.jpg")
                             .takeIf { it.exists() }
-                    com.wepwawet.pairing.MpkgPacker.packVideoWallpaper(
-                        item = item,
-                        videoFile = downloadedPkg,
-                        outputFile = cacheMpkg,
-                        previewFile = previewFile,
-                    )
-                } else {
-                    WepWawetLogger.workshop("WorkshopDownloadJob: calling packFromPkg",
-                        "pkg_file" to downloadedPkg.name,
-                        "pkg_size" to downloadedPkg.length())
-                    com.wepwawet.pairing.MpkgPacker.packFromPkg(
-                        item = item,
-                        pkgFile = downloadedPkg,
-                        outputFile = cacheMpkg,
-                        installDir = installDir,
-                    )
+                            ?: File(installDir, "preview.gif")
+                                .takeIf { it.exists() }
+                        com.wepwawet.pairing.MpkgPacker.packVideoWallpaper(
+                            item = item,
+                            videoFile = downloadedPkg,
+                            outputFile = cacheMpkg,
+                            previewFile = previewFile,
+                        )
+                    } else {
+                        WepWawetLogger.workshop("WorkshopDownloadJob: calling packFromPkg",
+                            "pkg_file" to downloadedPkg.name,
+                            "pkg_size" to downloadedPkg.length())
+                        com.wepwawet.pairing.MpkgPacker.packFromPkg(
+                            item = item,
+                            pkgFile = downloadedPkg,
+                            outputFile = cacheMpkg,
+                            installDir = installDir,
+                        )
+                    }
+                }.getOrElse { e ->
+                    val err = "Failed to pack → .mpkg: ${e.message}"
+                    WepWawetLogger.workshopWarn("WorkshopDownloadJob: pack failed",
+                        "exception" to e.javaClass.name, "message" to (e.message ?: ""),
+                        "is_video" to isVideo)
+                    _state.update { s -> s.copy(
+                        isRunning = false,
+                        status = err,
+                        errorMessage = err,
+                        endedAt = System.currentTimeMillis(),
+                    ) }
+                    onDownloadFailed(item, err)
+                    runCatching { downloadedPkg.delete() }
+                    return@launchSafely
                 }
-            }.getOrElse { e ->
-                val err = "Failed to pack → .mpkg: ${e.message}"
-                WepWawetLogger.workshopWarn("WorkshopDownloadJob: pack failed",
-                    "exception" to e.javaClass.name, "message" to (e.message ?: ""),
-                    "is_video" to isVideo)
-                _state.update { s -> s.copy(
-                    isRunning = false,
-                    status = err,
-                    errorMessage = err,
-                    endedAt = System.currentTimeMillis(),
-                ) }
-                onDownloadFailed(item, err)
-                runCatching { downloadedPkg.delete() }
-                return@launchSafely
+            } finally {
+                if (wakeLock.isHeld) {
+                    wakeLock.release()
+                    WepWawetLogger.workshop("WorkshopDownloadJob: released wake lock")
+                }
             }
 
             WepWawetLogger.workshop("WorkshopDownloadJob: pack done",
@@ -531,46 +548,59 @@ object WorkshopDownloadJob {
                     "install_dir" to installDir.absolutePath,
                     "install_dir_exists" to installDir.exists(),
                     "is_video" to isVideo)
-                val mpkgSize = runCatching {
-                    if (isVideo) {
-                        WepWawetLogger.workshop("WorkshopDownloadJob.send: calling packVideoWallpaper",
-                            "video_file" to downloadedPkg.name,
-                            "video_size" to downloadedPkg.length())
-                        val previewFile = File(installDir, "preview.jpg")
-                            .takeIf { it.exists() }
-                            ?: File(installDir, "preview.gif")
+                val pm = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+                val wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "WepWawet:MpkgPacker")
+                wakeLock.setReferenceCounted(false)
+                wakeLock.acquire(10 * 60 * 1000L)
+                WepWawetLogger.workshop("WorkshopDownloadJob.send: acquired wake lock for packing",
+                    "timeout_ms" to (10 * 60 * 1000L))
+                val mpkgSize = try {
+                    runCatching {
+                        if (isVideo) {
+                            WepWawetLogger.workshop("WorkshopDownloadJob.send: calling packVideoWallpaper",
+                                "video_file" to downloadedPkg.name,
+                                "video_size" to downloadedPkg.length())
+                            val previewFile = File(installDir, "preview.jpg")
                                 .takeIf { it.exists() }
-                        com.wepwawet.pairing.MpkgPacker.packVideoWallpaper(
-                            item = item,
-                            videoFile = downloadedPkg,
-                            outputFile = cacheMpkg,
-                            previewFile = previewFile,
-                        )
-                    } else {
-                        WepWawetLogger.workshop("WorkshopDownloadJob.send: calling packFromPkg",
-                            "pkg_file" to downloadedPkg.name,
-                            "pkg_size" to downloadedPkg.length())
-                        com.wepwawet.pairing.MpkgPacker.packFromPkg(
-                            item = item,
-                            pkgFile = downloadedPkg,
-                            outputFile = cacheMpkg,
-                            installDir = installDir,  // <-- SAME as debug download
-                        )
+                                ?: File(installDir, "preview.gif")
+                                    .takeIf { it.exists() }
+                            com.wepwawet.pairing.MpkgPacker.packVideoWallpaper(
+                                item = item,
+                                videoFile = downloadedPkg,
+                                outputFile = cacheMpkg,
+                                previewFile = previewFile,
+                            )
+                        } else {
+                            WepWawetLogger.workshop("WorkshopDownloadJob.send: calling packFromPkg",
+                                "pkg_file" to downloadedPkg.name,
+                                "pkg_size" to downloadedPkg.length())
+                            com.wepwawet.pairing.MpkgPacker.packFromPkg(
+                                item = item,
+                                pkgFile = downloadedPkg,
+                                outputFile = cacheMpkg,
+                                installDir = installDir,
+                            )
+                        }
+                    }.getOrElse { e ->
+                        val err = "Failed to pack → .mpkg: ${e.message}"
+                        WepWawetLogger.workshopWarn("WorkshopDownloadJob.send: pack failed",
+                            "exception" to e.javaClass.name, "message" to (e.message ?: ""),
+                            "is_video" to isVideo)
+                        _state.update { s -> s.copy(
+                            isRunning = false,
+                            status = err,
+                            errorMessage = err,
+                            endedAt = System.currentTimeMillis(),
+                        ) }
+                        onDownloadFailed(item, err)
+                        runCatching { downloadedPkg.delete() }
+                        return@launchSafely
                     }
-                }.getOrElse { e ->
-                    val err = "Failed to pack → .mpkg: ${e.message}"
-                    WepWawetLogger.workshopWarn("WorkshopDownloadJob.send: pack failed",
-                        "exception" to e.javaClass.name, "message" to (e.message ?: ""),
-                        "is_video" to isVideo)
-                    _state.update { s -> s.copy(
-                        isRunning = false,
-                        status = err,
-                        errorMessage = err,
-                        endedAt = System.currentTimeMillis(),
-                    ) }
-                    onDownloadFailed(item, err)
-                    runCatching { downloadedPkg.delete() }
-                    return@launchSafely
+                } finally {
+                    if (wakeLock.isHeld) {
+                        wakeLock.release()
+                        WepWawetLogger.workshop("WorkshopDownloadJob.send: released wake lock")
+                    }
                 }
 
                 WepWawetLogger.workshop("WorkshopDownloadJob.send: pack done",
