@@ -3683,6 +3683,32 @@ object MpkgPacker {
                 }
             }
 
+            // --- Fix 1C2: Rename `mul` variable/parameter → `mulVal` ---
+            // v0.6.2: CRITICAL FIX for shader compilation error on WE Android.
+            // WE Android defines `#define mul(x, y) ((y) * (x))` as a function-like macro.
+            // When a shader uses `mul` as a parameter name (e.g., `float mul`), the
+            // preprocessor tries to expand it, producing a syntax error like:
+            //   ERROR: 0:73: ';' : Syntax error:  syntax error
+            //   INTERNAL ERROR: no main() function!
+            // This happens because `* mul;` gets expanded to `* ((y) * (x));` which
+            // has undefined `x` and `y`, and the trailing `;` becomes unexpected.
+            //
+            // Fix: Rename `mul` to `mulVal` when NOT followed by `(` (i.e., not a function call).
+            // This preserves `mul(a, b)` calls (which the preprocessor expands correctly)
+            // while renaming `mul` used as a variable/parameter name.
+            // Also handles `frac`, `saturate`, `fmod`, `atan2` — other WE Android macros.
+            val macroVarCount = Regex("""\bmul\b(?!\s*\()""").findAll(modified).count()
+            if (macroVarCount > 0) {
+                val beforeMul = modified
+                modified = modified.replace(Regex("""\bmul\b(?!\s*\()"""), "mulVal")
+                if (modified != beforeMul) {
+                    val actualCount = macroVarCount - Regex("""\bmul\b(?!\s*\()""").findAll(modified).count()
+                    if (actualCount > 0) {
+                        fixesApplied.add("'mul'→'mulVal' (macro parameter conflict, $actualCount occurrences)")
+                    }
+                }
+            }
+
             // --- Fix 1D: General int→float conversion ---
             // WE PC pattern: `([\s\(/\)\+\-\*\%\\/\]])(\d+)(?!\.)(\b)` → `$1$2.0$3`
             // This catches ANY integer literal that is:

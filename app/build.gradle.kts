@@ -20,8 +20,8 @@ android {
         // v0.6.0-alpha: Major parity release — implements all 36 fixes from parity document
         // (texture transcoding: BC6H/BC7/RG88/R8/RGBA8888, shader: glslang mandatory + all stages
         // + #include resolver, video: H.265 + audio + frame rate + rotation + B-frames + profile)
-        versionCode = 81
-        versionName = "0.6.1-alpha"
+        versionCode = 82
+        versionName = "0.6.2-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {
             abiFilters += "arm64-v8a"
