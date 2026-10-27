@@ -1,13 +1,14 @@
 /*
  * shader_transcoder_jni.cpp — JNI wrapper for glslang + SPIRV-Cross.
  *
+ * Conditionally compiled only when GLSLANG_AVAILABLE=1 is defined (set by
+ * CMakeLists.txt when FetchContent successfully fetches glslang+SPIRV-Cross).
+ *
  * Compiles GLSL/HLSL shaders to SPIR-V via glslang, then cross-compiles
  * to GLSL ES 3.00 via SPIRV-Cross's C++ API.
- *
- * This matches what WE PC's transcoder does internally — wallpaperui.exe has
- * its own HLSL→GLSL converter, and we use the open-source Khronos Group tools
- * (glslang + SPIRV-Cross) as the equivalent.
  */
+
+#ifdef GLSLANG_AVAILABLE
 
 #include <jni.h>
 #include <string>
@@ -135,3 +136,5 @@ Java_com_wepwawet_pairing_ShaderTranscoder_nativeTranscodeShader(
 }
 
 } // extern "C"
+
+#endif // GLSLANG_AVAILABLE

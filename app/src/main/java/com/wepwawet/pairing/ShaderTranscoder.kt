@@ -67,12 +67,17 @@ object ShaderTranscoder {
                     "output_size" to result.size)
                 String(result, Charsets.UTF_8)
             } else {
-                WepWawetLogger.proxyWarn("$TAG.transcodeShader FAILED — native call returned null",
+                WepWawetLogger.proxyWarn("$TAG.transcodeShader FAILED — native call returned null (glslang may not be compiled in)",
                     "stage" to if (shaderStage == STAGE_VERTEX) "vertex" else "fragment",
                     "is_hlsl" to isHlsl)
                 null
             }
-        } catch (e: Exception) {
+        } catch (e: UnsatisfiedLinkError) {
+            // glslang not compiled into the .so — fall back to regex-based shader fixes
+            WepWawetLogger.proxyDebug("$TAG.transcodeShader: glslang not available — using regex-based fixes",
+                "exception" to e.javaClass.name)
+            null
+        } catch (e: Throwable) {
             WepWawetLogger.proxyWarn("$TAG.transcodeShader EXCEPTION",
                 "exception" to e.javaClass.name, "message" to (e.message ?: ""))
             null
