@@ -2,7 +2,6 @@ package com.wepwawet.pairing
 
 import com.wepwawet.log.WepWawetLogger
 import java.io.File
-import java.nio.ByteBuffer
 
 /**
  * Video transcoder using Android's built-in MediaCodec API.
@@ -17,9 +16,13 @@ import java.nio.ByteBuffer
  * all Android VideoDrawable implementations, so we transcode them.
  *
  * This implementation uses MediaExtractor to read the input video's tracks,
- * MediaCodec to decode + re-encode, and MediaMuxer to write the output MP4.
- * It handles VP8/VP9 → H.264 video transcoding and Vorbis/Opus → AAC audio
- * transcoding.
+ * MediaCodec to decode + re-encode the video track, and MediaMuxer to write
+ * the output MP4. It handles VP8/VP9 → H.264 video transcoding.
+ *
+ * v0.5.32 (C2 fix): audio track is intentionally NOT transcoded — input
+ * audio (if any) is dropped. WE wallpapers commonly have no audio, and
+ * the previous incomplete audio-transcode implementation produced
+ * structurally invalid MP4s (audio track header with zero samples).
  *
  * No external dependencies required — uses only Android framework APIs
  * (MediaExtractor, MediaCodec, MediaMuxer) available since API 18 (Android 4.3).
@@ -34,7 +37,8 @@ object VideoTranscoder {
     fun isAvailable(): Boolean = true
 
     /**
-     * Transcode a video file to MP4 with H.264 video codec + AAC audio codec.
+     * Transcode a video file to MP4 with H.264 video codec. Audio is dropped
+     * (see v0.5.32 / C2 fix above).
      *
      * @param inputFile Source video file (.webm, .mp4, .mov, .mkv, .avi, etc.)
      * @param outputFile Output MP4 file (will be overwritten if exists)
@@ -109,6 +113,14 @@ object VideoTranscoder {
             return false
         }
 
+        // v0.5.32 (C2 fix): log audio presence for diagnostics, but do NOT
+        // transcode audio. (Previously the audio codecs were created and
+        // started but never fed, producing invalid MP4s.)
+        if (audioTrackIndex >= 0) {
+            WepWawetLogger.proxy("$TAG: input has audio track — will be dropped (not transcoded)",
+                "input" to inputFile.name)
+        }
+
         // Read video track format (width, height, duration, etc.)
         val videoInputFormat = extractor.getTrackFormat(videoTrackIndex)
         val width = videoInputFormat.getInteger(android.media.MediaFormat.KEY_WIDTH)
@@ -154,52 +166,20 @@ object VideoTranscoder {
         videoDecoder.configure(videoInputFormat, null, null, 0)
         videoDecoder.start()
 
-        // Add video track to muxer
+        // Add video track to muxer.
+        //
+        // === v0.5.32 (C2 fix): audio track intentionally NOT added. ===
+        // Previously the audio decoder/encoder were created, started, and
+        // `muxer.addTrack(audioEncoderFormat)` was called — but the main
+        // transcode loop only processed the video track, so the output MP4
+        // ended up with an audio track header in the moov box but ZERO
+        // audio samples. This either causes `MediaMuxer.writeSampleData` to
+        // throw on `stop()`, or produces a structurally invalid MP4 that
+        // the WE Android `VideoDrawable`'s `MediaPlayer` may reject —
+        // refusing to render the video track too. WE wallpapers commonly
+        // have no audio anyway, so skipping audio entirely is the safer
+        // fix. The audio DETECTION above is preserved only for logging.
         val muxerVideoTrack = muxer.addTrack(videoEncoderFormat)
-
-        // Also handle audio track if present
-        var audioDecoder: android.media.MediaCodec? = null
-        var audioEncoder: android.media.MediaCodec? = null
-        var muxerAudioTrack = -1
-        if (audioTrackIndex >= 0) {
-            val audioInputFormat = extractor.getTrackFormat(audioTrackIndex)
-            val audioMime = audioInputFormat.getString(android.media.MediaFormat.KEY_MIME) ?: ""
-            WepWawetLogger.proxy("$TAG: audio track found",
-                "mime" to audioMime,
-                "sample_rate" to (if (audioInputFormat.containsKey(android.media.MediaFormat.KEY_SAMPLE_RATE))
-                    audioInputFormat.getInteger(android.media.MediaFormat.KEY_SAMPLE_RATE) else 0),
-                "channel_count" to (if (audioInputFormat.containsKey(android.media.MediaFormat.KEY_CHANNEL_COUNT))
-                    audioInputFormat.getInteger(android.media.MediaFormat.KEY_CHANNEL_COUNT) else 0))
-
-            // For audio, we use AAC encoder
-            val sampleRate = if (audioInputFormat.containsKey(android.media.MediaFormat.KEY_SAMPLE_RATE)) {
-                audioInputFormat.getInteger(android.media.MediaFormat.KEY_SAMPLE_RATE)
-            } else 44100
-            val channelCount = if (audioInputFormat.containsKey(android.media.MediaFormat.KEY_CHANNEL_COUNT)) {
-                audioInputFormat.getInteger(android.media.MediaFormat.KEY_CHANNEL_COUNT)
-            } else 2
-
-            val audioEncoderFormat = android.media.MediaFormat.createAudioFormat(
-                android.media.MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, channelCount
-            ).apply {
-                setInteger(android.media.MediaFormat.KEY_AAC_PROFILE,
-                    android.media.MediaCodecInfo.CodecProfileLevel.AACObjectLC)
-                setInteger(android.media.MediaFormat.KEY_BIT_RATE, 128000)
-            }
-
-            audioEncoder = android.media.MediaCodec.createEncoderByType(
-                android.media.MediaFormat.MIMETYPE_AUDIO_AAC
-            )
-            audioEncoder.configure(audioEncoderFormat, null, null,
-                android.media.MediaCodec.CONFIGURE_FLAG_ENCODE)
-            audioEncoder.start()
-
-            audioDecoder = android.media.MediaCodec.createDecoderByType(audioMime)
-            audioDecoder.configure(audioInputFormat, null, null, 0)
-            audioDecoder.start()
-
-            muxerAudioTrack = muxer.addTrack(audioEncoderFormat)
-        }
 
         muxer.start()
 
@@ -210,7 +190,6 @@ object VideoTranscoder {
         var allDecoded = false
         var allEncoded = false
         var videoFrameCount = 0
-        var audioFrameCount = 0
 
         // Simple transcode loop: extract → decode → encode → mux
         // This is a simplified implementation that handles the common case.
@@ -245,48 +224,102 @@ object VideoTranscoder {
                         allDecoded = true
                         videoEncoder.signalEndOfInputStream()
                     } else {
-                        val decodedBuffer = videoDecoder.getOutputBuffer(outputBufferIndex)!!
-                        // Feed decoded frame to encoder
+                        // v0.5.32 (H6 fix): Use Image API (getOutputImage /
+                        // getInputImage) to copy YUV planes from decoder
+                        // output to encoder input. Previously this used raw
+                        // ByteBuffer copies, which works only when the decoder
+                        // and encoder happen to use the same YUV420 layout
+                        // (e.g., both NV12 on Adreno). On other layouts
+                        // (NV21, YV12, etc.) the raw byte copy produces
+                        // scrambled chroma planes → green tint or swapped
+                        // U/V in the output MP4.
+                        //
+                        // Per Google issue tracker
+                        // (issuetracker.google.com/issues/319451102):
+                        // "the layout of a YUV 4:2:0 ByteBuffer is device
+                        // and codec specific … We recommend that you use
+                        // the getOutputImage API (since API 21) instead."
+                        //
+                        // The Image API exposes per-plane rowStride and
+                        // pixelStride, so [copyYuv420Image] can copy each
+                        // plane correctly regardless of the source/dest
+                        // layouts. (minSdk=26, so Image API is available.)
+                        val decodedImage = videoDecoder.getOutputImage(outputBufferIndex)
                         val encoderInputIndex = videoEncoder.dequeueInputBuffer(TIMEOUT_US)
-                        if (encoderInputIndex >= 0) {
-                            val encoderInput = videoEncoder.getInputBuffer(encoderInputIndex)!!
-                            val chunkSize = minOf(info.size, encoderInput.capacity())
-                            decodedBuffer.position(info.offset)
-                            decodedBuffer.limit(info.offset + chunkSize)
-                            encoderInput.clear()
-                            encoderInput.put(decodedBuffer)
-                            videoEncoder.queueInputBuffer(encoderInputIndex, 0, chunkSize, info.presentationTimeUs, 0)
+                        if (encoderInputIndex >= 0 && decodedImage != null) {
+                            val encoderInput = videoEncoder.getInputImage(encoderInputIndex)
+                            if (encoderInput != null) {
+                                copyYuv420Image(decodedImage, encoderInput, width, height)
+                                // Pass the encoder's input buffer capacity
+                                // as size — this is the full YUV420 frame
+                                // size the encoder expects (Y + U + V planes
+                                // with the encoder's row stride padding).
+                                val encoderBuf = videoEncoder.getInputBuffer(encoderInputIndex)
+                                val expectedSize = encoderBuf?.capacity() ?: info.size
+                                videoEncoder.queueInputBuffer(
+                                    encoderInputIndex, 0, expectedSize,
+                                    info.presentationTimeUs, 0,
+                                )
+                            } else {
+                                // Fallback: rare codec that doesn't expose
+                                // Image API for input — use raw ByteBuffer
+                                // copy (the pre-H6-fix behavior).
+                                val decodedBuffer = videoDecoder.getOutputBuffer(outputBufferIndex)
+                                val rawEncoderInput = videoEncoder.getInputBuffer(encoderInputIndex)
+                                if (decodedBuffer != null && rawEncoderInput != null) {
+                                    val chunkSize = minOf(info.size, rawEncoderInput.capacity())
+                                    decodedBuffer.position(info.offset)
+                                    decodedBuffer.limit(info.offset + chunkSize)
+                                    rawEncoderInput.clear()
+                                    rawEncoderInput.put(decodedBuffer)
+                                    videoEncoder.queueInputBuffer(
+                                        encoderInputIndex, 0, chunkSize,
+                                        info.presentationTimeUs, 0,
+                                    )
+                                }
+                            }
                         }
                     }
                     videoDecoder.releaseOutputBuffer(outputBufferIndex, false)
                 }
+            }
 
-                // Also drain encoder output
-                val encoderOutputIndex = videoEncoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
-                if (encoderOutputIndex >= 0) {
-                    if (bufferInfo.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                        allEncoded = true
-                    } else {
-                        val encodedBuffer = videoEncoder.getOutputBuffer(encoderOutputIndex)!!
-                        muxer.writeSampleData(muxerVideoTrack, encodedBuffer, bufferInfo)
-                        videoFrameCount++
-                    }
-                    videoEncoder.releaseOutputBuffer(encoderOutputIndex, false)
+            // === Always drain encoder output, even after decoder EOS ===
+            // v0.5.32 (C1 fix): Previously this drain was INSIDE the
+            // `if (!allDecoded)` block, so once the decoder hit EOS
+            // (`allDecoded = true` + `signalEndOfInputStream()`), the
+            // entire block — including the encoder drain — was skipped on
+            // every subsequent iteration. The encoder's final EOS-flagged
+            // output buffer was never drained, `allEncoded` never became
+            // true, and the loop spun forever burning a CPU core.
+            //
+            // Per Android MediaCodec docs: "Once the client reaches the end
+            // of the input data it signals the end of the input stream…
+            // The codec will continue to return output buffers until it
+            // eventually signals the end of the output stream" — so we
+            // MUST keep calling dequeueOutputBuffer on the encoder until
+            // we see BUFFER_FLAG_END_OF_STREAM.
+            val encoderOutputIndex = videoEncoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
+            if (encoderOutputIndex >= 0) {
+                if (bufferInfo.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                    allEncoded = true
+                } else {
+                    val encodedBuffer = videoEncoder.getOutputBuffer(encoderOutputIndex)!!
+                    muxer.writeSampleData(muxerVideoTrack, encodedBuffer, bufferInfo)
+                    videoFrameCount++
                 }
+                videoEncoder.releaseOutputBuffer(encoderOutputIndex, false)
             }
         }
 
         WepWawetLogger.proxy("$TAG: video transcoded",
-            "video_frames" to videoFrameCount,
-            "audio_frames" to audioFrameCount)
+            "video_frames" to videoFrameCount)
 
         // Clean up
         videoDecoder.stop()
         videoDecoder.release()
         videoEncoder.stop()
         videoEncoder.release()
-        audioDecoder?.let { it.stop(); it.release() }
-        audioEncoder?.let { it.stop(); it.release() }
         muxer.stop()
         muxer.release()
         extractor.release()
@@ -311,5 +344,88 @@ object VideoTranscoder {
         // For 480p (854x480) at 30fps: ~1.2 Mbps
         val pixels = width.toLong() * height.toLong()
         return (pixels * 30 * 0.1).toInt().coerceIn(500000, 20000000)
+    }
+
+    /**
+     * Copy YUV420 Image data from [src] to [dst], handling plane layout
+     * differences (NV12 vs NV21 vs YV12 etc.).
+     *
+     * v0.5.32 (H6 fix): Previously the transcode loop used raw ByteBuffer
+     * copies between decoder output and encoder input, which assumed the
+     * two codecs used the same YUV420 layout. Per Android docs, the layout
+     * is "device and codec specific" — feeding raw bytes produces
+     * scrambled chroma planes (green tint, swapped U/V). The Image API
+     * exposes the plane layout (rowStride / pixelStride) so we can copy
+     * correctly regardless of source/dest layouts.
+     *
+     * Both [src] and [dst] must be 3-plane YUV420 Images (Y, U, V in that
+     * order), which is what `MediaCodec.getOutputImage` / `getInputImage`
+     * return for codecs configured with `COLOR_FormatYUV420Flexible`.
+     */
+    private fun copyYuv420Image(
+        src: android.media.Image,
+        dst: android.media.Image,
+        width: Int,
+        height: Int,
+    ) {
+        val srcPlanes = src.planes
+        val dstPlanes = dst.planes
+        // Y plane (full resolution)
+        copyPlane(srcPlanes[0], dstPlanes[0], width, height)
+        // U plane (quarter resolution for 4:2:0 chroma subsampling)
+        copyPlane(srcPlanes[1], dstPlanes[1], width / 2, height / 2)
+        // V plane (quarter resolution)
+        copyPlane(srcPlanes[2], dstPlanes[2], width / 2, height / 2)
+    }
+
+    /**
+     * Copy one YUV plane from [src] to [dst]. Handles differences in
+     * rowStride and pixelStride (e.g., NV12's interleaved U/V with
+     * pixelStride=2 vs YV12's planar U with pixelStride=1).
+     *
+     * Two paths:
+     *  - Fast path: identical layouts → bulk ByteBuffer copy (capped to
+     *    destination capacity to prevent overflow on padding mismatches).
+     *  - Slow path: copy pixel by pixel → robust to any layout difference.
+     */
+    private fun copyPlane(
+        src: android.media.Image.Plane,
+        dst: android.media.Image.Plane,
+        width: Int,
+        height: Int,
+    ) {
+        val srcBuf = src.buffer
+        val dstBuf = dst.buffer
+        val srcRowStride = src.rowStride
+        val dstRowStride = dst.rowStride
+        val srcPixelStride = src.pixelStride
+        val dstPixelStride = dst.pixelStride
+
+        // Fast path: identical layouts → bulk copy.
+        if (srcRowStride == dstRowStride && srcPixelStride == dstPixelStride) {
+            srcBuf.position(0)
+            val srcSlice = srcBuf.slice()
+            srcSlice.limit(minOf(srcSlice.remaining(), dstBuf.capacity()))
+            dstBuf.clear()
+            dstBuf.put(srcSlice)
+            return
+        }
+
+        // Slow path: copy pixel by pixel to handle layout differences.
+        // Reads src at (rowIdx * srcRowStride + colIdx * srcPixelStride),
+        // writes dst at (rowIdx * dstRowStride + colIdx * dstPixelStride).
+        // NOTE: uses absolute get/put so we don't have to fiddle with
+        // position/limit between reads and writes.
+        for (rowIdx in 0 until height) {
+            val srcRowStart = rowIdx * srcRowStride
+            val dstRowStart = rowIdx * dstRowStride
+            for (colIdx in 0 until width) {
+                val srcPos = srcRowStart + colIdx * srcPixelStride
+                val dstPos = dstRowStart + colIdx * dstPixelStride
+                if (srcPos < srcBuf.capacity() && dstPos < dstBuf.capacity()) {
+                    dstBuf.put(dstPos, srcBuf.get(srcPos))
+                }
+            }
+        }
     }
 }
