@@ -3468,6 +3468,107 @@ vec4 blurRadial3a(vec2 u, vec2 center, float amt) {
                 fixesApplied.add("inline-common_blur.h (blur functions + g_Texture0 declaration)")
             }
 
+            // PASS H: Remove duplicate uniform declarations introduced by inlined headers.
+            //
+            // When common_blur.h is inlined, it adds `uniform sampler2D g_Texture0;` as
+            // part of its content. But the original shader also has `uniform sampler2D g_Texture0;`
+            // (which was hoisted in PASS C). This creates a redefinition error:
+            //   ERROR: 0:37: 'g_Texture0' : redefinition
+            //
+            // Fix: After all inlining, scan for duplicate `uniform <type> <name>;` declarations
+            // (ignoring comments) and keep only the first occurrence.
+            modified = dedupUniformDeclarations(modified)
+
+            // PASS I: Add M_PI and M_PI_2 defines (HLSL compatibility).
+            //
+            // WE PC's HLSL shader preprocessor defines M_PI and M_PI_2 as:
+            //   #define M_PI 3.14159265358979323846
+            //   #define M_PI_2 1.57079632679489661923
+            //
+            // GLSL ES 3.00 does NOT define these. Shaders that use M_PI/M_PI_2 fail with:
+            //   ERROR: 'M_PI_2' : undeclared identifier
+            //
+            // Fix: Add the defines at the top of the shader (after #version).
+            // Only add if the shader actually uses M_PI or M_PI_2.
+            if (modified.contains("M_PI") && !modified.contains("#define M_PI")) {
+                val mpiDefines = """
+// === M_PI / M_PI_2 defines (HLSL compatibility, added by WepWawet) ===
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+#ifndef M_PI_2
+#define M_PI_2 1.57079632679489661923
+#endif
+#ifndef M_PI_4
+#define M_PI_4 0.78539816339744830962
+#endif
+#ifndef M_2_PI
+#define M_2_PI 0.63661977236758134308
+#endif
+""".trimIndent()
+                // Insert after #version line (or at the beginning if no #version)
+                val versionMatch = Regex("""#version[^\n]*\n""").find(modified)
+                modified = if (versionMatch != null) {
+                    modified.replace(versionMatch.value, versionMatch.value + mpiDefines + "\n")
+                } else {
+                    mpiDefines + "\n" + modified
+                }
+                fixesApplied.add("M_PI/M_PI_2 defines")
+            }
+
+            // PASS J: Fix int-float type mismatches (HLSL→GLSL ES).
+            //
+            // HLSL allows implicit int↔float conversion. GLSL ES 3.00 does NOT.
+            // Shaders like audio_base.frag have:
+            //   int index = int(floor(position));
+            //   if (index < 0.0) index = 0.0;     // ERROR: int < float, int = float
+            //   float p0 = getAudioValueByBand(index - 1.0);  // ERROR: int - float
+            //
+            // Fix: Detect `int` variable declarations, then wrap their usage in
+            // float contexts with `float()` casts. Specifically:
+            //   1. `if (int_var <op> float_lit)` → `if (float(int_var) <op> float_lit)`
+            //   2. `int_var = float_lit;` → `int_var = int(float_lit);`
+            //   3. `int_var <op> float_lit` (arithmetic) → `float(int_var) <op> float_lit`
+            //
+            // We detect int variables by scanning for `int <varname>` declarations.
+            val intVarPattern = Regex("""\bint\s+(\w+)\s*[=;,)]""")
+            val intVars = intVarPattern.findAll(modified).map { it.groupValues[1] }.toSet()
+            if (intVars.isNotEmpty()) {
+                var intFixCount = 0
+                for (varName in intVars) {
+                    // Skip common false positives
+                    if (varName in setOf("main", "return", "void", "if", "else", "for", "while")) continue
+                    // Pattern 1: if (varName <op> floatLit) → if (float(varName) <op> floatLit)
+                    // Pattern 2: varName = floatLit; → varName = int(floatLit);
+                    // Pattern 3: varName <op> floatLit (arithmetic) → float(varName) <op> floatLit
+                    // Only fix when the right side is a float literal (has a decimal point)
+                    val comparisonRegex = Regex("""\b$varName\s*([<>=!]+)\s*(\d+\.\d+)""")
+                    val assignmentRegex = Regex("""\b$varName\s*=\s*(\d+\.\d+)\s*;""")
+                    val arithRegex = Regex("""\b$varName\s*([+\-*/])\s*(\d+\.\d+)""")
+                    val reverseArithRegex = Regex("""(\d+\.\d+)\s*([+\-*/])\s*\b$varName\b""")
+
+                    modified = modified.replace(comparisonRegex) { mr ->
+                        intFixCount++
+                        "float($varName) ${mr.groupValues[1]} ${mr.groupValues[2]}"
+                    }
+                    modified = modified.replace(assignmentRegex) { mr ->
+                        intFixCount++
+                        "$varName = int(${mr.groupValues[1]});"
+                    }
+                    modified = modified.replace(arithRegex) { mr ->
+                        intFixCount++
+                        "float($varName) ${mr.groupValues[1]} ${mr.groupValues[2]}"
+                    }
+                    modified = modified.replace(reverseArithRegex) { mr ->
+                        intFixCount++
+                        "${mr.groupValues[1]} ${mr.groupValues[2]} float($varName)"
+                    }
+                }
+                if (intFixCount > 0) {
+                    fixesApplied.add("int-float type cast ($intFixCount fixes)")
+                }
+            }
+
             // =========================================================================
             // PHASE 4: Shader-specific patches (WE PC's per-shader hotfixes).
             // These are derived from WE PC's wallpaperui.exe binary — WE PC has a
@@ -3801,6 +3902,50 @@ vec4 blurRadial3a(vec2 u, vec2 center, float amt) {
             // Ignore parsing errors
         }
         return null
+    }
+
+    /**
+     * Remove duplicate `uniform <type> <name>;` declarations from a shader.
+     *
+     * After inlining headers like common_blur.h, the shader may have multiple
+     * declarations of the same uniform (e.g., `uniform sampler2D g_Texture0;`
+     * appears both in the original shader and in the inlined header). GLSL ES
+     * 3.00 treats this as a redefinition error.
+     *
+     * This function parses each `uniform <type> <name>;` line (ignoring comments
+     * after `//`), and keeps only the FIRST declaration of each `<name>`,
+     * removing all subsequent duplicates.
+     */
+    private fun dedupUniformDeclarations(shaderSource: String): String {
+        val lines = shaderSource.split("\n").toMutableList()
+        val seenUniforms = mutableSetOf<String>()
+        var dedupCount = 0
+
+        for (i in lines.indices) {
+            val line = lines[i].trim()
+            // Match: uniform <type> <name>; [// comment]
+            // Examples:
+            //   uniform sampler2D g_Texture0; // {"hidden":true}
+            //   uniform float g_Time;
+            //   uniform vec4 g_Texture0Resolution;
+            val uniformMatch = Regex("""^uniform\s+(\w+)\s+(\w+)\s*;""").find(line)
+            if (uniformMatch != null) {
+                val uniformName = uniformMatch.groupValues[2]
+                if (uniformName in seenUniforms) {
+                    // Duplicate — remove this line
+                    lines[i] = ""
+                    dedupCount++
+                } else {
+                    seenUniforms.add(uniformName)
+                }
+            }
+        }
+
+        if (dedupCount > 0) {
+            WepWawetLogger.proxyDebug("MpkgPacker.dedupUniformDeclarations: removed $dedupCount duplicate uniform(s)")
+        }
+
+        return lines.joinToString("\n")
     }
 
     /** Read a little-endian int32 from a byte array at the given offset. */
