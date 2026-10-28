@@ -157,7 +157,7 @@ android {
         //   was NOT the issue for that one. The pairing persistence,
         //   BootReceiver, heart-smaller, and all other round 6 changes
         //   are KEPT (only MpkgPacker.kt is reverted).
-        versionCode = 91
+        versionCode = 92
         versionName = "0.7.1-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {
@@ -325,6 +325,13 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil.gif)
     implementation("com.google.code.gson:gson:2.10.1")
+
+    // Media3 (ExoPlayer) — for video preview playback in the VideoTrimScreen.
+    // The trim screen embeds a PlayerView via AndroidView to show a live video
+    // preview while the user drags range sliders to set the trim start/end.
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.ui)
+    implementation(libs.media3.common)
 
     // JavaSteam — Java/Kotlin port of SteamKit2 for direct Steam protocol access
     // Downloads real workshop .pkg files via Steam's binary TCP protocol — NO PC required

@@ -1,6 +1,7 @@
 package com.wepwawet.ui
 
 import android.content.Context
+import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -18,6 +19,7 @@ import com.wepwawet.ui.screens.FavoritesScreen
 import com.wepwawet.ui.screens.LogsScreen
 import com.wepwawet.ui.screens.PairingScreen
 import com.wepwawet.ui.screens.SettingsScreen
+import com.wepwawet.ui.screens.VideoTrimScreen
 import com.wepwawet.ui.screens.WallpaperDetailScreen
 import com.wepwawet.ui.screens.WorkshopBrowserScreen
 
@@ -163,6 +165,12 @@ fun WepWawetNavHost() {
                 onBack = { nav.popBackStack() },
                 repo = repo,
                 onCreatorClick = { steamId -> nav.navigate("creator/$steamId") },
+                onVideoTrim = { id, videoPath, title ->
+                    // URL-encode the path + title for safe nav args
+                    val encodedPath = java.net.URLEncoder.encode(videoPath, "UTF-8")
+                    val encodedTitle = java.net.URLEncoder.encode(title, "UTF-8")
+                    nav.navigate("videoTrim/$id/$encodedPath/$encodedTitle")
+                },
             )
         }
 
@@ -202,6 +210,40 @@ fun WepWawetNavHost() {
                 onBack = { nav.popBackStack() },
                 onCreatorClick = { steamId -> nav.navigate("creator/$steamId") },
                 steamApi = steamApi,
+            )
+        }
+
+        // v0.7.1 (round 9): Video trim route.
+        // When a video wallpaper is downloaded, the detail screen navigates
+        // here with the video file path + metadata. The VideoTrimScreen shows
+        // a live ExoPlayer preview with range sliders for trim start/end.
+        composable(
+            route = "videoTrim/{itemId}/{videoPath}/{itemTitle}",
+            arguments = listOf(
+                navArgument("itemId") { type = NavType.StringType },
+                navArgument("videoPath") { type = NavType.StringType },
+                navArgument("itemTitle") { type = NavType.StringType },
+            ),
+        ) { entry ->
+            val itemId = entry.arguments?.getString("itemId").orEmpty()
+            val videoPath = java.net.URLDecoder.decode(entry.arguments?.getString("videoPath").orEmpty(), "UTF-8")
+            val itemTitle = java.net.URLDecoder.decode(entry.arguments?.getString("itemTitle").orEmpty(), "UTF-8")
+            val videoFile = if (videoPath.isNotBlank()) java.io.File(videoPath) else null
+            WepWawetLogger.lifecycle("NavHost navigate to videoTrim",
+                "item_id" to itemId,
+                "video_path" to videoPath,
+                "video_exists" to (videoFile?.exists() ?: false),
+                "video_size" to (videoFile?.length() ?: 0L))
+            VideoTrimScreen(
+                videoFileUri = videoFile?.let { Uri.fromFile(it).toString() } ?: "",
+                videoFile = videoFile ?: java.io.File(context.cacheDir, "${itemId}_video_download.pkg"),
+                itemTitle = itemTitle,
+                itemId = itemId,
+                needsDownload = videoFile == null || !videoFile.exists(),
+                onBack = { nav.popBackStack() },
+                onSendComplete = {
+                    nav.popBackStack()
+                },
             )
         }
     }

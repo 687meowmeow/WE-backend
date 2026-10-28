@@ -15,6 +15,7 @@ coil = "2.7.0"
 workManager = "2.9.1"
 datastore = "1.1.1"
 securityCrypto = "1.1.0-alpha06"
+media3 = "1.4.1"
 junit = "4.13.2"
 androidxJunit = "1.2.1"
 espresso = "3.6.1"
@@ -99,6 +100,14 @@ lz4Java = { group = "org.lz4", name = "lz4-java", version.ref = "lz4Java" }
 # MessageOrBuilder, ProtocolMessageEnum, etc.) on the COMPILE classpath. See the
 # protobufJava version comment above for the full rationale.
 protobufJava = { group = "com.google.protobuf", name = "protobuf-java", version.ref = "protobufJava" }
+
+# Media3 (ExoPlayer) — for video preview playback in the VideoTrimScreen.
+# Uses AndroidX Media3 which is the successor to the deprecated standalone ExoPlayer.
+# The video trim screen embeds a PlayerView via AndroidView to show a live video
+# preview while the user drags range sliders to set the trim start/end points.
+media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
+media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
+media3-common = { group = "androidx.media3", name = "media3-common", version.ref = "media3" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
