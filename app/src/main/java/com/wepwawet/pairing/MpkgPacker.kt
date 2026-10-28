@@ -545,9 +545,25 @@ object MpkgPacker {
             // the .tex format is 0 or 13/14 (not DXT). This eliminates the FFD8FF false
             // positives in DXT block data that triggered the broken code path.
             //
-            // We also apply a stricter check: only search AFTER the .tex header (offset 91),
+            // We also apply a stricter check: only search AFTER the .tex header (offset 87),
             // never in the header itself.
-            val searchStartOffset = 91
+            //
+            // v0.7.1 (round 8 — gray xray fix): the .tex header is exactly 87 bytes:
+            //   TEXV0005\0 (9) + TEXI0001\0 (9) + 7×u32 (28) + TEXB0003/4\0 (9) + 3×u32 (12)
+            //   + mipmap_count u32 (4) + per-mipmap 4×u32 (16) = 87.
+            // The previous code used searchStartOffset=91, which was 4 bytes PAST the
+            // actual data start at offset 87. For .tex files whose PNG magic bytes
+            // started at offset 87 (immediately after the header), the search from 91
+            // missed the magic → the .tex was NOT detected as PNG → NOT converted to
+            // ETC2 → raw RGBA8888 .tex was passed through to the .mpkg → WE Android
+            // couldn't read it → "native image error" → gray wallpaper.
+            //
+            // This was the root cause of the gray xray wallpaper (id=2347762662)
+            // being gray: its .tex files (materials/169.tex, 170.tex, 171.tex) have
+            // PNG magic at offset 87, which was missed by the search from offset 91.
+            // The Mordred (X-Ray) wallpaper (id=2279314480) worked because its .tex
+            // files contained JPEG magic at offset > 91 (deep inside the data).
+            val searchStartOffset = 87
             val hasPng = findBytes(blob, PNG_MAGIC, searchStartOffset) >= 0
             val hasJpeg = run {
                 // Stricter JPEG detection: FFD8FF must be followed by a valid
