@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -23,6 +25,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -63,11 +67,9 @@ fun PairingScreen(
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
-    // The PIN the user is currently shown. Starts as "1234" to match the
-    // PIN that [com.wepwawet.MainActivity] used to auto-start the proxy.
-    // Tapping "Refresh PIN" generates a new 4-digit code and restarts the
-    // proxy with it.
-    var pin by remember { mutableStateOf("1234") }
+    // v0.7.0: Load the user's saved PIN from SharedPreferences (default "1234").
+    // The user can change it in Settings or here on the Pairing screen.
+    var pin by remember { mutableStateOf(PairingService.getPairingPin(context)) }
 
     // Best-effort: when the screen appears, re-issue PairingService.start
     // with our local PIN. This is a no-op if the service is already running
@@ -140,21 +142,46 @@ fun PairingScreen(
                 }
             }
 
-            // Refresh PIN button — generates a new 4-digit code and restarts
-            // the proxy atomically. NOT a start/stop toggle.
+            // v0.7.0: PIN text field — user can type a custom PIN (1-8 digits)
+            OutlinedTextField(
+                value = pin,
+                onValueChange = { newPin ->
+                    // Only allow digits, max 8 chars
+                    if (newPin.all { it.isDigit() } && newPin.length <= 8) {
+                        pin = newPin
+                    }
+                },
+                label = { Text("PIN") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            // Save PIN button — saves to SharedPreferences and restarts the proxy
+            Button(onClick = {
+                val pinToSave = pin.ifBlank { "1234" }
+                WepWawetLogger.proxy("PairingScreen save pin", "pin" to pinToSave)
+                PairingService.setPairingPin(context, pinToSave)
+                pin = pinToSave
+                runCatching { PairingService.start(context, pinToSave) }
+            }) {
+                Icon(Icons.Filled.Save, contentDescription = "Save")
+                Spacer(Modifier.width(8.dp))
+                Text("Save PIN")
+            }
+
+            // Refresh PIN button — generates a new 4-digit code
             OutlinedButton(onClick = {
                 val newPin = (1000..9999).random().toString()
                 WepWawetLogger.proxy("PairingScreen refresh pin",
                     "old" to pin, "new" to newPin)
                 pin = newPin
-                // PairingService.onStartCommand stops any existing servers
-                // and starts fresh with the new PIN, so we don't need to
-                // explicitly call stop() first.
+                PairingService.setPairingPin(context, newPin)
                 runCatching { PairingService.start(context, newPin) }
             }) {
-                Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                Icon(Icons.Filled.Refresh, contentDescription = "Random")
                 Spacer(Modifier.width(8.dp))
-                Text("Refresh PIN")
+                Text("Random PIN")
             }
 
             Spacer(Modifier.height(24.dp))

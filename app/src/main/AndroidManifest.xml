@@ -53,6 +53,12 @@
     <uses-feature android:name="android.hardware.vulkan.version" android:version="131072" android:required="true" />
     <!-- Adreno 740+ Vulkan 1.3 — we can't enforce this at install time, but document it -->
 
+    <!-- v0.7.0: Query the Wallpaper Engine Android app package for auto-launch -->
+    <queries>
+        <package android:name="com.wallpaper.engine" />
+        <package android:name="com.fws.wallpaperengine" />
+    </queries>
+
     <application
         android:name=".WepWawetApplication"
         android:allowBackup="false"

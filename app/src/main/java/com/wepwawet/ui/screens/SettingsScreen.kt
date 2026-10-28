@@ -25,6 +25,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -73,6 +74,9 @@ import kotlinx.coroutines.launch
 private const val PREFS_NAME = "wepwawet_settings"
 private const val KEY_VERBOSE_LOG = "verbose_log"
 private const val KEY_STEAM_API_KEY = "steam_api_key"
+private const val KEY_PAGINATION_ENABLED = "pagination_enabled"
+private const val KEY_PAGE_SIZE = "page_size"
+private const val KEY_SAVED_CREATORS = "saved_creators"
 
 /**
  * The WepWawet Settings screen.
@@ -114,6 +118,10 @@ fun SettingsScreen(
     // ---- Persisted toggle state (verbose log) ----
     var verboseLog by remember { mutableStateOf(true) }
 
+    // ---- Pagination settings (v0.7.0) ----
+    var paginationEnabled by remember { mutableStateOf(false) }
+    var pageSize by remember { mutableStateOf(30) }
+
     // ---- Steam Web API key state ----
     var steamApiKey by remember { mutableStateOf("") }
     var steamApiKeySaved by remember { mutableStateOf(false) }
@@ -123,6 +131,8 @@ fun SettingsScreen(
     LaunchedEffect(Unit) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         verboseLog = prefs.getBoolean(KEY_VERBOSE_LOG, true)
+        paginationEnabled = prefs.getBoolean(KEY_PAGINATION_ENABLED, false)
+        pageSize = prefs.getInt(KEY_PAGE_SIZE, 30)
         val savedKey = prefs.getString(KEY_STEAM_API_KEY, "") ?: ""
         steamApiKey = savedKey
         steamApiKeySaved = savedKey.isNotBlank()
@@ -258,7 +268,25 @@ fun SettingsScreen(
                 )
             }
 
-            // ===== 4. About =====
+            // ===== 4. Pagination (v0.7.0) =====
+            item {
+                PaginationCard(
+                    paginationEnabled = paginationEnabled,
+                    pageSize = pageSize,
+                    onPaginationChange = { enabled ->
+                        paginationEnabled = enabled
+                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit().putBoolean(KEY_PAGINATION_ENABLED, enabled).apply()
+                    },
+                    onPageSizeChange = { size ->
+                        pageSize = size
+                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit().putInt(KEY_PAGE_SIZE, size).apply()
+                    },
+                )
+            }
+
+            // ===== 5. About =====
             item {
                 AboutCard()
             }
@@ -531,7 +559,53 @@ private fun DisplayCard(
 }
 
 /**
- * Section 4 — About.
+ * Section 4 — Pagination (v0.7.0).
+ *
+ * Toggle between infinite scroll (default) and pagination mode.
+ * When pagination is enabled, the user can choose the page size.
+ */
+@Composable
+private fun PaginationCard(
+    paginationEnabled: Boolean,
+    pageSize: Int,
+    onPaginationChange: (Boolean) -> Unit,
+    onPageSizeChange: (Int) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Browse Mode", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Use pagination")
+                    Text(
+                        "Infinite scroll by default. Enable to load pages manually.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = paginationEnabled, onCheckedChange = onPaginationChange)
+            }
+            if (paginationEnabled) {
+                Spacer(Modifier.height(12.dp))
+                Text("Page size: $pageSize")
+                Slider(
+                    value = pageSize.toFloat(),
+                    onValueChange = { onPageSizeChange(it.toInt()) },
+                    valueRange = 10f..100f,
+                    steps = 18, // 10, 15, 20, ..., 100
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Section 5 — About.
  *
  * Minimal info card showing the app name, version, git SHA and build time.
  * The previous debug strings ("mpkg: PKGM0020 (VFS verified)" and

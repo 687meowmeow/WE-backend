@@ -758,6 +758,11 @@ object WorkshopDownloadJob {
                     "device" to deviceName)
                 PairingService.queueWallpaper(cacheMpkg, item.title)
 
+                // v0.7.0: Auto-open the Wallpaper Engine Android app so the user
+                // can see the wallpaper transfer happen. The WE app will display
+                // the "Receiving wallpaper..." progress dialog.
+                PairingService.launchWallpaperEngineApp(appContext)
+
                 // === IMPORTANT: do NOT delete cacheMpkg here! ===
                 // The PairingService.queueWallpaper only holds a File reference,
                 // not the bytes — the file must still exist when the WePairingServer

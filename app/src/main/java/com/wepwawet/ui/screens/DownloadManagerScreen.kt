@@ -254,7 +254,8 @@ private fun ActiveDownloadCard(download: DownloadProgress, onItemClick: (String)
 private fun CompletedDownloadCard(download: CompletedDownload, onItemClick: (String) -> Unit = {}) {
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US) }
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth()
+            .clickable { onItemClick(download.itemId) },
         shape = RoundedCornerShape(12.dp),
     ) {
         Row(

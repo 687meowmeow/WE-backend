@@ -20,6 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -46,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -265,13 +268,39 @@ fun WallpaperDetailScreen(
                                 Text("Creator",
                                     style = MaterialTheme.typography.labelLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(creatorName,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    textDecoration = TextDecoration.Underline,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(creatorName,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        textDecoration = TextDecoration.Underline,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    // v0.7.0: Save creator button
+                                    val context = LocalContext.current
+                                    val prefs = remember { context.getSharedPreferences("wepwawet_settings", Context.MODE_PRIVATE) }
+                                    val savedCreators = remember { prefs.getStringSet("saved_creators", emptySet()) ?: emptySet() }
+                                    val isSaved = current.creator in savedCreators
+                                    IconButton(onClick = {
+                                        val newSet = savedCreators.toMutableSet()
+                                        if (isSaved) {
+                                            newSet.remove(current.creator)
+                                            WepWawetLogger.workshop("creator_unsaved", "creator" to current.creator)
+                                        } else {
+                                            newSet.add(current.creator)
+                                            WepWawetLogger.workshop("creator_saved", "creator" to current.creator)
+                                        }
+                                        prefs.edit().putStringSet("saved_creators", newSet).apply()
+                                    }) {
+                                        Icon(
+                                            if (isSaved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                                            contentDescription = if (isSaved) "Unsave creator" else "Save creator",
+                                            tint = if (isSaved) Color.Red else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                    }
+                                }
                             }
                         } else {
                             MetadataRow("Creator", creatorName)

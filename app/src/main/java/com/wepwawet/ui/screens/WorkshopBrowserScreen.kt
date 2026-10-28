@@ -551,12 +551,8 @@ fun WorkshopBrowserScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = {
-                        WepWawetLogger.workshop("topbar refresh tapped")
-                        onRefresh()
-                    }) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
-                    }
+                    // v0.7.0: Removed Refresh button per user request.
+                    // Pull-to-refresh still works for refreshing the list.
                     IconButton(onClick = {
                         WepWawetLogger.workshop("topbar downloads tapped")
                         onOpenDownloads()

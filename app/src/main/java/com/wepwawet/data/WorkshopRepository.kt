@@ -563,15 +563,60 @@ class WorkshopRepository constructor(
      * session, then fall back to a fresh API call.
      */
     suspend fun getById(id: String): WorkshopItemTyped? {
+        // v0.7.0: Fix descriptions — the browse/search cache items only carry
+        // the SHORT description (Steam's return_short_description=true). Many
+        // workshop items have empty short descriptions even when their full
+        // description is populated. When a cached item has an empty/very short
+        // description, we fetch the FULL description via getPublishedFileDetails
+        // and update the cache. This ensures the detail screen always shows the
+        // real description instead of "No description available."
         detailCache[id]?.let {
+            // If the cached description is too short, refresh it
+            if (it.description.length < 10) {
+                WepWawetLogger.workshop("getById refreshing short description", "id" to id)
+                runCatching {
+                    steamApi.getPublishedFileDetails(listOf(id)).getOrThrow().firstOrNull()
+                }.onSuccess { fresh ->
+                    if (fresh != null && fresh.description.length > it.description.length) {
+                        detailCache[id] = fresh
+                        resolveCreatorsForItems(listOf(fresh))
+                        return fresh
+                    }
+                }
+            }
             WepWawetLogger.workshopDebug("getById cache hit", "id" to id)
             return it
         }
         _browseItems.value.firstOrNull { it.id == id }?.let {
+            // If the browse item's description is too short, fetch full details
+            if (it.description.length < 10) {
+                WepWawetLogger.workshop("getById fetching full description for browse item", "id" to id)
+                runCatching {
+                    steamApi.getPublishedFileDetails(listOf(id)).getOrThrow().firstOrNull()
+                }.onSuccess { fresh ->
+                    if (fresh != null && fresh.description.length > it.description.length) {
+                        detailCache[id] = fresh
+                        resolveCreatorsForItems(listOf(fresh))
+                        return fresh
+                    }
+                }
+            }
             detailCache[id] = it
             return it
         }
         _searchItems.value.firstOrNull { it.id == id }?.let {
+            if (it.description.length < 10) {
+                WepWawetLogger.workshop("getById fetching full description for search item", "id" to id)
+                runCatching {
+                    steamApi.getPublishedFileDetails(listOf(id)).getOrThrow().firstOrNull()
+                }.onSuccess { fresh ->
+                    if (fresh != null && fresh.description.length > it.description.length) {
+                        detailCache[id] = fresh
+                        resolveCreatorsForItems(listOf(fresh))
+                        return fresh
+                    }
+                }
+            }
             detailCache[id] = it
             return it
         }

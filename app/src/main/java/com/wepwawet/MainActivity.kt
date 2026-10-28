@@ -35,7 +35,8 @@ class MainActivity : ComponentActivity() {
         // class-loading Errors like NoClassDefFoundError don't bring down the
         // app before we get a chance to render the UI.
         runCatching {
-            PairingService.start(this, "1234")
+            // v0.7.0: Use the user's saved PIN (from Settings) instead of hardcoded "1234"
+            PairingService.start(this, PairingService.getPairingPin(this))
             WepWawetLogger.lifecycle("Auto-started pairing proxy")
         }.onFailure { e ->
             // Log to BOTH WepWawetLogger and logcat — if the logger failed to init,

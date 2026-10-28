@@ -47,6 +47,44 @@ class PairingService : Service() {
         const val NOTIFICATION_ID = 1001
         const val EXTRA_PIN = "pin"
 
+        // ====== PIN persistence (v0.7.0) ======
+        // The user can now set a custom PIN in Settings. It's persisted in
+        // SharedPreferences so it survives app restarts/updates.
+        private const val PREFS_NAME = "wepwawet_pairing"
+        private const val KEY_PIN = "pairing_pin"
+        private const val KEY_PAIRED_DEVICE = "paired_device_name"
+        private const val DEFAULT_PIN = "1234"
+
+        /** Get the user's saved pairing PIN (default: "1234"). */
+        fun getPairingPin(context: Context): String {
+            return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_PIN, DEFAULT_PIN) ?: DEFAULT_PIN
+        }
+
+        /** Save a custom pairing PIN. */
+        fun setPairingPin(context: Context, pin: String) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putString(KEY_PIN, pin).apply()
+        }
+
+        /** Persist the paired device name so it survives app restarts. */
+        fun savePairedDevice(context: Context, name: String) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putString(KEY_PAIRED_DEVICE, name).apply()
+        }
+
+        /** Load the last paired device name (or null if never paired). */
+        fun loadPairedDevice(context: Context): String? {
+            return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_PAIRED_DEVICE, null)
+        }
+
+        /** Clear the persisted paired device name (called on unpair/disconnect). */
+        fun clearPairedDevice(context: Context) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().remove(KEY_PAIRED_DEVICE).apply()
+        }
+
         // ====== Static UI accessors (per Task 9) ======
 
         /**
@@ -83,8 +121,20 @@ class PairingService : Service() {
             // handshake completes) and cleared in onPairingFailure / stopServers.
             // We deliberately don't reflect into WePairingServer's private
             // currentClient field; the name flag is the source of truth.
-            return pairingServer != null && pairedDeviceName != null
+            //
+            // v0.7.0: Also check SharedPreferences for persisted pairing state —
+            // the app may have been killed/restarted, and the phone hasn't
+            // reconnected yet, but the UI should still show "paired".
+            if (pairingServer != null && pairedDeviceName != null) return true
+            // Check if we were previously paired (persisted state)
+            // This is a "soft" paired state — the TCP connection needs to be
+            // re-established, but the UI can show the paired device name.
+            return pairedDeviceName != null ||
+                (appContext?.let { loadPairedDevice(it) } != null)
         }
+
+        /** App context for static accessors (set in onStartCommand). */
+        @Volatile private var appContext: Context? = null
 
         /**
          * Queue a wallpaper .mpkg file for transfer to the paired phone.
@@ -120,6 +170,23 @@ class PairingService : Service() {
                 "size" to file.length(),
                 "paired" to isPaired())
             server.sendWallpaper(file, title)
+        }
+
+        /**
+         * Auto-open the WE Android app so the user can see the wallpaper transfer.
+         * Called after queueWallpaper completes. Uses packageManager to find and
+         * launch the WE Android app's main activity.
+         */
+        fun launchWallpaperEngineApp(context: Context) {
+            val wePackages = context.packageManager.getLaunchIntentForPackage("com.wallpaper.engine")
+                ?: context.packageManager.getLaunchIntentForPackage("com.fws.wallpaperengine")
+            if (wePackages != null) {
+                wePackages.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                runCatching { context.startActivity(wePackages) }
+                WepWawetLogger.proxy("launched Wallpaper Engine Android app")
+            } else {
+                WepWawetLogger.proxyWarn("Wallpaper Engine Android app not found — cannot auto-open")
+            }
         }
 
         // ====== Service start/stop helpers (existing) ======
@@ -183,10 +250,11 @@ class PairingService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         WepWawetLogger.proxy("PairingService.onStartCommand", "flags" to flags)
+        appContext = applicationContext
 
         // Get PIN from intent (default "1234" matches the auto-start PIN
         // used by MainActivity.onCreate and the PairingScreen default).
-        val pin = intent?.getStringExtra(EXTRA_PIN) ?: "1234"
+        val pin = intent?.getStringExtra(EXTRA_PIN) ?: getPairingPin(this)
         WepWawetLogger.proxy("Starting pairing servers", "pin" to pin)
 
         // Start as foreground service immediately (Android 12+ requirement).
@@ -222,6 +290,10 @@ class PairingService : Service() {
                 server.onPairingSuccess = { deviceName ->
                     // Update the static pairedDeviceName so UI can query isPaired()
                     pairedDeviceName = deviceName
+                    // v0.7.0: Persist the paired device name so it survives
+                    // app restarts/updates. The UI can show "paired" even
+                    // before the phone reconnects.
+                    savePairedDevice(applicationContext, deviceName)
                     WepWawetLogger.proxy("Pairing SUCCESS!",
                         "device" to deviceName,
                         "queued_wallpapers" to "n/a")
