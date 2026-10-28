@@ -2,7 +2,7 @@
 
 > Steam Workshop browser & downloader for Android. Browse 3M+ Wallpaper Engine workshop items, log in with your own Steam account (2FA / Steam Guard supported), and download wallpaper packs straight to your phone. **No PC required.**
 
-**Status: v0.6.x-alpha — functional alpha.** Browse → login → download works end-to-end on-device. A pairing proxy is included for the official Wallpaper Engine Android app.
+**Status: v0.7.x-alpha — functional alpha.** Browse → login → download works end-to-end on-device. A pairing proxy is included for the official Wallpaper Engine Android app.
 
 [![Build APK](https://github.com/687meowmeow/WE-backend/actions/workflows/build.yml/badge.svg)](https://github.com/687meowmeow/WE-backend/actions/workflows/build.yml)
 
@@ -28,17 +28,12 @@ The app also includes a foreground **pairing proxy** (`PairingService`) that let
 
 ## Features
 
-- **Browse**: paginated `IPublishedFileService/QueryFiles` with server-side sorting, cursor-based pagination, and automatic exclusion of Web/Application tags that aren't mobile-compatible.
-- **Search**: free-text search via `RankedByTextSearch`.
-- **Tag filtering**: tag picker sheet and adjustable tile sizes.
-- **Item details**: `ISteamRemoteStorage/GetPublishedFileDetails` enrichment, with a tolerant deserializer that survives Steam API type mismatches.
-- **Creator names**: resolved asynchronously, so items render immediately.
-- **Steam login**: WebView-based login with 2FA / Steam Guard handling (`SteamLoginActivity`).
-- **On-device download**: JavaSteam downloader (`WorkshopDownloader`) with saved refresh tokens and handling for rate limits and stale tokens.
-- **Package conversion**: `.pkg` → `.mpkg` packing with native ETC2 texture encoding (etc2comp via JNI) and LZ4 compression, so the official WE app can use the content.
-- **Download manager**: tracks active and completed downloads.
-- **Pairing proxy**: foreground service speaking the WE pairing protocol (UDP discovery + TCP session).
-- **Logging**: structured logger (`WepWawetLogger`) with levels and domains, a ring buffer, daily WorkManager flush, crash capture, and a button to export logs to `Downloads/WepWawet/`.
+- **Browse & search**: scroll through Wallpaper Engine workshop items, sort them, search by text, and filter by tags.
+- **Item details**: see previews, descriptions, and creator names for any wallpaper.
+- **Steam login**: sign in with your own account, including Steam Guard / 2FA. Your login is remembered.
+- **Download**: grab wallpaper packs straight to your phone, with a download manager to track progress.
+- **Works with the official WE app**: converts wallpapers into a format the Android Wallpaper Engine app can use, and pairs with it as a "fake PC".
+- **Logs**: built-in logging with crash capture and one-tap export for bug reports.
 
 ## Tech stack
 
