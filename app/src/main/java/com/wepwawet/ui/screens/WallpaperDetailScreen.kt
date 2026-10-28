@@ -14,9 +14,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -195,6 +197,188 @@ fun WallpaperDetailScreen(
             if (loaded == null) {
                 errorMessage = "Wallpaper not found."
                 WepWawetLogger.workshopWarn("WallpaperDetailScreen: item not found",
+                    "id" to itemId)
+            }
+        } catch (e: Exception) {
+            errorMessage = e.message ?: "Failed to load wallpaper."
+            WepWawetLogger.workshopWarn("WallpaperDetailScreen load failed",
+                "id" to itemId, "exception" to e.javaClass.name)
+        } finally {
+            loading = false
+        }
+    }
+
+    // Periodically poll pairing state (companion flag is cheap)
+    LaunchedEffect(Unit) {
+        while (true) {
+            isPaired = PairingService.isPaired()
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(item?.title ?: "Loading…", maxLines = 1) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        },
+        // v0.7.1: SnackbarHost bound to the Scaffold so "favorited <creator>"
+        // messages render at the bottom of the screen when the user taps
+        // the heart on the Creator row. Host state is hoisted at the screen
+        // level (above) so it survives scroll.
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+    ) { padding ->
+        if (loading) {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CircularProgressIndicator()
+                    Text("Loading…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            return@Scaffold
+        }
+        val current = item ?: run {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(errorMessage ?: "Wallpaper not found.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            return@Scaffold
+        }
+
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            // === Preview image ===
+            // v0.7.1: Preview is now SQUARE (1:1) instead of 16:9 — the user
+            // said the rectangular preview wasted vertical space and the square
+            // crop matches what Wallpaper Engine's own tile preview uses.
+            item {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                ) {
+                    AsyncImage(
+                        model = current.previewUrl,
+                        contentDescription = current.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+
+            // === Title ===
+            item {
+                Text(current.title, style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold)
+            }
+
+            // === Metadata block ===
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    ),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        // v0.7.1: Removed the "Type" metadata row — the type is
+                        // already implied by the preview image and the tags, and
+                        // the row was visually noisy. (Type info is still
+                        // available in [WorkshopItemTyped] for anyone who needs it.)
+                        val creatorName = creatorNames[current.creator] ?: current.creator.ifBlank { "Unknown" }
+                        if (current.creator.isNotBlank()) {
+                            // v0.7.2: Heart sits INLINE, directly to the LEFT of the
+                            // creator name, inside the value side of the Creator row.
+                            // It is smaller than the text line height (18dp vs ~20dp),
+                            // so the row is exactly as tall as any other MetadataRow
+                            // and nothing above or below shifts.
+                            val isSaved = current.creator in savedCreators
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("Creator",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(0.dp),
+                                ) {
+                                    // Heart: its layout slot is only as tall as a text
+                                    // line (20dp), but the heart itself is drawn bigger
+                                    // via requiredSize, so it overflows the slot instead
+                                    // of growing the row. Nothing above/below moves.
+                                    Box(
+                                        modifier = Modifier
+                                            .width(36.dp)
+                                            .height(20.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .requiredSize(36.dp)
+                                                .clip(CircleShape)
+                                                .clickable {
+                                                    val newIsSaved = !isSaved
+                                                    val newSet = savedCreators.toMutableSet()
+                                                    if (newIsSaved) {
+                                                        newSet.add(current.creator)
+                                                        WepWawetLogger.workshop("creator_saved",
+                                                            "creator" to current.creator,
+                                                            "creator_name" to creatorName)
+                                                    } else {
+                                                        newSet.remove(current.creator)
+                                                        WepWawetLogger.workshop("creator_unsaved",
+                                                            "creator" to current.creator,
+                                                            "creator_name" to creatorName)
+                                                    }
+                                                    prefs.edit().putStringSet("saved_creators", newSet).apply()
+                                                    savedCreators = newSet
+                                                    val snackbarMessage = if (newIsSaved) {
+                                                        "favorited $creatorName"
+                                                    } else {
+                                                        "unfavorited $creatorName"
+                                                    }
+                                                    snackbarScope.launch {
+                                                        snackbarHostState.showSnackbar(
+                                                            message = snackbarMessage,
+                                                            duration = SnackbarDuration.Short,
+                                                        )
+                                                    }
+                                                },
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Icon(
+                                                if (isSaved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                                                contentDescription = if (isSaved) "Unsave creator" else "Save creator",
+                                                tint = if (isSaved) Color.Red else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(28.dp),
+                                            )
+                                        }
+                             pWarn("WallpaperDetailScreen: item not found",
                     "id" to itemId)
             }
         } catch (e: Exception) {
