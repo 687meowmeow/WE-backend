@@ -104,7 +104,7 @@ class WePairingServer {
     private var currentPin: String = ""
     private var currentAesKey: SecretKey? = null
     private var currentIv: IvParameterSpec? = null
-    private var currentClient: Socket? = null
+    @Volatile private var currentClient: Socket? = null
 
     // Callbacks
     var onPinRequested: (() -> String)? = null
@@ -114,9 +114,40 @@ class WePairingServer {
     var onConnected: (() -> Unit)? = null  // called when command loop starts
 
     /**
+     * v0.7.1 (round 6 — pairing persistence): invoked after the command
+     * loop returns (i.e. when the phone disconnects, the socket closes,
+     * or the loop throws), but ONLY when the disconnecting client is the
+     * CURRENT client (i.e. the most recent pairing). The callback lets
+     * [PairingService] clear its `pairedDeviceName` static state and
+     * update the foreground notification so the UI shows "Paired: "
+     * only while a phone is actually connected — not stale-forever after
+     * the phone closes the app.
+     *
+     * The check `currentClient === client` is essential — if a NEW phone
+     * paired (replacing an old connection), we don't want to clear state
+     * for the NEW phone just because the OLD connection's command loop
+     * finally returned.
+     */
+    var onDisconnected: (() -> Unit)? = null
+
+    /**
+     * Whether the pairing server is currently running (between [start]
+     * and [stop]). Exposed so [PairingService] can decide whether to
+     * fully restart vs. just restart the discovery broadcaster when
+     * onStartCommand is called repeatedly.
+     */
+    val isRunning: Boolean get() = running
+
+    /**
      * Generate an RSA keypair for pairing.
      * The public key will be sent to the phone during pairing.
      * The private key is used to decrypt the phone's AES key.
+     *
+     * v0.7.1 (round 6): this method is now INTERNAL — callers should
+     * pass a persistent [KeyPair] (from [PairingIdentity.loadOrCreateKeyPair])
+     * into [start] instead of letting the server generate a fresh one
+     * on every restart. Kept for backward compatibility / fallback if
+     * no keypair is supplied.
      */
     fun generateRsaKeyPair(): KeyPair {
         WepWawetLogger.proxy("Generating RSA keypair ($RSA_KEY_SIZE bits)")
@@ -137,6 +168,11 @@ class WePairingServer {
     /**
      * Get the RSA public key as BigInteger components.
      * These are sent to the phone during pairing.
+     *
+     * v0.7.1 (round 6): if [rsaKeyPair] is null (no keypair was supplied
+     * to [start] AND generateRsaKeyPair() hasn't been called yet), this
+     * will lazily generate one — but callers should always pass a
+     * persistent keypair from [PairingIdentity.loadOrCreateKeyPair].
      */
     fun getRsaPublicKeyComponents(): Pair<BigInteger, BigInteger> {
         val keyPair = rsaKeyPair ?: generateRsaKeyPair()
@@ -147,8 +183,24 @@ class WePairingServer {
     /**
      * Start the pairing server.
      * Listens on TCP 7889 for incoming connections from the WE Android app.
+     *
+     * v0.7.1 (round 6 — pairing persistence): the [keyPair] parameter is
+     * OPTIONAL but should be supplied from [PairingIdentity.loadOrCreateKeyPair]
+     * so the same RSA public key is presented to the phone across app
+     * restarts/updates — otherwise the phone sees a brand-new computer
+     * (different RSA pubkey = different "computer identity" in the
+     * phone's pairing DB) and re-prompts for PIN even though the user
+     * already paired.
+     *
+     * v0.7.1 (round 6): the ServerSocket now sets `reuseAddress = true`
+     * AND retries the TCP 7889 bind up to 5 times (1s apart) on
+     * [java.net.BindException]. The retry handles the case where a
+     * previous service instance's socket is in TIME_WAIT (Android's
+     * default 2MSL is 60s on TCP 7889) — without retry, the new
+     * foreground service would fail to bind and the user couldn't pair
+     * for up to a minute after force-stopping the app.
      */
-    fun start(pin: String) {
+    fun start(pin: String, keyPair: KeyPair? = null) {
         if (running) {
             WepWawetLogger.proxyWarn("Pairing server already running")
             return
@@ -156,21 +208,55 @@ class WePairingServer {
         running = true
         currentPin = pin
 
-        // Generate RSA keypair
-        generateRsaKeyPair()
+        // Use the supplied keypair (persistent from PairingIdentity) if
+        // provided; otherwise generate a fresh one (this is the fallback
+        // for backward compatibility — callers SHOULD always supply one).
+        rsaKeyPair = keyPair ?: generateRsaKeyPair()
 
         WepWawetLogger.proxy("Pairing server starting",
             "port" to TCP_PORT,
             "pin" to pin,
-            "rsa_key_size" to RSA_KEY_SIZE)
+            "rsa_key_size" to RSA_KEY_SIZE,
+            "rsa_keypair_source" to if (keyPair != null) "external (persistent)" else "generated (ephemeral)")
 
         thread(start = true, name = "wep-pairing-server", isDaemon = true) {
             try {
-                serverSocket = ServerSocket().apply {
-                    bind(java.net.InetSocketAddress(TCP_PORT))
-                    soTimeout = 0  // block forever
+                // v0.7.1 (round 6): retry the bind on BindException up to
+                // 5 times, 1s apart. Android's TCP stack keeps a closed
+                // socket in TIME_WAIT for up to 60s (2*MSL); without retry,
+                // a fresh foreground service instance started within 60s
+                // of the previous one stopping would fail to bind and
+                // the user couldn't pair until the OS released the port.
+                var boundSocket: ServerSocket? = null
+                var bindAttempts = 0
+                val maxBindAttempts = 5
+                while (boundSocket == null && bindAttempts < maxBindAttempts) {
+                    bindAttempts++
+                    try {
+                        boundSocket = ServerSocket().apply {
+                            // reuseAddress allows rebinding a port that's
+                            // still in TIME_WAIT — this is critical for
+                            // foreground-service restarts.
+                            reuseAddress = true
+                            bind(java.net.InetSocketAddress(TCP_PORT))
+                            soTimeout = 0  // block forever
+                        }
+                    } catch (b: java.net.BindException) {
+                        if (bindAttempts >= maxBindAttempts) {
+                            throw b
+                        }
+                        WepWawetLogger.proxyWarn("Pairing server bind failed — retrying",
+                            "port" to TCP_PORT,
+                            "attempt" to bindAttempts,
+                            "max" to maxBindAttempts,
+                            "exception" to b.javaClass.name,
+                            "message" to (b.message ?: ""))
+                        Thread.sleep(1000)
+                    }
                 }
-                WepWawetLogger.proxy("Pairing server listening on TCP $TCP_PORT")
+                serverSocket = boundSocket
+                WepWawetLogger.proxy("Pairing server listening on TCP $TCP_PORT",
+                    "bind_attempts" to bindAttempts)
 
                 while (running) {
                     val client = serverSocket?.accept() ?: break
@@ -518,6 +604,22 @@ class WePairingServer {
 
                 // Step 8: Pairing successful!
                 pairingSuccess = true
+                // v0.7.1 (round 6 — pairing persistence): close any older
+                // currentClient that isn't this one BEFORE assigning the
+                // new client. If a previous phone session is still hanging
+                // around (e.g. the phone's TCP keepalive hasn't detected the
+                // disconnect yet), this forcibly closes the old socket so
+                // the old connection's command loop returns and its thread
+                // exits — preventing a stale-forever "paired" state in the
+                // UI when the user re-pairs with a different phone or
+                // reconnects after a long network dropout.
+                val older = currentClient
+                if (older != null && older !== client) {
+                    WepWawetLogger.proxyWarn("Pairing: closing older currentClient before assigning new one",
+                        "older_remote" to (older.remoteSocketAddress?.toString() ?: "unknown"),
+                        "new_remote" to (client.remoteSocketAddress.toString()))
+                    runCatching { older.close() }
+                }
                 currentClient = client
                 it.soTimeout = 0  // Remove timeout for command loop
 
@@ -529,8 +631,23 @@ class WePairingServer {
                     "display" to "${authReq.displayWidth}x${authReq.displayHeight}")
                 onPairingSuccess?.invoke(deviceName)
 
-                // Step 9: Enter command loop (handle subsequent commands)
+                // Step 9: Enter command loop (handle subsequent commands).
+                // When commandLoop returns (phone disconnected, socket
+                // closed, or loop threw), invoke onDisconnected ONLY if
+                // currentClient === client (i.e. this disconnecting client
+                // is still the most recent one). If a NEW phone has already
+                // paired (currentClient points to a different socket), we
+                // do NOT clear state for the new phone.
                 commandLoop(input, output)
+                if (currentClient === client) {
+                    currentClient = null
+                    currentAesKey = null
+                    currentIv = null
+                    WepWawetLogger.proxy("Pairing: current client disconnected — invoking onDisconnected")
+                    onDisconnected?.invoke()
+                } else {
+                    WepWawetLogger.proxy("Pairing: client disconnected but newer client already paired — leaving state intact")
+                }
 
             }
         } catch (e: Exception) {
@@ -540,6 +657,19 @@ class WePairingServer {
                 exception = e)
             if (!pairingSuccess) {
                 onPairingFailure?.invoke(e.message ?: "Connection error")
+            }
+            // v0.7.1 (round 6): even on exception, if the disconnecting
+            // client is still the current one, clear state + invoke the
+            // onDisconnected callback so the UI notification is updated
+            // (was stuck showing "Paired: OnePlus 15" forever after a
+            // connection error from the previous pairing).
+            if (currentClient === client) {
+                currentClient = null
+                currentAesKey = null
+                currentIv = null
+                WepWawetLogger.proxy("Pairing: current client errored out — invoking onDisconnected",
+                    "exception" to e.javaClass.name)
+                onDisconnected?.invoke()
             }
         }
     }

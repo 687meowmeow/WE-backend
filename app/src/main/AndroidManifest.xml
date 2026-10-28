@@ -27,6 +27,17 @@
     <!-- Multicast lock for UDP 7884 + 239.100.0.1 (if user enables mDNS discovery fallback) -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
+    <!-- v0.7.1 (round 6 — pairing persistence): RECEIVE_BOOT_COMPLETED so the
+         BootReceiver can auto-start the pairing foreground service after a
+         device reboot or after an app update. Without this, the pairing
+         service wouldn't be running until the user manually opened the app,
+         so the phone couldn't pair with the computer after a reboot.
+         Android EXEMPTS BOOT_COMPLETED + MY_PACKAGE_REPLACED from the
+         Android 12+ background-foreground-service-start restriction, and
+         our `specialUse` foreground service type is NOT in the Android 15+
+         restricted-types list — so the receiver can start our service. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <!-- Notification permission (Android 13+) for the foreground service sticky notification -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
@@ -115,6 +126,13 @@
             Per Android docs: "For long-running services, use the specialUse
             foreground service type" — exactly our case (a TCP server that
             the WE Android app connects to for wallpaper pairing/transfer).
+
+            v0.7.1 (round 6): `specialUse` is NOT in the Android 15+
+            restricted-types list (dataSync, camera, mediaPlayback,
+            phoneCall, microphone) — so BOOT_COMPLETED can still start
+            this service on Android 15+. Combined with the new
+            BootReceiver + RECEIVE_BOOT_COMPLETED permission, the pairing
+            service now auto-restarts after a device reboot or app update.
         -->
         <service
             android:name=".pairing.PairingService"
@@ -125,6 +143,32 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Runs a Wallpaper Engine pairing proxy (UDP 7884 discovery + TCP 7889 RSA/AES handshake + .mpkg wallpaper transfer) so the official Wallpaper Engine Android app can pair with this device and receive wallpapers." />
         </service>
+
+        <!--
+            v0.7.1 (round 6 — pairing persistence): BootReceiver — auto-restart
+            the pairing foreground service after a device reboot or after an
+            app update.
+
+            Android EXEMPTS BOOT_COMPLETED + MY_PACKAGE_REPLACED from the
+            Android 12+ background-foreground-service-start restriction.
+            Combined with the `specialUse` foreground service type (which
+            is NOT in the Android 15+ restricted-types list), this receiver
+            can start the PairingService even on the latest Android.
+
+            exported="true" is REQUIRED for system-broadcast receivers —
+            the system delivers BOOT_COMPLETED/MY_PACKAGE_REPLACED via
+            the package's exported receiver entry. (Android 12+ requires
+            `android:exported` to be explicitly set on all components with
+            intent filters.)
+        -->
+        <receiver
+            android:name=".pairing.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- ====== FileProvider — expose the .mpkg outbox so the official WE app could read it if it needs to ====== -->
         <provider

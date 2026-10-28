@@ -3436,13 +3436,36 @@ object MpkgPacker {
             // 3. For pure HLSL files (no .vert/.frag extension), the regex path can't help
             //    (it doesn't do HLSL→GLSL syntax conversion), so the native path is the only option.
             if (ShaderTranscoder.isAvailable()) {
+                // v0.7.1 (round 6 — xray STILL gray): the original
+                // `(contains("mul(") && !contains("mix("))` guard was
+                // WRONG — a shader can use BOTH HLSL `mul()` (matrix mult,
+                // needs conversion to `(a * b)`) AND native GLSL `mix()`
+                // (linear interpolation, no conversion needed) at the
+                // same time. xray.vert is exactly this case:
+                //   line 28: gl_Position = mul(vec4(a_Position, 1.0),
+                //                            g_ModelViewProjectionMatrix);
+                //   line 40: v_PointerUV.xyz = mul(vec4(...),
+                //                            g_EffectTextureProjectionMatrixInverse).xyw;
+                //   line 43: v_PointerScale = mix(999.0, 1.0/g_PointerScale,
+                //                            step(0.001, g_PointerScale));
+                // The previous guard evaluated to (true && !true) = false,
+                // so PHASE 0 didn't detect xray.vert as HLSL → native
+                // transcode not attempted → PHASE 0.5 also skipped (same
+                // broken guard) → `mul()` calls left unconverted → shader
+                // failed to compile on WE Android → wallpaper rendered as
+                // gray "invalid image".
+                //
+                // Fix: just check `contains("mul(")` directly. The token
+                // is HLSL-specific (GLSL uses `*` for matrix mult) — if
+                // the shader has `mul(`, it has HLSL syntax that needs
+                // conversion, regardless of whether it ALSO has `mix(`.
                 val isHlsl = name.endsWith(".hlsl", ignoreCase = true) ||
                     modified.contains("cbuffer ") ||
                     modified.contains("SamplerState ") ||
                     modified.contains("Texture2D ") ||
                     modified.contains("saturate(") ||
                     modified.contains("lerp(") ||
-                    (modified.contains("mul(") && !modified.contains("mix("))
+                    modified.contains("mul(")
                 if (isHlsl) {
                     val stage = if (name.endsWith(".vert", ignoreCase = true) ||
                                     name.endsWith("_vs", ignoreCase = true) ||
@@ -3523,7 +3546,7 @@ object MpkgPacker {
                 modified.contains("Texture2D ") ||
                 modified.contains("saturate(") ||
                 modified.contains("lerp(") ||
-                (modified.contains("mul(") && !modified.contains("mix("))
+                modified.contains("mul(")
             if (!ShaderTranscoder.isAvailable() || hasHlslSyntax) {
                 // cbuffer Name { ... } → uniform Name { ... };
                 val beforeHlsl = modified.length

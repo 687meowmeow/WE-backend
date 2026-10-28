@@ -209,6 +209,18 @@ class PairingService : Service() {
     private var pairingServerLocal: WePairingServer? = null
     private var discoveryBroadcaster: WeDiscoveryBroadcaster? = null
 
+    /**
+     * v0.7.1 (round 6 — pairing persistence): tracks the PIN the currently-
+     * running server was started with, so we can detect "PIN unchanged →
+     * don't restart the live pairing session" in [onStartCommand].
+     *
+     * Set in onStartCommand after [start] succeeds; cleared in [stopServers].
+     * Compared to the new PIN passed in via the start intent — if they match
+     * AND the server is still running, we know the user hasn't changed the
+     * PIN and we can avoid killing the live phone connection.
+     */
+    private var runningPin: String? = null
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -261,32 +273,117 @@ class PairingService : Service() {
         val pin = intent?.getStringExtra(EXTRA_PIN) ?: getPairingPin(this)
         WepWawetLogger.proxy("Starting pairing servers", "pin" to pin)
 
-        // Start as foreground service immediately (Android 12+ requirement).
-        // Use FOREGROUND_SERVICE_TYPE_SPECIAL_USE because:
-        //   1. The pairing proxy is a long-running TCP server, not a short
-        //      data sync operation (dataSync would time out on Android 14+)
-        //   2. The manifest declares foregroundServiceType="specialUse"
-        //      with a property explaining the use case
-        //   3. Android docs explicitly recommend specialUse for long-running
-        //      foreground services
+        // v0.7.1 (round 6 — pairing persistence): SMART RESTART.
         //
-        // v0.5.32 (audit H5): Surface the auto-start PIN in the foreground
-        // notification text so the user can see it WITHOUT first opening
-        // the WepWawet Pairing tab. Previously the notification said just
-        // "WepWawet pairing proxy running" with no PIN — if the user
-        // opened the WE Android app's "Pair with Computer" screen BEFORE
-        // opening WepWawet's Pairing tab, they'd have to guess "1234".
-        // The notification now reads "WepWawet proxy running. PIN: <pin>".
-        val notification = createNotification("WepWawet proxy running. PIN: $pin")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        // PROBLEM: onStartCommand was called from MainActivity.onCreate,
+        // every PairingScreen appearance, and every PIN change. The old
+        // implementation ALWAYS called stopServers() and rebuilt the
+        // pairing server stack — killing the live TCP connection to the
+        // phone, clearing pairedDeviceName, and forcing the user to
+        // re-pair on every screen entry. The comment in PairingScreen
+        // claiming onStartCommand was a no-op when already running was
+        // FALSE.
+        //
+        // FIX: if the pairing server is already running AND the PIN
+        // matches the running PIN, we DO NOT tear down the live phone
+        // connection. We only check if the discovery broadcaster died
+        // (e.g. its thread crashed silently) and restart JUST that
+        // component. Otherwise we return START_STICKY immediately,
+        // leaving the live pairing session intact.
+        val existingServer = pairingServerLocal
+        val existingBroadcaster = discoveryBroadcaster
+        if (existingServer != null && existingServer.isRunning && runningPin == pin) {
+            // Server is alive + PIN unchanged — don't kill the phone session.
+            WepWawetLogger.proxy("PairingService: server already running with same PIN — keeping live session",
+                "pin" to pin,
+                "broadcaster_alive" to (existingBroadcaster?.isRunning ?: false))
+
+            // v0.7.1 (round 6): notification text should show "Paired: <name>"
+            // if already paired. This handles the case where MainActivity
+            // re-issues onStartCommand after the user already paired — the
+            // notification should reflect the actual paired state, not the
+            // generic "proxy running" text.
+            val persistedName = loadPairedDevice(applicationContext)
+            val displayName = pairedDeviceName ?: persistedName
+            val notifText = if (!displayName.isNullOrBlank()) {
+                "Paired: $displayName"
+            } else {
+                "WepWawet proxy running. PIN: $pin"
+            }
+            updateNotification(notifText)
+
+            // Only restart the discovery broadcaster if it died (its
+            // thread crashed silently). We pass the persistent GUID so
+            // the phone sees the SAME computer.
+            if (existingBroadcaster == null || !existingBroadcaster.isRunning) {
+                WepWawetLogger.proxy("Discovery broadcaster died — restarting it (server kept alive)")
+                try {
+                    val guid = PairingIdentity.getGuid(applicationContext)
+                    val broadcaster = WeDiscoveryBroadcaster(this)
+                    broadcaster.start(guid = guid)
+                    discoveryBroadcaster = broadcaster
+                } catch (e: Exception) {
+                    WepWawetLogger.proxyError("Failed to restart discovery broadcaster",
+                        "exception" to e.javaClass.name,
+                        "message" to (e.message ?: ""))
+                }
+            }
+            return START_STICKY
         }
 
-        // Stop any existing servers
+        // PIN changed OR server isn't running — do the full (re)start.
+        WepWawetLogger.proxy("PairingService: full (re)start — server down or PIN changed",
+            "server_running" to (existingServer?.isRunning ?: false),
+            "running_pin_matches" to (runningPin == pin))
+
+        // v0.7.1 (round 6): notification text shows "Paired: <name>" if
+        // we have a persisted paired-device name (so the foreground
+        // notification reflects the previously-paired state during the
+        // brief window before the phone reconnects).
+        val persistedName = loadPairedDevice(applicationContext)
+        val initialNotifText = if (!persistedName.isNullOrBlank()) {
+            "Paired: $persistedName"
+        } else {
+            "WepWawet proxy running. PIN: $pin"
+        }
+        val notification = createNotification(initialNotifText)
+
+        // v0.7.1 (round 6): wrap startForeground in try/catch — on
+        // Android 12+ (API 31+) a background restart (e.g. from
+        // BootReceiver if the user has just rebooted and the app isn't
+        // yet in the foreground) throws
+        // ForegroundServiceStartNotAllowedException. We catch it, log
+        // the issue, and return START_STICKY anyway — Android will
+        // retry the service start later when the user opens the app
+        // (which puts us in the foreground and lets startForeground
+        // succeed). The previous code would CRASH, killing the
+        // foreground service permanently until the user manually
+        // re-launched the app.
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICATION_ID, notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            // ForegroundServiceStartNotAllowedException on Android 12+ when
+            // the service is started from the background (e.g. from
+            // BootReceiver just after a reboot, before the user opens
+            // the app). We log instead of crashing.
+            val excName = e.javaClass.name
+            WepWawetLogger.proxyError("startForeground failed — service start deferred until app foreground",
+                "exception" to excName,
+                "message" to (e.message ?: ""))
+            return START_STICKY
+        }
+
+        // Stop any existing servers (PIN changed or first start)
         stopServers()
+
+        // v0.7.1 (round 6): load the PERSISTENT RSA keypair so the
+        // phone sees the same computer across app restarts/updates.
+        val persistentKeyPair = PairingIdentity.loadOrCreateKeyPair(applicationContext)
 
         // Start the pairing server (TCP 7889)
         try {
@@ -307,10 +404,29 @@ class PairingService : Service() {
                     pairedDeviceName = null
                     WepWawetLogger.proxyError("Pairing FAILED", "error" to error)
                 }
-                server.start(pin)
+                // v0.7.1 (round 6): clear pairedDeviceName + update the
+                // notification when the phone disconnects. The persisted
+                // paired-device name in SharedPreferences is KEPT (so
+                // the UI can still show "previously paired with X" and
+                // the phone can reconnect without re-PIN-prompting, since
+                // the phone's pairing DB is keyed by the persistent GUID
+                // + RSA pubkey — both stable across app restarts).
+                server.onDisconnected = {
+                    pairedDeviceName = null
+                    val pinForNotif = runningPin ?: getPairingPin(applicationContext)
+                    updateNotification("WepWawet proxy running. PIN: $pinForNotif")
+                    WepWawetLogger.proxy("Pairing: phone disconnected — UI reverted to 'not paired' (persisted name kept)")
+                }
+                // v0.7.1 (round 6): pass the persistent keypair so the
+                // phone sees the same RSA pubkey across restarts.
+                server.start(pin, persistentKeyPair)
                 // Expose via companion
                 pairingServer = server
             }
+            // v0.7.1 (round 6): record the PIN we started with so the
+            // next onStartCommand can detect "PIN unchanged → don't
+            // tear down the live session".
+            runningPin = pin
         } catch (e: Exception) {
             WepWawetLogger.proxyError("Failed to start pairing server",
                 "exception" to e.javaClass.name, "message" to (e.message ?: ""))
@@ -318,8 +434,11 @@ class PairingService : Service() {
 
         // Start the discovery broadcaster (UDP 7884)
         try {
+            // v0.7.1 (round 6): pass the persistent GUID so the phone
+            // sees the same computer across restarts.
+            val guid = PairingIdentity.getGuid(applicationContext)
             discoveryBroadcaster = WeDiscoveryBroadcaster(this).also { broadcaster ->
-                broadcaster.start()
+                broadcaster.start(guid = guid)
             }
         } catch (e: Exception) {
             WepWawetLogger.proxyError("Failed to start discovery broadcaster",
@@ -345,6 +464,14 @@ class PairingService : Service() {
         pairingServerLocal = null
         pairingServer = null
         pairedDeviceName = null
+        // v0.7.1 (round 6): clear the running PIN so the next onStartCommand
+        // does a full restart instead of being short-circuited by a stale
+        // runningPin match. We deliberately do NOT clear the persisted
+        // paired-device name in SharedPreferences here — that's preserved
+        // across service restarts so the phone can reconnect without
+        // re-PIN-prompting (the phone's pairing DB is keyed by the
+        // persistent GUID + RSA pubkey).
+        runningPin = null
 
         try {
             discoveryBroadcaster?.stop()

@@ -331,15 +331,27 @@ fun WallpaperDetailScreen(
                                     // line (20dp), but the heart itself is drawn bigger
                                     // via requiredSize, so it overflows the slot instead
                                     // of growing the row. Nothing above/below moves.
+                                    //
+                                    // v0.7.1 (round 6 — TASK 2): shrink heart icon
+                                    // per user request:
+                                    //   - Icon size: 28dp → 20dp
+                                    //   - Inner tap Box requiredSize: 36dp → 32dp
+                                    //   - Slot width: 36dp → 30dp
+                                    //   - Slot height stays 20dp (unchanged)
+                                    // The structure (slot Box + inner tap Box with
+                                    // requiredSize that overflows + Icon centered) is
+                                    // preserved exactly — only the sizes change.
+                                    // The Creator row stays exactly as tall as the
+                                    // other MetadataRow rows (~20dp text line height).
                                     Box(
                                         modifier = Modifier
-                                            .width(36.dp)
+                                            .width(30.dp)
                                             .height(20.dp),
                                         contentAlignment = Alignment.Center,
                                     ) {
                                         Box(
                                             modifier = Modifier
-                                                .requiredSize(36.dp)
+                                                .requiredSize(32.dp)
                                                 .clip(CircleShape)
                                                 .clickable {
                                                     val newIsSaved = !isSaved
@@ -375,7 +387,7 @@ fun WallpaperDetailScreen(
                                                 if (isSaved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
                                                 contentDescription = if (isSaved) "Unsave creator" else "Save creator",
                                                 tint = if (isSaved) Color.Red else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.size(28.dp),
+                                                modifier = Modifier.size(20.dp),
                                             )
                                         }
                                     }

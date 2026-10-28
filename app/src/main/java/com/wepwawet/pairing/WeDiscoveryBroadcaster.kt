@@ -42,19 +42,50 @@ class WeDiscoveryBroadcaster(private val context: Context) {
     @Volatile private var running = false
     private var broadcastThread: Thread? = null
 
-    fun start(hostname: String = "WepWawet") {
+    /**
+     * Whether the broadcaster is currently running (between [start] and [stop]).
+     *
+     * v0.7.1 (round 6 — pairing persistence): exposed so [PairingService]
+     * can decide whether to restart the broadcaster vs. the full server
+     * stack when [PairingService.onStartCommand] is called repeatedly
+     * (e.g. from MainActivity.onCreate + PairingScreen appearance).
+     */
+    val isRunning: Boolean get() = running
+
+    /**
+     * Start broadcasting "WallpaperEngine/Ping" UDP packets on UDP 7884.
+     *
+     * v0.7.1 (round 6 — pairing persistence): the [guid] parameter is
+     * REQUIRED and must come from [PairingIdentity.getGuid] (persistent
+     * across app restarts). Previously this generated a fresh random UUID
+     * on every start, so the phone saw a brand-new computer after every
+     * restart/update and re-prompted for PIN even though the user had
+     * already paired.
+     *
+     * @param hostname the device hostname broadcast in the ping (default "WepWawet").
+     * @param guid the persistent device GUID from [PairingIdentity.getGuid].
+     *   Must be non-blank — passing an empty guid would corrupt the wire
+     *   format ("WallpaperEngine/Ping:07889:WepWawet:4:") and the phone's
+     *   DiscoverService would discard the packet.
+     */
+    fun start(hostname: String = "WepWawet", guid: String) {
+        require(guid.isNotBlank()) {
+            "WeDiscoveryBroadcaster.start: guid must not be blank — pass PairingIdentity.getGuid(context)"
+        }
         if (running) {
-            WepWawetLogger.proxyWarn("Discovery broadcaster already running")
+            WepWawetLogger.proxyWarn("Discovery broadcaster already running",
+                "guid" to guid)
             return
         }
         running = true
         WepWawetLogger.proxy("Discovery broadcaster starting",
             "hostname" to hostname,
+            "guid" to guid,
             "udp_port" to UDP_PORT,
             "multicast_group" to MULTICAST_GROUP)
 
         broadcastThread = thread(start = true, name = "wep-discovery-bcast", isDaemon = true) {
-            broadcastLoop(hostname)
+            broadcastLoop(hostname, guid)
         }
     }
 
@@ -68,7 +99,7 @@ class WeDiscoveryBroadcaster(private val context: Context) {
         WepWawetLogger.proxy("Discovery broadcaster stopped")
     }
 
-    private fun broadcastLoop(hostname: String) {
+    private fun broadcastLoop(hostname: String, guid: String) {
         try {
             // Acquire multicast lock so the kernel doesn't drop multicast packets
             acquireMulticastLock()
@@ -87,7 +118,13 @@ class WeDiscoveryBroadcaster(private val context: Context) {
             //   parts[4] = deviceGuid (UUID string)
             // Real PC sends: "WallpaperEngine/Ping:07889:LAPTOP-NAME:4:5FB2F0F0-..."
             // Our previous code sent ":1:" for protocolVersion → phone showed "different version" error!
-            val guid = java.util.UUID.randomUUID().toString().uppercase()
+            //
+            // v0.7.1 (round 6): the guid is now passed in from
+            // [PairingIdentity.getGuid] (persistent across app restarts)
+            // — NO MORE `java.util.UUID.randomUUID().toString().uppercase()`
+            // here. The phone's pairing database is keyed by this GUID, so
+            // a stable GUID means the phone recognizes this computer after
+            // restarts/updates and doesn't re-prompt for PIN.
             val payload = "WallpaperEngine/Ping:07889:$hostname:4:$guid"
             val bytes = payload.toByteArray(Charsets.US_ASCII)
 

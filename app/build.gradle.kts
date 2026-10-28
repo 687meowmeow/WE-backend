@@ -80,7 +80,67 @@ android {
         //         with Modifier.size(36.dp) override. IconButton's
         //         minimumInteractiveComponentSize() adds INVISIBLE padding
         //         OUTSIDE the visual bounds — doesn't make the row taller.
-        versionCode = 88
+        // v0.7.1-alpha build 89: PAIRING PERSISTENCE + XRAY STILL GRAY + HEART SMALLER.
+        //   1. PAIRING PERSISTENCE — PairingIdentity.kt (new object):
+        //      persistent GUID + RSA keypair in SharedPreferences. Was
+        //      previously generating fresh GUID + RSA on every service
+        //      restart → phone saw brand-new computer after every app
+        //      launch/update and re-prompted for PIN. Now identity is
+        //      stable across restarts/updates — the phone recognizes
+        //      the same computer.
+        //      WeDiscoveryBroadcaster.start(hostname, guid) — accepts
+        //      persistent guid (was randomUUID()).
+        //      WePairingServer.start(pin, keyPair?) — accepts a KeyPair
+        //      (was always generating fresh); also adds reuseAddress +
+        //      5x1s BindException retry for foreground-service restarts;
+        //      onDisconnected callback fires after commandLoop returns
+        //      ONLY IF currentClient === client (so newer pairings
+        //      aren't cleared by older disconnect events).
+        //      PairingService.onStartCommand — SMART RESTART: if the
+        //      server is already running with the SAME PIN (e.g.
+        //      MainActivity.onCreate + PairingScreen appearance),
+        //      DON'T tear down the live phone connection — only restart
+        //      the discovery broadcaster if it died. Full (re)start
+        //      only on PIN change or first start. Pass persistent
+        //      keypair from PairingIdentity. Wrap startForeground in
+        //      try/catch (ForegroundServiceStartNotAllowedException on
+        //      background restarts) and log instead of crashing.
+        //      Notification text shows "Paired: <name>" if already
+        //      paired (was always showing "WepWawet proxy running").
+        //      onDisconnected clears pairedDeviceName + updates the
+        //      notification to "WepWawet proxy running. PIN: <pin>"
+        //      (persisted name in SharedPreferences is KEPT so the
+        //      phone can reconnect without re-PIN-prompting).
+        //   2. BootReceiver.kt (new BroadcastReceiver): listens for
+        //      BOOT_COMPLETED + MY_PACKAGE_REPLACED, sets
+        //      PairingService.appContext, calls PairingService.start.
+        //      Combined with the RECEIVE_BOOT_COMPLETED permission and
+        //      the `specialUse` foreground service type (NOT in the
+        //      Android 15+ restricted-types list), the pairing service
+        //      now auto-restarts after device reboot or app update.
+        //   3. XRAY STILL GRAY — the round 5 fix only worked for
+        //      xray.frag (has saturate but no mix). xray.vert has BOTH
+        //      `mul()` (HLSL matrix mult — needs conversion) AND
+        //      `mix()` (native GLSL lerp — no conversion needed).
+        //      The old guard `(contains("mul(") && !contains("mix("))`
+        //      evaluated to (true && !true) = false → PHASE 0 didn't
+        //      detect xray.vert as HLSL → PHASE 0.5 also skipped →
+        //      `mul(vec4(...), matrix)` calls left unconverted →
+        //      shader failed to compile → gray "invalid image".
+        //      Fix: remove the `!contains("mix(")` guard in BOTH
+        //      PHASE 0 (isHlsl) and PHASE 0.5 (hasHlslSyntax). Just
+        //      check `contains("mul(")` directly — the token is
+        //      HLSL-specific, so a shader with `mul(` has HLSL syntax
+        //      that needs conversion regardless of whether it also
+        //      has `mix(`.
+        //   4. HEART SMALLER (TASK 2): shrink heart icon per user
+        //      request — Icon 28dp→20dp, inner tap Box requiredSize
+        //      36dp→32dp, slot width 36dp→30dp, slot height stays 20dp.
+        //      The structure (slot Box + inner tap Box with requiredSize
+        //      that overflows + Icon centered) is preserved exactly —
+        //      only the sizes change. Creator row stays exactly as
+        //      tall as the other MetadataRow rows.
+        versionCode = 89
         versionName = "0.7.1-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {
