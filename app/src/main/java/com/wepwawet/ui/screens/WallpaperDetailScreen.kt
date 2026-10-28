@@ -71,8 +71,9 @@ import com.wepwawet.pairing.PairingService
  *   - The send-to-phone + debug download buttons were moved ABOVE the
  *     description so the user doesn't have to scroll past the (often very
  *     long) workshop description to reach the action buttons.
- *   - The favorite-heart IconButton on the Creator row was shrunk (icon
- *     16dp, IconButton 28dp) so it no longer visually dominates the row.
+ *   - The favorite-heart on the Creator row was replaced with a plain
+ *     clickable Icon (16dp) so it no longer visually dominates the row
+ *     and no longer displaces the creator-name text.
  *
  * Shows:
  *   - Square preview image (1:1)
@@ -295,39 +296,44 @@ fun WallpaperDetailScreen(
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f))
-                                    // v0.7.0: Save creator button
+                                    // v0.7.0: Save creator button.
+                                    // v0.7.1: Replaced the IconButton wrapper
+                                    // with a plain clickable Icon — the
+                                    // IconButton's 48dp minimum touch target
+                                    // visually dominated the Creator row (even
+                                    // shrunk to 24dp it displaced the text).
+                                    // The icon is now 16dp and uses clickable
+                                    // {} directly so it never affects text
+                                    // layout. State is held in a
+                                    // mutableStateOf (with `by` delegate) so
+                                    // toggling the saved state recomposes the
+                                    // row + immediately flips the heart to
+                                    // red / outline.
                                     val context = LocalContext.current
                                     val prefs = remember { context.getSharedPreferences("wepwawet_settings", Context.MODE_PRIVATE) }
-                                    val savedCreators = remember { prefs.getStringSet("saved_creators", emptySet()) ?: emptySet() }
-                                    val isSaved = current.creator in savedCreators
-                                    // v0.7.1: Smaller favorite heart — icon is
-                                    // 16dp (down from 20dp) and the IconButton
-                                    // itself is shrunk to 24dp (down from the
-                                    // Material3 default of 48dp) so the heart
-                                    // doesn't visually dominate the Creator row.
-                                    // Text now takes Modifier.weight(1f) so the
-                                    // heart doesn't displace the creator name.
-                                    IconButton(
-                                        onClick = {
-                                            val newSet = savedCreators.toMutableSet()
-                                            if (isSaved) {
-                                                newSet.remove(current.creator)
-                                                WepWawetLogger.workshop("creator_unsaved", "creator" to current.creator)
-                                            } else {
-                                                newSet.add(current.creator)
-                                                WepWawetLogger.workshop("creator_saved", "creator" to current.creator)
-                                            }
-                                            prefs.edit().putStringSet("saved_creators", newSet).apply()
-                                        },
-                                        modifier = Modifier.size(24.dp),
-                                    ) {
-                                        Icon(
-                                            if (isSaved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                                            contentDescription = if (isSaved) "Unsave creator" else "Save creator",
-                                            tint = if (isSaved) Color.Red else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(16.dp),
-                                        )
+                                    var savedCreators by remember {
+                                        mutableStateOf(prefs.getStringSet("saved_creators", emptySet()) ?: emptySet())
                                     }
+                                    val isSaved = current.creator in savedCreators
+                                    Icon(
+                                        if (isSaved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                                        contentDescription = if (isSaved) "Unsave creator" else "Save creator",
+                                        tint = if (isSaved) Color.Red else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .clickable {
+                                                val newSet = savedCreators.toMutableSet()
+                                                if (isSaved) {
+                                                    newSet.remove(current.creator)
+                                                    WepWawetLogger.workshop("creator_unsaved", "creator" to current.creator)
+                                                } else {
+                                                    newSet.add(current.creator)
+                                                    WepWawetLogger.workshop("creator_saved", "creator" to current.creator)
+                                                }
+                                                prefs.edit().putStringSet("saved_creators", newSet).apply()
+                                                savedCreators = newSet
+                                            },
+                                    )
                                 }
                             }
                         } else {

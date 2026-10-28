@@ -142,8 +142,10 @@ import kotlinx.coroutines.launch
  *
  * State management:
  *   - Any change to sort / mobileCompatible / excludedTags / creatorSteamId
- *     rebuilds the [WorkshopRepository.Filter] and calls
- *     [WorkshopRepository.startBrowse].
+ *     rebuilds the [WorkshopRepository.Filter]. If a search is currently
+ *     active (non-blank query AND not in creator mode), the search is
+ *     RE-RUN with the new filter (preserves the user's query). Otherwise
+ *     the browse session is rebuilt via [WorkshopRepository.startBrowse].
  *   - Typing into the search bar (debounced) calls
  *     [WorkshopRepository.startSearch] if non-blank, else
  *     [WorkshopRepository.clearSearch]. Search is disabled (and the field
@@ -396,6 +398,17 @@ fun WorkshopBrowserScreen(
     // v0.5.14-alpha: Use LaunchedEffect(Unit)+snapshotFlow to avoid
     // cancellation when keys change. Only calls startBrowse when the
     // filter ACTUALLY changes (dedup via lastStartBrowseFilter).
+    //
+    // v0.7.1: When the user changes the sort (or any other filter field)
+    // while a search is active, we now RE-RUN the search with the new
+    // filter instead of wiping the query and switching to browse mode.
+    // The previous behavior (`updateQuery(""); repo.clearSearch();
+    // repo.startBrowse(filter)`) was destructive — the user lost their
+    // search results just because they wanted to change the sort.
+    // Now: if we're in search mode (`query.isNotBlank()` AND not in
+    // creator mode where the search bar is hidden), call
+    // `repo.startSearch(query, filter)` to re-fetch page 1 with the new
+    // filter applied. Otherwise, switch to browse mode as before.
     val lastStartBrowseFilter = remember { androidx.compose.runtime.mutableStateOf<WorkshopRepository.Filter?>(null) }
     LaunchedEffect(Unit) {
         snapshotFlow {
@@ -406,15 +419,34 @@ fun WorkshopBrowserScreen(
             .collect { filter ->
                 if (filter != lastStartBrowseFilter.value) {
                     lastStartBrowseFilter.value = filter
-                    WepWawetLogger.workshop("filter_changed restart_browse",
-                        "sort" to sort.name, "trend_days" to sort.trendDays,
-                        "mobile_compatible" to mobileCompatible,
-                        "excluded_tags_count" to excludedTags.size,
-                        "excluded_tags" to excludedTags.joinToString(","),
-                        "creator_steam_id" to (creatorSteamId ?: "none"),
-                    )
-                    if (query.isNotBlank()) { updateQuery(""); repo.clearSearch() }
-                    repo.startBrowse(filter)
+                    val currentQuery = query  // snapshot the State<String>
+                    if (!isCreatorMode && currentQuery.isNotBlank()) {
+                        // v0.7.1: In search mode — re-run the search with
+                        // the new sort/filter (preserves the user's query).
+                        WepWawetLogger.workshop("filter_changed re-run search",
+                            "query" to currentQuery.take(80),
+                            "sort" to filter.sort.name,
+                            "trend_days" to filter.sort.trendDays,
+                            "mobile_compatible" to filter.mobileCompatible,
+                            "excluded_tags_count" to filter.excludedTags.size,
+                            "excluded_tags" to filter.excludedTags.joinToString(","),
+                            "creator_steam_id" to (creatorSteamId ?: "none"),
+                        )
+                        repo.startSearch(currentQuery, filter)
+                    } else {
+                        WepWawetLogger.workshop("filter_changed restart_browse",
+                            "sort" to sort.name, "trend_days" to sort.trendDays,
+                            "mobile_compatible" to mobileCompatible,
+                            "excluded_tags_count" to excludedTags.size,
+                            "excluded_tags" to excludedTags.joinToString(","),
+                            "creator_steam_id" to (creatorSteamId ?: "none"),
+                        )
+                        if (currentQuery.isNotBlank()) {
+                            updateQuery("")
+                            repo.clearSearch()
+                        }
+                        repo.startBrowse(filter)
+                    }
                 }
             }
     }
@@ -783,17 +815,17 @@ fun WorkshopBrowserScreen(
             }
 
             // === Pagination bar (only when pagination is enabled) ===
-            // v0.7.1: Manual pagination UI — Prev / Page N / Next + a
-            // "Go to" text field. The infinite-scroll LaunchedEffect above
-            // is skipped when paginationEnabled is true, so the only way to
-            // load more pages is via these controls.
+            // v0.7.2: Compact pagination — single row, minimal padding.
             if (paginationEnabled) {
                 val loadedState = browseState as? WorkshopRepository.BrowseState.Loaded
                 val currentPage = loadedState?.page ?: 1
                 val hasMore = loadedState?.hasMore ?: false
                 val isLoading = browseState is WorkshopRepository.BrowseState.Loading
+                var jumpPageText by remember { mutableStateOf("") }
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 2.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -801,28 +833,33 @@ fun WorkshopBrowserScreen(
                     IconButton(
                         onClick = { if (currentPage > 1) scope.launch { repo.loadPage(currentPage - 1) } },
                         enabled = currentPage > 1 && !isLoading,
+                        modifier = Modifier.size(32.dp),
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Previous page")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Previous page",
+                            modifier = Modifier.size(18.dp))
                     }
-                    // Page text
-                    Text("Page $currentPage", style = MaterialTheme.typography.bodyMedium)
+                    Text("Page $currentPage",
+                        style = MaterialTheme.typography.labelMedium)
                     // Next button
                     IconButton(
                         onClick = { if (hasMore) scope.launch { repo.loadPage(currentPage + 1) } },
                         enabled = hasMore && !isLoading,
+                        modifier = Modifier.size(32.dp),
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next page")
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = "Next page",
+                            modifier = Modifier.size(18.dp))
                     }
-                    Spacer(Modifier.width(16.dp))
+                    Spacer(Modifier.width(8.dp))
                     // Jump to page text field
-                    var jumpPageText by remember { mutableStateOf("") }
                     OutlinedTextField(
                         value = jumpPageText,
                         onValueChange = { if (it.all { c -> c.isDigit() }) jumpPageText = it },
-                        placeholder = { Text("Go to") },
+                        placeholder = { Text("Go", style = MaterialTheme.typography.labelSmall) },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.width(80.dp),
+                        modifier = Modifier.width(64.dp),
                         trailingIcon = {
                             IconButton(
                                 onClick = {
@@ -832,7 +869,9 @@ fun WorkshopBrowserScreen(
                                         jumpPageText = ""
                                     }
                                 },
-                            ) { Icon(Icons.Filled.Send, contentDescription = "Go") }
+                                modifier = Modifier.size(24.dp),
+                            ) { Icon(Icons.Filled.Send, contentDescription = "Go",
+                                modifier = Modifier.size(14.dp)) }
                         },
                     )
                 }

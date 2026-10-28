@@ -183,23 +183,25 @@ fun WepWawetNavHost() {
             LogsScreen(onBack = { nav.popBackStack() })
         }
 
-        // v0.7.1: Favorites route placeholder.
-        // The WorkshopBrowserScreen top bar's heart icon navigates here. The
-        // full screen (a grid of saved creators + their wallpaper counts,
-        // with a tap-to-browse-creator action) is a follow-up task — for now
-        // we just show a centered "Favorites coming soon" message + a back
-        // arrow so the icon isn't a dead button.
+        // v0.7.1: Favorites route — full implementation.
+        // The WorkshopBrowserScreen top bar's heart icon navigates here.
+        // The screen renders a list of saved-creator Steam IDs, each with
+        // a 40dp circular profile picture (loaded via Coil from the
+        // avatar URL cached as a side-effect of getPlayerSummaries), the
+        // creator's display name, the raw Steam ID below it, and a heart
+        // IconButton to unfavorite. A LaunchedEffect bulk-resolves names
+        // + caches avatar URLs the moment the screen composes; rows fall
+        // back to showing the raw ID while loading.
         //
         // Saved-creator Steam IDs are persisted in the `wepwawet_settings`
         // SharedPreferences file under the `saved_creators` StringSet (see
-        // WallpaperDetailScreen's favorite-heart toggle). The follow-up
-        // implementation will read that set + resolve display names via
-        // WorkshopRepository's creatorNames StateFlow.
+        // WallpaperDetailScreen's favorite-heart toggle).
         composable("favorites") {
             WepWawetLogger.lifecycle("NavHost navigate to favorites")
             FavoritesScreen(
                 onBack = { nav.popBackStack() },
                 onCreatorClick = { steamId -> nav.navigate("creator/$steamId") },
+                steamApi = steamApi,
             )
         }
     }

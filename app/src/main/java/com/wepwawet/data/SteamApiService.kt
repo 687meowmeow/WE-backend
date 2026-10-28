@@ -79,6 +79,16 @@ class SteamApiService(
      */
     private val creatorNameCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
+    /**
+     * In-memory cache of resolved creator avatar URLs (steamId64 → avatar full URL).
+     *
+     * Populated as a side-effect of [getPlayerSummaries] (which already fetches
+     * the `avatarfull` field from the GetPlayerSummaries response) and read by
+     * the Favorites screen to render circular profile pictures without an
+     * extra API call.
+     */
+    val creatorAvatarCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     /** SharedPreferences for persistent creator-name cache (v0.5.11-alpha). */
     private val creatorNamesPrefs: android.content.SharedPreferences? by lazy {
         appContext?.getSharedPreferences("wepwawet_creator_names", android.content.Context.MODE_PRIVATE)
@@ -897,6 +907,14 @@ class SteamApiService(
                             creatorNameCache[steamId] = personaName
                             persistCreatorName(steamId, personaName)
                         }
+                        // Side-effect: cache the avatar URL so the Favorites
+                        // screen can render profile pictures without an extra
+                        // API call. We do this even if the persona name was
+                        // blank — the avatar is still useful on its own.
+                        val avatarFull = player.get("avatarfull")?.asString
+                        if (avatarFull != null) {
+                            creatorAvatarCache[steamId] = avatarFull
+                        }
                     }
                     WepWawetLogger.steam("getPlayerSummaries chunk done",
                         "chunk_size" to chunk.size, "resolved" to playersArray.size(),
@@ -911,6 +929,9 @@ class SteamApiService(
             }
             Result.success(allResults)
         }
+
+    /** Get a cached avatar URL for a Steam creator (null if not yet resolved). */
+    fun getCreatorAvatarUrl(steamId: String): String? = creatorAvatarCache[steamId]
 
     /**
      * Extract the display name from a Steam profile page HTML using a series

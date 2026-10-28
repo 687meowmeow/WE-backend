@@ -468,13 +468,39 @@ class WorkshopRepository constructor(
      * Start a new text search. Replaces the current search session.
      * Search uses [SteamApiService.searchWorkshop] which scrapes the browse HTML
      * with `searchtext=<query>`.
+     *
+     * v0.7.1: Added an optional [filter] parameter. When the user changes
+     * the sort (or any other filter field) while a search is active, the
+     * UI re-runs the search with the new filter — without it, the search
+     * would keep using the OLD filter (from the previous `startBrowse`
+     * call) for subsequent page loads, so a sort change wouldn't actually
+     * take effect on the search results. The filter's `sort` field is
+     * applied via `applyClientFilters` (which currently doesn't sort
+     * client-side — see the note in [applyClientFilters] — but the other
+     * filter fields like `tags`, `excludedTags`, `mobileCompatible` DO
+     * get applied to search page loads via [loadNextSearchPageLocked]).
+     *
+     * @param query search string (e.g. "Cyberpunk")
+     * @param filter optional new [Filter] to apply to this search session.
+     *   When null (the default), the existing `currentFilter` is kept —
+     *   matching the previous behavior. Pass a non-null filter when
+     *   re-running the search after a sort/filter change.
      */
-    suspend fun startSearch(query: String) {
+    suspend fun startSearch(query: String, filter: Filter? = null) {
         if (query.isBlank()) {
             clearSearch()
             return
         }
         browseLock.withLock {
+            // Apply the new filter (if any) before resetting the search
+            // session so the first page load uses the updated sort/tags.
+            if (filter != null) {
+                currentFilter = filter
+                WepWawetLogger.workshop("startSearch filter updated",
+                    "sort" to filter.sort.name,
+                    "mobile_compatible" to filter.mobileCompatible,
+                    "excluded_tags_count" to filter.excludedTags.size)
+            }
             currentSearchQuery = query
             currentSearchPage = 0
             searchHasMore = true
@@ -514,11 +540,12 @@ class WorkshopRepository constructor(
         if (!searchHasMore) return
         val page = currentSearchPage + 1
         _searchState.value = BrowseState.Loading(page)
+        val filter = currentFilter
+        val mobileCompat = filter?.mobileCompatible ?: true
         WepWawetLogger.workshop("loadNextSearchPage start",
-            "query" to query, "page" to page)
+            "query" to query, "page" to page, "mobile_compatible" to mobileCompat)
 
         try {
-            val filter = currentFilter
             val tags = filter?.tags ?: emptyList()
             val excludedTags = filter?.excludedTags ?: emptyList()
             val items = steamApi.searchWorkshop(
@@ -526,6 +553,7 @@ class WorkshopRepository constructor(
                 page = page,
                 tags = tags,
                 excludedTags = excludedTags,
+                mobileCompatible = mobileCompat,
             ).getOrElse { e ->
                 _searchState.value = BrowseState.Error(
                     e.message ?: "Unknown error", page
