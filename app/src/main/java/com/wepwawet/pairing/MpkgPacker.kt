@@ -3484,6 +3484,30 @@ object MpkgPacker {
             // This is a stopgap for the case where glslang failed to compile (network issue
             // during build, etc.) but the wallpaper still needs to render.
             //
+            // v0.7.1 (round 5 — xray gray image fix): the original condition ONLY checked
+            // for "cbuffer "/"SamplerState "/"Texture2D " (full HLSL constructs) — but the
+            // saturate()/lerp()/mul() HLSL function calls were NOT included. This meant:
+            //   1. PHASE 0 (native transcode) detected the shader as HLSL (because it
+            //      contains saturate/mul) and called ShaderTranscoder.transcodeShader().
+            //   2. transcodeShader() returned null because the native glslang function
+            //      isn't compiled into the loaded .so (UnsatisfiedLinkError when calling
+            //      nativeTranscodeShader). The library loads (so isAvailable() = true)
+            //      but the transcoding function isn't there.
+            //   3. PHASE 0 logged a warning ("native HLSL→GLSL transcode failed —
+            //      falling back to regex path") and fell through to PHASE 0.5.
+            //   4. PHASE 0.5's condition was `!ShaderTranscoder.isAvailable() ||
+            //      contains("cbuffer ") || contains("SamplerState ") ||
+            //      contains("Texture2D ")`. Since isAvailable() = true AND the shader
+            //      had no cbuffer/SamplerState/Texture2D, PHASE 0.5 was SKIPPED.
+            //   5. The shader's `mul(vec4(a_Position, 1.0), matrix)` and
+            //      `saturate(unprojectedUVs)` calls were NEVER converted to GLSL.
+            //   6. WE Android's renderer tried to compile the shader with HLSL syntax,
+            //      failed, and rendered the wallpaper as a gray "invalid image".
+            //
+            // Fix: extend the condition to also include saturate(/lerp(/mul( detection
+            // (matching PHASE 0's isHlsl detection). When native transcode fails, the
+            // regex path now runs for these tokens too.
+            //
             // Conversions:
             //   cbuffer Name { ... } → uniform Name { ... };
             //   SamplerState s; → sampler2D s;
@@ -3494,8 +3518,13 @@ object MpkgPacker {
             //   frac(x) → fract(x)
             //   ddx(x) → dFdx(x)
             //   ddy(x) → dFdy(x)
-            if (!ShaderTranscoder.isAvailable() || modified.contains("cbuffer ") ||
-                modified.contains("SamplerState ") || modified.contains("Texture2D ")) {
+            val hasHlslSyntax = modified.contains("cbuffer ") ||
+                modified.contains("SamplerState ") ||
+                modified.contains("Texture2D ") ||
+                modified.contains("saturate(") ||
+                modified.contains("lerp(") ||
+                (modified.contains("mul(") && !modified.contains("mix("))
+            if (!ShaderTranscoder.isAvailable() || hasHlslSyntax) {
                 // cbuffer Name { ... } → uniform Name { ... };
                 val beforeHlsl = modified.length
                 modified = modified.replace(
@@ -3508,18 +3537,30 @@ object MpkgPacker {
                 // Texture2D t; → sampler2D t;
                 modified = modified.replace(Regex("""\bTexture2D\s+(\w+)\s*;"""), "sampler2D $1;")
                 // mul(a, b) → (a * b)
-                modified = modified.replace(Regex("""\bmul\s*\(([^,]+),\s*([^)]+)\)""")) { mr ->
-                    "(${mr.groupValues[1]} * ${mr.groupValues[2]})"
+                // v0.7.1 (round 5 — xray gray image fix): the previous regex
+                // `\bmul\s*\(([^,]+),\s*([^)]+)\)` was BROKEN for nested parens
+                // — it would match `mul(vec4(a_Position, 1.0), matrix)` as
+                //   arg1 = "vec4(a_Position" (stops at first comma)
+                //   arg2 = "1.0), matrix" (stops at first ')')
+                // producing broken output `(vec4(a_Position * 1.0), matrix)`.
+                // Now we use a balanced-parens scanner that correctly handles
+                // nested parens (e.g. `mul(vec4(...), mat4(...))`).
+                modified = convertHlslFunctionCall(modified, "mul") { args ->
+                    if (args.size == 2) "(${args[0]} * ${args[1]})" else "mul(${args.joinToString(", ")})"
                 }
                 // saturate(x) → clamp(x, 0.0, 1.0)
-                modified = modified.replace(Regex("""\bsaturate\s*\(([^)]+)\)""")) { mr ->
-                    "clamp(${mr.groupValues[1]}, 0.0, 1.0)"
+                // Also uses the balanced-parens scanner (saturate can wrap
+                // function calls like saturate(texSample2D(...).r)).
+                modified = convertHlslFunctionCall(modified, "saturate") { args ->
+                    if (args.size == 1) "clamp(${args[0]}, 0.0, 1.0)" else "saturate(${args.joinToString(", ")})"
                 }
                 // lerp(a, b, t) → mix(a, b, t)
-                modified = modified.replace(Regex("""\blerp\s*\(([^,]+),\s*([^,]+),\s*([^)]+)\)""")) { mr ->
-                    "mix(${mr.groupValues[1]}, ${mr.groupValues[2]}, ${mr.groupValues[3]})"
+                modified = convertHlslFunctionCall(modified, "lerp") { args ->
+                    if (args.size == 3) "mix(${args[0]}, ${args[1]}, ${args[2]})" else "lerp(${args.joinToString(", ")})"
                 }
                 // frac(x) → fract(x)
+                // (Keep the simple regex — frac is rare and usually takes a simple arg.
+                // If a wallpaper needs nested-paren frac support, switch to convertHlslFunctionCall too.)
                 modified = modified.replace(Regex("""\bfrac\s*\("""), "fract(")
                 // ddx(x) → dFdx(x), ddy(x) → dFdy(x)
                 modified = modified.replace(Regex("""\bddx\s*\("""), "dFdx(")
@@ -5091,6 +5132,99 @@ vec3 ApplyChromaticAberration(sampler2D tex, vec2 uv, float intensity) {
         out.write((value shr 8) and 0xFF)
         out.write((value shr 16) and 0xFF)
         out.write((value shr 24) and 0xFF)
+    }
+
+    /**
+     * Convert all calls to the HLSL function [funcName] in [src] using [transform].
+     *
+     * v0.7.1 (round 5 — xray gray image fix): the previous regex-based conversion
+     * (`\bmul\s*\(([^,]+),\s*([^)]+)\)`) was BROKEN for nested parens — it would
+     * match `mul(vec4(a_Position, 1.0), matrix)` as
+     *   arg1 = "vec4(a_Position" (stops at first comma inside vec4)
+     *   arg2 = "1.0), matrix" (stops at first ')')
+     * producing broken output `(vec4(a_Position * 1.0), matrix)`.
+     *
+     * This helper uses a balanced-parens scanner that correctly handles nested
+     * parens (e.g. `mul(vec4(...), mat4(...))`, `saturate(texSample2D(...).r)`).
+     *
+     * Algorithm:
+     *   1. Scan forward looking for `\b<funcName>\s*\(`.
+     *   2. Once found, scan forward counting parens to find the matching `)`.
+     *   3. Inside the parens, split on TOP-LEVEL commas (depth == 1) to get args.
+     *   4. If arg count matches what [transform] expects, replace with the
+     *      transform output. Otherwise leave the call unchanged (defensive).
+     *
+     * @param src the shader source code
+     * @param funcName the HLSL function name (e.g. "mul", "saturate", "lerp")
+     * @param transform a function that takes the list of args and returns the
+     *   replacement string. If the arg count doesn't match what the transform
+     *   expects, the transform should return the original call (e.g.
+     *   `"mul(${args.joinToString(", ")})"`).
+     */
+    private fun convertHlslFunctionCall(
+        src: String,
+        funcName: String,
+        transform: (List<String>) -> String,
+    ): String {
+        val result = StringBuilder(src.length)
+        var i = 0
+        while (i < src.length) {
+            // Look for `\b<funcName>\s*\(` (word boundary on the left).
+            // Word boundary: previous char is not a letter/digit/underscore.
+            val prevChar = if (i > 0) src[i - 1] else ' '
+            val isWordBoundary = !prevChar.isLetterOrDigit() && prevChar != '_'
+            if (isWordBoundary &&
+                i + funcName.length <= src.length &&
+                src.substring(i, i + funcName.length) == funcName
+            ) {
+                // Skip whitespace after the function name
+                var j = i + funcName.length
+                while (j < src.length && src[j].isWhitespace()) j++
+                if (j < src.length && src[j] == '(') {
+                    // Find matching ')' using a balanced-parens scan
+                    var depth = 1
+                    var k = j + 1
+                    val args = mutableListOf<String>()
+                    val arg = StringBuilder()
+                    while (k < src.length && depth > 0) {
+                        val c = src[k]
+                        if (c == '(') {
+                            depth++
+                            arg.append(c)
+                        } else if (c == ')') {
+                            depth--
+                            if (depth == 0) {
+                                // End of the function call args
+                                val finalArg = arg.toString().trim()
+                                if (finalArg.isNotEmpty() || args.isNotEmpty()) {
+                                    args.add(finalArg)
+                                }
+                            } else {
+                                arg.append(c)
+                            }
+                        } else if (c == ',' && depth == 1) {
+                            // Top-level comma — split args
+                            args.add(arg.toString().trim())
+                            arg.setLength(0)
+                        } else {
+                            arg.append(c)
+                        }
+                        k++
+                    }
+                    if (depth == 0) {
+                        // Successfully matched the function call. Apply transform.
+                        val replacement = transform(args)
+                        result.append(replacement)
+                        i = k
+                        continue
+                    }
+                    // Unbalanced parens — fall through and append the char literally
+                }
+            }
+            result.append(src[i])
+            i++
+        }
+        return result.toString()
     }
 
     /**

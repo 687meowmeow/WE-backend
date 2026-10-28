@@ -307,39 +307,115 @@ fun WallpaperDetailScreen(
                         // available in [WorkshopItemTyped] for anyone who needs it.)
                         val creatorName = creatorNames[current.creator] ?: current.creator.ifBlank { "Unknown" }
                         if (current.creator.isNotBlank()) {
-                            // v0.7.1: Restructured the Creator row so the
-                            // creator NAME sits on the right side (next to
-                            // the heart), matching the layout of every other
-                            // MetadataRow (label left, value right). The
-                            // previous implementation gave the name
-                            // `Modifier.weight(1f)` inside the inner Row,
-                            // which expanded the name to fill all available
-                            // width between the "Creator" label and the
-                            // heart — the name appeared to start from the
-                            // LEFT (right after "Creator") while the heart
-                            // sat alone on the right.
+                            // v0.7.1 (round 5): Restructured the heart layout
+                            // COMPLETELY based on user feedback: "the heart is
+                            // displacing the text again. just make it above the
+                            // text and to the left side of the creator name and
+                            // next to it."
                             //
-                            // Now: NO weight on the name — it takes only its
-                            // intrinsic width (capped by `widthIn(max = 220.dp)`
-                            // + ellipsis so very long names don't overflow).
-                            // The inner Row (name + heart) has no width
-                            // modifier either, so it wraps to its intrinsic
-                            // width and clusters on the right side of the
-                            // outer SpaceBetween Row, exactly like the other
-                            // metadata rows.
+                            // Previous layout (round 4) had the heart on the
+                            // SAME row as the creator name, in a 36dp Box to
+                            // the RIGHT of the name. This made the Creator
+                            // metadata row 36dp tall, while every other
+                            // MetadataRow is only ~20dp tall (just text). The
+                            // 16dp height difference displaced the surrounding
+                            // text vertically — "Subscriptions" and "Favorites"
+                            // rows below the Creator row appeared to have extra
+                            // spacing because the Creator row was taller than
+                            // them.
                             //
-                            // The CLICKABLES are also separated: previously
-                            // the OUTER Row had `.clickable { onCreatorClick }`
-                            // which navigated to the creator's workshop when
-                            // tapped ANYWHERE on the row — INCLUDING on the
-                            // heart. So tapping the heart fired BOTH the
-                            // heart's toggle AND the parent's navigation —
-                            // the screen changed before the user could see
-                            // the heart turn red. Now: ONLY the name Text
-                            // is clickable (for navigation), and the heart
-                            // has its OWN Box.clickable (with a 36dp touch
-                            // target ≥ the 24dp minimum a11y target). The
-                            // parent Row has NO clickable.
+                            // New layout: the heart goes on its OWN row ABOVE
+                            // the Creator metadata row, aligned to the LEFT
+                            // side (where the "Creator" label appears). This
+                            // addresses all three constraints the user gave:
+                            //   1. "above the text" — heart is literally above
+                            //      the metadata text rows (its own row above
+                            //      the Creator row).
+                            //   2. "to the left side of the creator name" —
+                            //      heart is aligned to the LEFT side of the
+                            //      card, which is where the "Creator" label
+                            //      appears (to the left of where the creator
+                            //      name appears on the right side of the row).
+                            //   3. "and next to it" — heart is vertically
+                            //      adjacent to the creator name row (just
+                            //      above it), so it's "next to" the name
+                            //      without sharing the same row.
+                            //
+                            // The heart is now a 36dp Box.clickable that's
+                            // vertically self-contained — it doesn't push any
+                            // other row's text. The Creator metadata row goes
+                            // back to the standard MetadataRow layout (label
+                            // left, value right, no heart).
+                            //
+                            // Click separation is preserved from round 4:
+                            //   - Heart Box has its OWN clickable (toggles
+                            //     favorite, shows snackbar).
+                            //   - The Creator metadata row's name text has
+                            //     its OWN clickable (navigates to creator's
+                            //     workshop).
+                            //   - The parent Card has NO clickable.
+                            // So tapping the heart does NOT also fire the
+                            // creator navigation — the heart actually turns
+                            // red (or back to outline) AND the "favorited
+                            // (user)" snackbar appears at the bottom.
+                            //
+                            // Heart state is hoisted to the screen level
+                            // (savedCreators + prefs, see top of function) so
+                            // the snackbar callback can reference the updated
+                            // value deterministically.
+                            val isSaved = current.creator in savedCreators
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clickable {
+                                        val newIsSaved = !isSaved
+                                        val newSet = savedCreators.toMutableSet()
+                                        if (newIsSaved) {
+                                            newSet.add(current.creator)
+                                            WepWawetLogger.workshop("creator_saved",
+                                                "creator" to current.creator,
+                                                "creator_name" to creatorName)
+                                        } else {
+                                            newSet.remove(current.creator)
+                                            WepWawetLogger.workshop("creator_unsaved",
+                                                "creator" to current.creator,
+                                                "creator_name" to creatorName)
+                                        }
+                                        prefs.edit().putStringSet("saved_creators", newSet).apply()
+                                        savedCreators = newSet
+                                        // v0.7.1: Show a snackbar at the bottom
+                                        // of the screen confirming the action —
+                                        // the user said "at the bottom it should
+                                        // show up saying favorited (user)".
+                                        // The snackbar fires AFTER the state
+                                        // update so the heart already shows
+                                        // the new color (red filled when
+                                        // favorited, outline when unfavorited)
+                                        // by the time the message appears.
+                                        val snackbarMessage = if (newIsSaved) {
+                                            "favorited $creatorName"
+                                        } else {
+                                            "unfavorited $creatorName"
+                                        }
+                                        snackbarScope.launch {
+                                            snackbarHostState.showSnackbar(
+                                                message = snackbarMessage,
+                                                duration = SnackbarDuration.Short,
+                                            )
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    if (isSaved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                                    contentDescription = if (isSaved) "Unsave creator" else "Save creator",
+                                    tint = if (isSaved) Color.Red else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                            // Creator metadata row — name is clickable for
+                            // navigation; row has NO heart (heart moved to
+                            // the dedicated row above).
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -348,102 +424,27 @@ fun WallpaperDetailScreen(
                                 Text("Creator",
                                     style = MaterialTheme.typography.labelLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                    // No width modifier — let the inner Row
-                                    // wrap to intrinsic width so it clusters
-                                    // on the right side of the outer Row's
-                                    // SpaceBetween arrangement.
-                                ) {
-                                    val isSaved = current.creator in savedCreators
-                                    Text(
-                                        creatorName,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        textDecoration = TextDecoration.Underline,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier
-                                            // Cap the name's width so very
-                                            // long creator names don't push
-                                            // the heart off-screen. 220dp is
-                                            // enough for ~25 characters at
-                                            // bodyMedium size — beyond that,
-                                            // ellipsis kicks in.
-                                            .widthIn(max = 220.dp)
-                                            // ONLY the name is clickable for
-                                            // navigation — the heart has its
-                                            // own clickable below.
-                                            .clickable {
-                                                WepWawetLogger.workshop("detail_creator_tap",
-                                                    "id" to current.id,
-                                                    "creator_steam_id" to current.creator)
-                                                onCreatorClick(current.creator)
-                                            },
-                                    )
-                                    // Heart button — its OWN clickable with
-                                    // a 36dp touch target (≥ 24dp minimum
-                                    // a11y target, room to grow without
-                                    // dominating the row). The Box wrapper
-                                    // isolates the heart's touch from the
-                                    // name's clickable so tapping the heart
-                                    // does NOT also fire the name's
-                                    // onCreatorClick navigation.
-                                    Box(
-                                        modifier = Modifier
-                                            .size(36.dp)
-                                            .clickable {
-                                                val newIsSaved = !isSaved
-                                                val newSet = savedCreators.toMutableSet()
-                                                if (newIsSaved) {
-                                                    newSet.add(current.creator)
-                                                    WepWawetLogger.workshop("creator_saved",
-                                                        "creator" to current.creator,
-                                                        "creator_name" to creatorName)
-                                                } else {
-                                                    newSet.remove(current.creator)
-                                                    WepWawetLogger.workshop("creator_unsaved",
-                                                        "creator" to current.creator,
-                                                        "creator_name" to creatorName)
-                                                }
-                                                prefs.edit().putStringSet("saved_creators", newSet).apply()
-                                                savedCreators = newSet
-                                                // v0.7.1: Show a snackbar at
-                                                // the bottom of the screen
-                                                // confirming the action —
-                                                // the user said "at the
-                                                // bottom it should show up
-                                                // saying favorited (user)".
-                                                // The snackbar fires after
-                                                // the state update so the
-                                                // heart already shows the
-                                                // new color (red filled when
-                                                // favorited, outline when
-                                                // unfavorited) by the time
-                                                // the message appears.
-                                                val snackbarMessage = if (newIsSaved) {
-                                                    "favorited $creatorName"
-                                                } else {
-                                                    "unfavorited $creatorName"
-                                                }
-                                                snackbarScope.launch {
-                                                    snackbarHostState.showSnackbar(
-                                                        message = snackbarMessage,
-                                                        duration = SnackbarDuration.Short,
-                                                    )
-                                                }
-                                            },
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Icon(
-                                            if (isSaved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                                            contentDescription = if (isSaved) "Unsave creator" else "Save creator",
-                                            tint = if (isSaved) Color.Red else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(20.dp),
-                                        )
-                                    }
-                                }
+                                Text(
+                                    creatorName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textDecoration = TextDecoration.Underline,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier
+                                        // Cap the name's width so very long
+                                        // creator names don't push past the
+                                        // row. 220dp is enough for ~25
+                                        // characters at bodyMedium size —
+                                        // beyond that, ellipsis kicks in.
+                                        .widthIn(max = 220.dp)
+                                        .clickable {
+                                            WepWawetLogger.workshop("detail_creator_tap",
+                                                "id" to current.id,
+                                                "creator_steam_id" to current.creator)
+                                            onCreatorClick(current.creator)
+                                        },
+                                )
                             }
                         } else {
                             MetadataRow("Creator", creatorName)

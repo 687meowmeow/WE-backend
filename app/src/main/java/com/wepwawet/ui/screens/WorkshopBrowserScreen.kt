@@ -826,33 +826,48 @@ fun WorkshopBrowserScreen(
             // ripple area back to 48dp). The bar height was effectively
             // 56dp+ which the user described as "way too tall".
             //
-            // Now:
-            //   1. The whole bar is wrapped in a `Surface` with a small
-            //      shadowElevation so it visually separates from the grid
-            //      above (was just floating with no separator).
-            //   2. The Row's height is fixed at 44dp via Modifier.height.
-            //   3. Prev/Next/Go buttons are plain `Box.clickable` (NOT
-            //      IconButton) with size 36dp — IconButton's
-            //      minimumInteractiveComponentSize was the silent culprit
-            //      inflating the bar height; a Box has no such minimum.
-            //   4. The OutlinedTextField is forced to 36dp height with
-            //      contentPadding = PaddingValues(horizontal = 4.dp,
-            //      vertical = 0.dp) — Material 3 supports contentPadding
-            //      on OutlinedTextField since BOM 2024.x, so we use it to
-            //      eliminate the default 16dp top/bottom padding.
-            //   5. Added a "Go to page:" label BEFORE the text field so
-            //      it's obvious the field is for typing a page number to
-            //      jump to (the previous "Go" placeholder was ambiguous —
-            //      the user said "its not clear you should type into the
-            //      thing to go to that page").
-            //   6. Pressing IME action "Search" on the keyboard now
-            //      triggers the jump too (was only triggered by the
-            //      trailing Send icon before).
+            // v0.7.1 (round 5 — pagination arrows don't work): TWO bugs
+            // found:
+            //   A) The pagination bar read `browseState` directly instead
+            //      of `displayState` (which accounts for search mode). In
+            //      search mode, browseState is stale (it's whatever the
+            //      last browse loaded), while searchState has the actual
+            //      current page + hasMore for the search session. The
+            //      arrows used stale browse state — clicking Next would
+            //      call loadPage(2) on the search session, search page 2
+            //      might return 0 items → searchState=Done, but browseState
+            //      was still Loaded(1, hasMore=true) so the bar STILL
+            //      showed "Page 1" and Next was still enabled. The page
+            //      number never advanced and the user perceived the
+            //      arrows as "not working".
+            //      FIX: use `displayState` instead of `browseState`.
+            //   B) The Box.clickable approach (round 4) replaced the
+            //      IconButton to avoid the 48dp minimum touch target.
+            //      However, in some Compose versions, `Modifier.clickable`
+            //      on a Box WITHOUT explicit `interactionSource` and
+            //      `indication = ripple()` may not propagate the click
+            //      event reliably in all layouts (especially inside a
+            //      Surface with shadowElevation). To be safe, revert to
+            //      IconButton (which has built-in ripple + interaction
+            //      source) but with `Modifier.size(36.dp)` to override the
+            //      default 48dp size. IconButton's
+            //      minimumInteractiveComponentSize() adds INVISIBLE
+            //      padding OUTSIDE the visual bounds — it doesn't make
+            //      the row taller (the padding extends the touch area
+            //      beyond the visual element).
+            //      FIX: use IconButton with Modifier.size(36.dp).
+            //
+            // Also added logging in the click handlers so we can verify
+            // they fire when debugging.
             if (paginationEnabled) {
-                val loadedState = browseState as? WorkshopRepository.BrowseState.Loaded
+                // v0.7.1 (round 5): Use displayState (which accounts for
+                // search mode) instead of browseState. This is THE fix
+                // for "the arrows to go to next page dont work" — the
+                // arrows were using stale browse state in search mode.
+                val loadedState = displayState as? WorkshopRepository.BrowseState.Loaded
                 val currentPage = loadedState?.page ?: 1
                 val hasMore = loadedState?.hasMore ?: false
-                val isLoading = browseState is WorkshopRepository.BrowseState.Loading
+                val isLoading = displayState is WorkshopRepository.BrowseState.Loading
                 var jumpPageText by remember { mutableStateOf("") }
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
@@ -867,17 +882,26 @@ fun WorkshopBrowserScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // Previous page button (Box-clickable, NOT IconButton
-                        // — IconButton would re-introduce the 48dp minimum
-                        // touch target that was making the bar too tall).
+                        // Previous page button — IconButton with explicit
+                        // size override (Modifier.size(36.dp)) so the
+                        // minimumInteractiveComponentSize padding stays
+                        // outside the visual bounds and doesn't inflate
+                        // the row height.
                         val prevEnabled = currentPage > 1 && !isLoading
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clickable(enabled = prevEnabled) {
-                                    if (currentPage > 1) scope.launch { repo.loadPage(currentPage - 1) }
-                                },
-                            contentAlignment = Alignment.Center,
+                        IconButton(
+                            onClick = {
+                                WepWawetLogger.workshop(
+                                    "pagination_prev_tap",
+                                    "current_page" to currentPage,
+                                    "enabled" to prevEnabled,
+                                    "in_search_mode" to inSearchMode,
+                                )
+                                if (currentPage > 1) {
+                                    scope.launch { repo.loadPage(currentPage - 1) }
+                                }
+                            },
+                            enabled = prevEnabled,
+                            modifier = Modifier.size(36.dp),
                         ) {
                             Icon(
                                 Icons.AutoMirrored.Filled.ArrowBack,
@@ -894,13 +918,21 @@ fun WorkshopBrowserScreen(
                         )
                         // Next page button
                         val nextEnabled = hasMore && !isLoading
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clickable(enabled = nextEnabled) {
-                                    if (hasMore) scope.launch { repo.loadPage(currentPage + 1) }
-                                },
-                            contentAlignment = Alignment.Center,
+                        IconButton(
+                            onClick = {
+                                WepWawetLogger.workshop(
+                                    "pagination_next_tap",
+                                    "current_page" to currentPage,
+                                    "has_more" to hasMore,
+                                    "enabled" to nextEnabled,
+                                    "in_search_mode" to inSearchMode,
+                                )
+                                if (hasMore) {
+                                    scope.launch { repo.loadPage(currentPage + 1) }
+                                }
+                            },
+                            enabled = nextEnabled,
+                            modifier = Modifier.size(36.dp),
                         ) {
                             Icon(
                                 Icons.AutoMirrored.Filled.ArrowForward,
@@ -934,6 +966,11 @@ fun WorkshopBrowserScreen(
                                 onSearch = {
                                     val page = jumpPageText.toIntOrNull()
                                     if (page != null && page > 0) {
+                                        WepWawetLogger.workshop(
+                                            "pagination_jump_submit",
+                                            "page" to page,
+                                            "in_search_mode" to inSearchMode,
+                                        )
                                         scope.launch { repo.loadPage(page) }
                                         jumpPageText = ""
                                     }
@@ -961,19 +998,23 @@ fun WorkshopBrowserScreen(
                                 textAlign = TextAlign.Center,
                             ),
                             trailingIcon = {
-                                // Send button (Box-clickable, smaller
-                                // touch target than IconButton).
-                                Box(
-                                    modifier = Modifier
-                                        .size(28.dp)
-                                        .clickable {
-                                            val page = jumpPageText.toIntOrNull()
-                                            if (page != null && page > 0) {
-                                                scope.launch { repo.loadPage(page) }
-                                                jumpPageText = ""
-                                            }
-                                        },
-                                    contentAlignment = Alignment.Center,
+                                // Send button (IconButton with size override
+                                // for the smaller touch target inside the
+                                // text field).
+                                IconButton(
+                                    onClick = {
+                                        val page = jumpPageText.toIntOrNull()
+                                        if (page != null && page > 0) {
+                                            WepWawetLogger.workshop(
+                                                "pagination_jump_send_tap",
+                                                "page" to page,
+                                                "in_search_mode" to inSearchMode,
+                                            )
+                                            scope.launch { repo.loadPage(page) }
+                                            jumpPageText = ""
+                                        }
+                                    },
+                                    modifier = Modifier.size(28.dp),
                                 ) {
                                     Icon(
                                         Icons.Filled.Send,

@@ -36,7 +36,51 @@ android {
         // so the heart actually turns red and shows a "favorited (user)"
         // snackbar at the bottom). Pagination bar compacted to 44dp (was
         // ~56dp+) with a clear "Go to page:" label.
-        versionCode = 87
+        // v0.7.1-alpha build 88: XRAY GRAY IMAGE FIX + HEART ABOVE TEXT +
+        // PAGINATION ARROWS FIX.
+        //   1. MpkgPacker.fixShaders PHASE 0.5 condition was broken — only
+        //      checked for cbuffer/SamplerState/Texture2D (full HLSL
+        //      constructs) but NOT saturate()/lerp()/mul() (HLSL function
+        //      calls). When the native transcoder (ShaderTranscoder.
+        //      transcodeShader) failed (UnsatisfiedLinkError because
+        //      glslang isn't compiled into the .so), PHASE 0.5 was SKIPPED
+        //      entirely → shader still had `mul(vec4(...), matrix)` and
+        //      `saturate(unprojectedUVs)` calls → WE Android's renderer
+        //      couldn't compile the shader → wallpaper rendered as gray
+        //      "invalid image". Fix: extend the condition to also include
+        //      saturate(/lerp(/mul( detection (matching PHASE 0's isHlsl
+        //      detection). Also wrote a NEW balanced-parens scanner
+        //      (convertHlslFunctionCall) for mul/saturate/lerp because the
+        //      old regex was broken for nested parens (`mul(vec4(...), mat)`
+        //      would match arg1="vec4(...", arg2="...)..." — wrong).
+        //   2. Heart layout — user said "the heart is displacing the text
+        //      again. just make it above the text and to the left side of
+        //      the creator name and next to it." Now the heart is on its
+        //      OWN ROW ABOVE the Creator metadata row, aligned LEFT — so
+        //      it doesn't push any other row's text. The Creator metadata
+        //      row goes back to the standard MetadataRow layout (label
+        //      left, value right, no heart).
+        //   3. Pagination arrows — user said "the arrows to go to next
+        //      page dont work. fix." Found TWO bugs:
+        //      A) Pagination bar read `browseState` directly instead of
+        //         `displayState`. In search mode, browseState is stale
+        //         (last browse loaded) while searchState has the actual
+        //         current page + hasMore for the search session. Clicking
+        //         Next used stale browse state — search page 2 might return
+        //         0 items → searchState=Done, but browseState was still
+        //         Loaded(1, hasMore=true) so the bar STILL showed "Page 1"
+        //         and Next was still enabled. Page number never advanced.
+        //         Fix: use `displayState` (which accounts for search mode).
+        //      B) Round 4's Box.clickable approach replaced IconButton to
+        //         avoid the 48dp minimum touch target. In some Compose
+        //         versions, Modifier.clickable on a Box without explicit
+        //         interactionSource/indication may not propagate clicks
+        //         reliably inside a Surface with shadowElevation. Revert
+        //         to IconButton (built-in ripple + interaction source)
+        //         with Modifier.size(36.dp) override. IconButton's
+        //         minimumInteractiveComponentSize() adds INVISIBLE padding
+        //         OUTSIDE the visual bounds — doesn't make the row taller.
+        versionCode = 88
         versionName = "0.7.1-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {
