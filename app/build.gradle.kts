@@ -20,7 +20,11 @@ android {
         // v0.7.1-alpha: UI cleanup pass — swap Settings card order, .pkg cache toggle,
         // square wallpaper preview, smaller favorite heart, favorites route placeholder,
         // verbose-logging now actually filters debug/info messages.
-        versionCode = 84
+        // v0.7.1-alpha build 85: FavoritesScreen replaces placeholder, manual
+        // pagination bar wired up in WorkshopBrowserScreen, Settings Logs button
+        // is now always visible, detail-screen creator row heart no longer
+        // displaces the creator name (uses Modifier.weight(1f)).
+        versionCode = 85
         versionName = "0.7.1-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {

@@ -178,12 +178,10 @@ fun SettingsScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
-                // Logs button (top-right) — only shown while verbose logging is on.
+                // Logs button (top-right) — always shown (v0.7.1).
                 actions = {
-                    if (verboseLog) {
-                        IconButton(onClick = onOpenLogs) {
-                            Icon(Icons.Filled.BugReport, contentDescription = "Logs")
-                        }
+                    IconButton(onClick = onOpenLogs) {
+                        Icon(Icons.Filled.BugReport, contentDescription = "Logs")
                     }
                 },
             )
@@ -593,8 +591,7 @@ private fun OthersCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Verbose logging", style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        "Capture detailed protocol messages for debugging. " +
-                            "Shows a Logs button in the top-right corner while enabled.",
+                        "Capture detailed protocol messages for debugging.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )

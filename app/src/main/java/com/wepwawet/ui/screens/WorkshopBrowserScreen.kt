@@ -28,6 +28,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AccountBox
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Bluetooth
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ViewModule
 import androidx.compose.material3.CircularProgressIndicator
@@ -201,6 +203,14 @@ fun WorkshopBrowserScreen(
     val context = LocalContext.current
     val filterPrefs = remember {
         context.getSharedPreferences("wepwawet_filters", Context.MODE_PRIVATE)
+    }
+    // v0.7.1: Pagination mode toggle (read once on screen entry from the
+    // `wepwawet_settings` prefs file written by SettingsScreen). When true,
+    // the infinite-scroll LaunchedEffect is skipped and a manual pagination
+    // bar (Prev / Page N / Next / Go-to-page) is shown below the grid.
+    val paginationEnabled = remember {
+        context.getSharedPreferences("wepwawet_settings", Context.MODE_PRIVATE)
+            .getBoolean("pagination_enabled", false)
     }
     // Guard flag — `false` until the LaunchedEffect(Unit) finishes loading the
     // saved filter values. Prevents the per-key save effects from overwriting
@@ -469,33 +479,40 @@ fun WorkshopBrowserScreen(
     // DIRECTLY inside snapshotFlow block — NOT captured local vals.
     // Captured vals don't register as State<T> reads, so snapshotFlow
     // never re-evaluates when items/state change → stuck at 1 item.
-    LaunchedEffect(Unit) {
-        snapshotFlow {
-            val curItems = items
-            val curSearchItems = searchItems
-            val curBrowseState = browseState
-            val curSearchState = searchState
-            val curQuery = query
-            val curInSearch = !isCreatorMode && (curSearchItems.isNotEmpty() ||
-                (curQuery.isNotBlank() && curSearchState !is WorkshopRepository.BrowseState.Idle))
-            val activeItems = if (curInSearch) curSearchItems else curItems
-            val activeState = if (curInSearch) curSearchState else curBrowseState
-            val total = activeItems.size
-            val lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            val loadedState = activeState as? WorkshopRepository.BrowseState.Loaded
-            loadedState != null && loadedState.hasMore &&
-                (total < 30 || (total > 0 && lastVisible >= total - 6))
-        }
-            .distinctUntilChanged()
-            .filter { it }
-            .collect {
-                WepWawetLogger.workshop("infinite_scroll triggered loadNextPage",
-                    "last_visible" to (gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1),
-                    "total" to displayItems.size,
-                    "auto_preload" to (displayItems.size < 30),
-                )
-                repo.loadNextPage()
+    //
+    // v0.7.1: Skipped entirely when the user has enabled manual pagination
+    // mode in Settings — instead of auto-loading the next page when the user
+    // nears the bottom of the grid, we show a Prev/Next/Go-to-page bar below
+    // the grid (see the pagination bar section below the LazyVerticalGrid).
+    if (!paginationEnabled) {
+        LaunchedEffect(Unit) {
+            snapshotFlow {
+                val curItems = items
+                val curSearchItems = searchItems
+                val curBrowseState = browseState
+                val curSearchState = searchState
+                val curQuery = query
+                val curInSearch = !isCreatorMode && (curSearchItems.isNotEmpty() ||
+                    (curQuery.isNotBlank() && curSearchState !is WorkshopRepository.BrowseState.Idle))
+                val activeItems = if (curInSearch) curSearchItems else curItems
+                val activeState = if (curInSearch) curSearchState else curBrowseState
+                val total = activeItems.size
+                val lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                val loadedState = activeState as? WorkshopRepository.BrowseState.Loaded
+                loadedState != null && loadedState.hasMore &&
+                    (total < 30 || (total > 0 && lastVisible >= total - 6))
             }
+                .distinctUntilChanged()
+                .filter { it }
+                .collect {
+                    WepWawetLogger.workshop("infinite_scroll triggered loadNextPage",
+                        "last_visible" to (gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1),
+                        "total" to displayItems.size,
+                        "auto_preload" to (displayItems.size < 30),
+                    )
+                    repo.loadNextPage()
+                }
+        }
     }
 
     // === Pull-to-refresh handler ===
@@ -703,7 +720,11 @@ fun WorkshopBrowserScreen(
             )
 
             // === Grid (with pull-to-refresh) ===
-            Box(modifier = Modifier.fillMaxSize()) {
+            // v0.7.1: When pagination is enabled, use Modifier.weight(1f)
+            // instead of fillMaxSize so the manual pagination bar below has
+            // room to render. When pagination is off (default), keep the
+            // original fillMaxSize so the grid takes the whole screen.
+            Box(modifier = if (paginationEnabled) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxSize()) {
                 PullToRefreshBox(
                     isRefreshing = isRefreshing,
                     onRefresh = onRefresh,
@@ -758,6 +779,62 @@ fun WorkshopBrowserScreen(
                             }
                         }
                     }
+                }
+            }
+
+            // === Pagination bar (only when pagination is enabled) ===
+            // v0.7.1: Manual pagination UI — Prev / Page N / Next + a
+            // "Go to" text field. The infinite-scroll LaunchedEffect above
+            // is skipped when paginationEnabled is true, so the only way to
+            // load more pages is via these controls.
+            if (paginationEnabled) {
+                val loadedState = browseState as? WorkshopRepository.BrowseState.Loaded
+                val currentPage = loadedState?.page ?: 1
+                val hasMore = loadedState?.hasMore ?: false
+                val isLoading = browseState is WorkshopRepository.BrowseState.Loading
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // Previous button
+                    IconButton(
+                        onClick = { if (currentPage > 1) scope.launch { repo.loadPage(currentPage - 1) } },
+                        enabled = currentPage > 1 && !isLoading,
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Previous page")
+                    }
+                    // Page text
+                    Text("Page $currentPage", style = MaterialTheme.typography.bodyMedium)
+                    // Next button
+                    IconButton(
+                        onClick = { if (hasMore) scope.launch { repo.loadPage(currentPage + 1) } },
+                        enabled = hasMore && !isLoading,
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next page")
+                    }
+                    Spacer(Modifier.width(16.dp))
+                    // Jump to page text field
+                    var jumpPageText by remember { mutableStateOf("") }
+                    OutlinedTextField(
+                        value = jumpPageText,
+                        onValueChange = { if (it.all { c -> c.isDigit() }) jumpPageText = it },
+                        placeholder = { Text("Go to") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(80.dp),
+                        trailingIcon = {
+                            IconButton(
+                                onClick = {
+                                    val page = jumpPageText.toIntOrNull()
+                                    if (page != null && page > 0) {
+                                        scope.launch { repo.loadPage(page) }
+                                        jumpPageText = ""
+                                    }
+                                },
+                            ) { Icon(Icons.Filled.Send, contentDescription = "Go") }
+                        },
+                    )
                 }
             }
         }

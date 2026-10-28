@@ -134,7 +134,7 @@ class PairingService : Service() {
         }
 
         /** App context for static accessors (set in onStartCommand). */
-        @Volatile private var appContext: Context? = null
+        @Volatile var appContext: Context? = null  // v0.7.1: public for MainActivity to set
 
         /**
          * Queue a wallpaper .mpkg file for transfer to the paired phone.
@@ -178,7 +178,11 @@ class PairingService : Service() {
          * launch the WE Android app's main activity.
          */
         fun launchWallpaperEngineApp(context: Context) {
-            val wePackages = context.packageManager.getLaunchIntentForPackage("com.wallpaper.engine")
+            // v0.7.1: The correct WE Android package name is io.wallpaperengine.weclient
+            // (from Google Play Store URL). Previously used com.wallpaper.engine which
+            // was wrong and never matched.
+            val wePackages = context.packageManager.getLaunchIntentForPackage("io.wallpaperengine.weclient")
+                ?: context.packageManager.getLaunchIntentForPackage("com.wallpaper.engine")
                 ?: context.packageManager.getLaunchIntentForPackage("com.fws.wallpaperengine")
             if (wePackages != null) {
                 wePackages.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

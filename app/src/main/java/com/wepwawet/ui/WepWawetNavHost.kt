@@ -1,24 +1,9 @@
 package com.wepwawet.ui
 
 import android.content.Context
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -29,6 +14,7 @@ import com.wepwawet.data.SteamApiService
 import com.wepwawet.data.WorkshopRepository
 import com.wepwawet.log.WepWawetLogger
 import com.wepwawet.ui.screens.DownloadManagerScreen
+import com.wepwawet.ui.screens.FavoritesScreen
 import com.wepwawet.ui.screens.LogsScreen
 import com.wepwawet.ui.screens.PairingScreen
 import com.wepwawet.ui.screens.SettingsScreen
@@ -211,48 +197,9 @@ fun WepWawetNavHost() {
         // WorkshopRepository's creatorNames StateFlow.
         composable("favorites") {
             WepWawetLogger.lifecycle("NavHost navigate to favorites")
-            FavoritesPlaceholderScreen(onBack = { nav.popBackStack() })
-        }
-    }
-}
-
-/**
- * v0.7.1: Minimal placeholder for the favorites route — shows a centered
- * "Favorites coming soon" message with a back arrow. The full screen
- * (saved-creators grid + tap-to-browse-creator) is a follow-up task.
- *
- * Kept inside this file (rather than as its own screen file under
- * ui/screens/) because it's tiny and the full implementation will live in
- * its own file once the saved-creators repository + grid are built.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun FavoritesPlaceholderScreen(onBack: () -> Unit) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Favorites") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                        )
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                "Favorites coming soon",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            FavoritesScreen(
+                onBack = { nav.popBackStack() },
+                onCreatorClick = { steamId -> nav.navigate("creator/$steamId") },
             )
         }
     }

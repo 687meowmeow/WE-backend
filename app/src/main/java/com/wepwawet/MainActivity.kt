@@ -35,9 +35,17 @@ class MainActivity : ComponentActivity() {
         // class-loading Errors like NoClassDefFoundError don't bring down the
         // app before we get a chance to render the UI.
         runCatching {
+            // v0.7.1: Set appContext FIRST so isPaired() can check SharedPreferences
+            // even before onStartCommand runs (startForegroundService is async).
+            PairingService.appContext = applicationContext
             // v0.7.0: Use the user's saved PIN (from Settings) instead of hardcoded "1234"
             PairingService.start(this, PairingService.getPairingPin(this))
-            WepWawetLogger.lifecycle("Auto-started pairing proxy")
+            // Log pairing state for debugging
+            val wasPaired = PairingService.loadPairedDevice(this)
+            WepWawetLogger.lifecycle("Auto-started pairing proxy",
+                "was_previously_paired" to (wasPaired != null),
+                "paired_device" to (wasPaired ?: "null"),
+                "isPaired_now" to PairingService.isPaired())
         }.onFailure { e ->
             // Log to BOTH WepWawetLogger and logcat — if the logger failed to init,
             // we still get the failure in logcat

@@ -287,14 +287,14 @@ fun WallpaperDetailScreen(
                                     style = MaterialTheme.typography.labelLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Row(verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                                     Text(creatorName,
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.primary,
                                         textDecoration = TextDecoration.Underline,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
-                                    )
+                                        modifier = Modifier.weight(1f))
                                     // v0.7.0: Save creator button
                                     val context = LocalContext.current
                                     val prefs = remember { context.getSharedPreferences("wepwawet_settings", Context.MODE_PRIVATE) }
@@ -302,9 +302,11 @@ fun WallpaperDetailScreen(
                                     val isSaved = current.creator in savedCreators
                                     // v0.7.1: Smaller favorite heart — icon is
                                     // 16dp (down from 20dp) and the IconButton
-                                    // itself is shrunk to 28dp (down from the
+                                    // itself is shrunk to 24dp (down from the
                                     // Material3 default of 48dp) so the heart
                                     // doesn't visually dominate the Creator row.
+                                    // Text now takes Modifier.weight(1f) so the
+                                    // heart doesn't displace the creator name.
                                     IconButton(
                                         onClick = {
                                             val newSet = savedCreators.toMutableSet()
@@ -317,7 +319,7 @@ fun WallpaperDetailScreen(
                                             }
                                             prefs.edit().putStringSet("saved_creators", newSet).apply()
                                         },
-                                        modifier = Modifier.size(28.dp),
+                                        modifier = Modifier.size(24.dp),
                                     ) {
                                         Icon(
                                             if (isSaved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,

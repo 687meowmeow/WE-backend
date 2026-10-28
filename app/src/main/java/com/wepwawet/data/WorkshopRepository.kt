@@ -173,6 +173,40 @@ class WorkshopRepository constructor(
         }
     }
 
+    /**
+     * Load a specific page number (for pagination mode).
+     * Clears existing items and loads the requested page.
+     *
+     * v0.7.1: Used by the WorkshopBrowserScreen's manual pagination bar
+     * (Prev / Page N / Next / Go-to-page) when the user has enabled the
+     * `pagination_enabled` setting. Behaves like [startBrowse] but jumps
+     * straight to the requested page number instead of always starting at
+     * page 1. The next [loadNextPageLocked] call will increment
+     * `currentPage` from `pageNum - 1` to `pageNum` and load it.
+     *
+     * Note: search mode and browse mode share the same `browseLock` (the
+     * search methods just acquire the same mutex internally), so we use
+     * `browseLock.withLock` here for both branches.
+     */
+    suspend fun loadPage(pageNum: Int) {
+        if (currentSearchQuery != null) {
+            // Search mode pagination
+            browseLock.withLock {
+                currentSearchPage = pageNum - 1
+                _searchItems.value = emptyList()
+                loadNextSearchPageLocked()
+            }
+            return
+        }
+        browseLock.withLock {
+            currentPage = pageNum - 1
+            _browseItems.value = emptyList()
+            consecutiveEmptyPages = 0
+            hasMore = true
+            loadNextPageLocked()
+        }
+    }
+
     private suspend fun loadNextPageLocked() {
         val filter = currentFilter ?: run {
             WepWawetLogger.workshopWarn("loadNextPage: no filter set")
