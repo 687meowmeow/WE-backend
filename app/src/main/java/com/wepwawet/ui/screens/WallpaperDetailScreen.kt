@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -623,36 +624,54 @@ fun WallpaperDetailScreen(
         }
     }
 
-    // v0.7.1 (round 10): Video trim dialog — pops up when the download detects
-    // the file is a video (downloadState.pendingVideoFile != null). The user
-    // can choose to trim, send the full video, or cancel.
+    // Video trim dialog — pops up when the download detects the file is a
+    // video (downloadState.pendingVideoFile != null). The user can choose
+    // to trim, send the full video, or close (X in the corner).
     val pendingVideoFile = downloadState.pendingVideoFile
     val pendingVideoItem = downloadState.pendingVideoItem
     if (pendingVideoFile != null && pendingVideoItem != null) {
         androidx.compose.material3.AlertDialog(
-            onDismissRequest = { },
-            title = { Text("Video Downloaded") },
+            onDismissRequest = {
+                com.wepwawet.pairing.WorkshopDownloadJob.cancelVideoSend()
+            },
+            title = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Video Downloaded")
+                    IconButton(
+                        onClick = {
+                            com.wepwawet.pairing.WorkshopDownloadJob.cancelVideoSend()
+                        },
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "Close",
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+            },
             text = { Text("Do you want to trim this video before sending it to your phone?") },
             confirmButton = {
-                androidx.compose.material3.TextButton(
-                    onClick = {
-                        val videoFile = java.io.File(pendingVideoFile)
-                        onVideoTrim(videoFile, pendingVideoItem.title, pendingVideoItem.id)
-                    },
-                ) { Text("Trim Video") }
-            },
-            dismissButton = {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            onVideoTrim(
+                                java.io.File(pendingVideoFile),
+                                pendingVideoItem.title,
+                                pendingVideoItem.id,
+                            )
+                        },
+                    ) { Text("Trim Video") }
                     androidx.compose.material3.TextButton(
                         onClick = {
                             com.wepwawet.pairing.WorkshopDownloadJob.continueVideoSend(context)
                         },
                     ) { Text("Send Full Video") }
-                    androidx.compose.material3.TextButton(
-                        onClick = {
-                            com.wepwawet.pairing.WorkshopDownloadJob.cancelVideoSend()
-                        },
-                    ) { Text("Cancel") }
                 }
             },
         )

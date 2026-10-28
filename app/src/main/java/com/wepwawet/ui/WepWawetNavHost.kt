@@ -164,9 +164,9 @@ fun WepWawetNavHost() {
                 onBack = { nav.popBackStack() },
                 repo = repo,
                 onCreatorClick = { steamId -> nav.navigate("creator/$steamId") },
-                onVideoTrim = { videoFile, title, id ->
+                onVideoTrim = { _, title, id ->
                     val encodedTitle = java.net.URLEncoder.encode(title, "UTF-8")
-                    nav.navigate("videoTrim/$id/${videoFile.absolutePath}/$encodedTitle")
+                    nav.navigate("videoTrim/$id/$encodedTitle")
                 },
             )
         }
@@ -210,27 +210,29 @@ fun WepWawetNavHost() {
             )
         }
 
-        // v0.7.1 (round 10): Video trim route. The video file already exists
-        // (downloaded by launchSendToPhone, detected as video, user tapped
-        // "Trim Video" in the dialog).
+        // Video trim route — only passes itemId + title (URL-encoded).
+        // The video file path is read from WorkshopDownloadJob.state.pendingVideoFile
+        // (not passed as a nav arg, because file paths contain slashes that
+        // break Jetpack Navigation's path segment parsing).
         composable(
-            route = "videoTrim/{itemId}/{videoPath}/{itemTitle}",
+            route = "videoTrim/{itemId}/{itemTitle}",
             arguments = listOf(
                 navArgument("itemId") { type = NavType.StringType },
-                navArgument("videoPath") { type = NavType.StringType },
                 navArgument("itemTitle") { type = NavType.StringType },
             ),
         ) { entry ->
             val trimItemId = entry.arguments?.getString("itemId").orEmpty()
-            val trimVideoPath = entry.arguments?.getString("videoPath").orEmpty()
             val trimItemTitle = java.net.URLDecoder.decode(
                 entry.arguments?.getString("itemTitle").orEmpty(), "UTF-8")
+            // Read the video file path from the shared state (set by
+            // WorkshopDownloadJob before showing the trim dialog).
+            val trimVideoPath = com.wepwawet.pairing.WorkshopDownloadJob.state.value.pendingVideoFile
             WepWawetLogger.lifecycle("NavHost navigate to videoTrim",
                 "item_id" to trimItemId,
-                "video_path" to trimVideoPath,
+                "video_path" to (trimVideoPath ?: "null"),
                 "item_title" to trimItemTitle)
             VideoTrimScreen(
-                videoFile = java.io.File(trimVideoPath),
+                videoFile = java.io.File(trimVideoPath ?: ""),
                 itemTitle = trimItemTitle,
                 itemId = trimItemId,
                 onBack = { nav.popBackStack() },
