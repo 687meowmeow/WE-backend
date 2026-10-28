@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -36,6 +37,9 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -45,6 +49,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,6 +66,7 @@ import com.wepwawet.data.WorkshopRepository
 import com.wepwawet.data.model.WorkshopItemTyped
 import com.wepwawet.log.WepWawetLogger
 import com.wepwawet.pairing.PairingService
+import kotlinx.coroutines.launch
 
 /**
  * Wallpaper detail screen.
@@ -137,6 +143,27 @@ fun WallpaperDetailScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isPaired by remember { mutableStateOf(PairingService.isPaired()) }
 
+    // v0.7.1: Snackbar host state for the favorite-heart confirmation message
+    // ("favorited <creatorName>" / "unfavorited <creatorName>"). Lives at the
+    // screen level (NOT inside the LazyColumn item) so it survives scroll
+    // and the host is bound to the Scaffold (which renders it at the bottom
+    // of the screen — the user said "at the bottom it should show up saying
+    // favorited (user)").
+    val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarScope = rememberCoroutineScope()
+
+    // v0.7.1: Hoisted saved-creators snapshot — used by the Creator row's
+    // heart button. Previously this state lived INSIDE the LazyColumn item
+    // (re-created on every recomposition of the row), but that's fine for
+    // state preservation because `remember { ... }` keys on the call-site
+    // position, not on the item value. Hoisting to the screen level makes
+    // the intent clearer and lets the snackbar callback reference the
+    // updated value deterministically.
+    val prefs = remember { context.getSharedPreferences("wepwawet_settings", Context.MODE_PRIVATE) }
+    var savedCreators by remember {
+        mutableStateOf(prefs.getStringSet("saved_creators", emptySet()) ?: emptySet())
+    }
+
     // === Workshop download state — observed from a singleton so the download
     //     survives the user navigating away from this screen. The previous
     //     implementation used rememberCoroutineScope() which was cancelled when
@@ -197,7 +224,12 @@ fun WallpaperDetailScreen(
                     }
                 }
             )
-        }
+        },
+        // v0.7.1: SnackbarHost bound to the Scaffold so "favorited <creator>"
+        // messages render at the bottom of the screen when the user taps
+        // the heart on the Creator row. Host state is hoisted at the screen
+        // level (above) so it survives scroll.
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
     ) { padding ->
         if (loading) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
@@ -275,65 +307,142 @@ fun WallpaperDetailScreen(
                         // available in [WorkshopItemTyped] for anyone who needs it.)
                         val creatorName = creatorNames[current.creator] ?: current.creator.ifBlank { "Unknown" }
                         if (current.creator.isNotBlank()) {
+                            // v0.7.1: Restructured the Creator row so the
+                            // creator NAME sits on the right side (next to
+                            // the heart), matching the layout of every other
+                            // MetadataRow (label left, value right). The
+                            // previous implementation gave the name
+                            // `Modifier.weight(1f)` inside the inner Row,
+                            // which expanded the name to fill all available
+                            // width between the "Creator" label and the
+                            // heart — the name appeared to start from the
+                            // LEFT (right after "Creator") while the heart
+                            // sat alone on the right.
+                            //
+                            // Now: NO weight on the name — it takes only its
+                            // intrinsic width (capped by `widthIn(max = 220.dp)`
+                            // + ellipsis so very long names don't overflow).
+                            // The inner Row (name + heart) has no width
+                            // modifier either, so it wraps to its intrinsic
+                            // width and clusters on the right side of the
+                            // outer SpaceBetween Row, exactly like the other
+                            // metadata rows.
+                            //
+                            // The CLICKABLES are also separated: previously
+                            // the OUTER Row had `.clickable { onCreatorClick }`
+                            // which navigated to the creator's workshop when
+                            // tapped ANYWHERE on the row — INCLUDING on the
+                            // heart. So tapping the heart fired BOTH the
+                            // heart's toggle AND the parent's navigation —
+                            // the screen changed before the user could see
+                            // the heart turn red. Now: ONLY the name Text
+                            // is clickable (for navigation), and the heart
+                            // has its OWN Box.clickable (with a 36dp touch
+                            // target ≥ the 24dp minimum a11y target). The
+                            // parent Row has NO clickable.
                             Row(
-                                modifier = Modifier.fillMaxWidth().clickable {
-                                    WepWawetLogger.workshop("detail_creator_tap",
-                                        "id" to current.id, "creator_steam_id" to current.creator)
-                                    onCreatorClick(current.creator)
-                                },
+                                modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text("Creator",
                                     style = MaterialTheme.typography.labelLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Row(verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text(creatorName,
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    // No width modifier — let the inner Row
+                                    // wrap to intrinsic width so it clusters
+                                    // on the right side of the outer Row's
+                                    // SpaceBetween arrangement.
+                                ) {
+                                    val isSaved = current.creator in savedCreators
+                                    Text(
+                                        creatorName,
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.primary,
                                         textDecoration = TextDecoration.Underline,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f))
-                                    // v0.7.0: Save creator button.
-                                    // v0.7.1: Replaced the IconButton wrapper
-                                    // with a plain clickable Icon — the
-                                    // IconButton's 48dp minimum touch target
-                                    // visually dominated the Creator row (even
-                                    // shrunk to 24dp it displaced the text).
-                                    // The icon is now 16dp and uses clickable
-                                    // {} directly so it never affects text
-                                    // layout. State is held in a
-                                    // mutableStateOf (with `by` delegate) so
-                                    // toggling the saved state recomposes the
-                                    // row + immediately flips the heart to
-                                    // red / outline.
-                                    val context = LocalContext.current
-                                    val prefs = remember { context.getSharedPreferences("wepwawet_settings", Context.MODE_PRIVATE) }
-                                    var savedCreators by remember {
-                                        mutableStateOf(prefs.getStringSet("saved_creators", emptySet()) ?: emptySet())
-                                    }
-                                    val isSaved = current.creator in savedCreators
-                                    Icon(
-                                        if (isSaved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                                        contentDescription = if (isSaved) "Unsave creator" else "Save creator",
-                                        tint = if (isSaved) Color.Red else MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier
-                                            .size(16.dp)
+                                            // Cap the name's width so very
+                                            // long creator names don't push
+                                            // the heart off-screen. 220dp is
+                                            // enough for ~25 characters at
+                                            // bodyMedium size — beyond that,
+                                            // ellipsis kicks in.
+                                            .widthIn(max = 220.dp)
+                                            // ONLY the name is clickable for
+                                            // navigation — the heart has its
+                                            // own clickable below.
                                             .clickable {
+                                                WepWawetLogger.workshop("detail_creator_tap",
+                                                    "id" to current.id,
+                                                    "creator_steam_id" to current.creator)
+                                                onCreatorClick(current.creator)
+                                            },
+                                    )
+                                    // Heart button — its OWN clickable with
+                                    // a 36dp touch target (≥ 24dp minimum
+                                    // a11y target, room to grow without
+                                    // dominating the row). The Box wrapper
+                                    // isolates the heart's touch from the
+                                    // name's clickable so tapping the heart
+                                    // does NOT also fire the name's
+                                    // onCreatorClick navigation.
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clickable {
+                                                val newIsSaved = !isSaved
                                                 val newSet = savedCreators.toMutableSet()
-                                                if (isSaved) {
-                                                    newSet.remove(current.creator)
-                                                    WepWawetLogger.workshop("creator_unsaved", "creator" to current.creator)
-                                                } else {
+                                                if (newIsSaved) {
                                                     newSet.add(current.creator)
-                                                    WepWawetLogger.workshop("creator_saved", "creator" to current.creator)
+                                                    WepWawetLogger.workshop("creator_saved",
+                                                        "creator" to current.creator,
+                                                        "creator_name" to creatorName)
+                                                } else {
+                                                    newSet.remove(current.creator)
+                                                    WepWawetLogger.workshop("creator_unsaved",
+                                                        "creator" to current.creator,
+                                                        "creator_name" to creatorName)
                                                 }
                                                 prefs.edit().putStringSet("saved_creators", newSet).apply()
                                                 savedCreators = newSet
+                                                // v0.7.1: Show a snackbar at
+                                                // the bottom of the screen
+                                                // confirming the action —
+                                                // the user said "at the
+                                                // bottom it should show up
+                                                // saying favorited (user)".
+                                                // The snackbar fires after
+                                                // the state update so the
+                                                // heart already shows the
+                                                // new color (red filled when
+                                                // favorited, outline when
+                                                // unfavorited) by the time
+                                                // the message appears.
+                                                val snackbarMessage = if (newIsSaved) {
+                                                    "favorited $creatorName"
+                                                } else {
+                                                    "unfavorited $creatorName"
+                                                }
+                                                snackbarScope.launch {
+                                                    snackbarHostState.showSnackbar(
+                                                        message = snackbarMessage,
+                                                        duration = SnackbarDuration.Short,
+                                                    )
+                                                }
                                             },
-                                    )
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Icon(
+                                            if (isSaved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                                            contentDescription = if (isSaved) "Unsave creator" else "Save creator",
+                                            tint = if (isSaved) Color.Red else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                    }
                                 }
                             }
                         } else {

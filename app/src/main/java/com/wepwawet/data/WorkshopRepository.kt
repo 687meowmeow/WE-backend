@@ -66,6 +66,16 @@ class WorkshopRepository constructor(
     private var consecutiveEmptyPages: Int = 0
     private val MAX_CONSECUTIVE_EMPTY_PAGES: Int = 20
 
+    // v0.7.1: Separate counter for SEARCH sessions — same purpose as
+    // [consecutiveEmptyPages] but for the search pipeline. KEPT SEPARATE
+    // (not shared with the browse counter) so a long browse session that
+    // ran the browse counter up to 19/20 doesn't immediately trigger
+    // hasMore=false on the very first transient Steam miss when the user
+    // switches to search. Reset in startSearch() / clearSearch() /
+    // refresh()-search-branch / loadPage()-search-branch — every entry
+    // point that resets currentSearchQuery/currentSearchPage.
+    private var consecutiveEmptySearchPages: Int = 0
+
     /** Mutex guards concurrent browse/search operations against each other. */
     private val browseLock = Mutex()
     private var loadJob: kotlinx.coroutines.Job? = null  // M2 fix
@@ -194,6 +204,13 @@ class WorkshopRepository constructor(
             browseLock.withLock {
                 currentSearchPage = pageNum - 1
                 _searchItems.value = emptyList()
+                // v0.7.1: reset the search empty-page counter when the
+                // user manually jumps to a different page — otherwise a
+                // previous page that came back empty (after client filters)
+                // would count toward the cap and might immediately stop
+                // the new page from auto-loading the next one if it also
+                // comes back empty.
+                consecutiveEmptySearchPages = 0
                 loadNextSearchPageLocked()
             }
             return
@@ -438,6 +455,15 @@ class WorkshopRepository constructor(
                     // trigger hasMore=false prematurely. Reset on every
                     // refresh — same as startBrowse/startSearch would.
                     consecutiveEmptyPages = 0
+                    // v0.7.1: reset the SEARCH-specific counter too — same
+                    // rationale. The search counter is kept separate from
+                    // the browse counter so a long restrictive browse
+                    // session doesn't bleed into search, but a long
+                    // restrictive SEARCH session that ran the SEARCH
+                    // counter up to 19/20 still needs to be reset on
+                    // refresh, otherwise the very next transient Steam
+                    // miss would stop the search early.
+                    consecutiveEmptySearchPages = 0
                     loadNextSearchPageLocked()
                 }
             } else if (filter != null) {
@@ -504,6 +530,12 @@ class WorkshopRepository constructor(
             currentSearchQuery = query
             currentSearchPage = 0
             searchHasMore = true
+            // v0.7.1: reset the SEARCH empty-page counter on every new
+            // search session — same rationale as the browse counter reset
+            // in startBrowse(). A previous search that ran the counter up
+            // to 19/20 (because the user's query + filters matched nothing
+            // for many pages) shouldn't immediately stop the next search.
+            consecutiveEmptySearchPages = 0
             _searchItems.value = emptyList()
             _searchState.value = BrowseState.Idle
             // v0.4.7/v0.5.9-alpha: keep _searchQueryText in sync (UI uses it
@@ -522,6 +554,9 @@ class WorkshopRepository constructor(
         currentSearchQuery = null
         currentSearchPage = 0
         searchHasMore = false
+        // v0.7.1: reset the search empty-page counter on clear too, so the
+        // next search session starts fresh.
+        consecutiveEmptySearchPages = 0
         _searchItems.value = emptyList()
         _searchState.value = BrowseState.Idle
         // v0.4.7/v0.5.9-alpha: clear the hoisted query text so the search
@@ -542,31 +577,151 @@ class WorkshopRepository constructor(
         _searchState.value = BrowseState.Loading(page)
         val filter = currentFilter
         val mobileCompat = filter?.mobileCompatible ?: true
+        val tags = filter?.tags ?: emptyList()
+        val excludedTags = filter?.excludedTags ?: emptyList()
         WepWawetLogger.workshop("loadNextSearchPage start",
-            "query" to query, "page" to page, "mobile_compatible" to mobileCompat)
+            "query" to query,
+            "page" to page,
+            "mobile_compatible" to mobileCompat,
+            "tags" to tags.joinToString(","),
+            "excluded_tags" to excludedTags.joinToString(","),
+            "api_key_set" to (steamApi.apiKey != null))
 
         try {
-            val tags = filter?.tags ?: emptyList()
-            val excludedTags = filter?.excludedTags ?: emptyList()
-            val items = steamApi.searchWorkshop(
-                query = query,
+            // === v0.7.1: SEARCH BACKEND FALLBACK CHAIN ===
+            //
+            // Previously search went straight to steamApi.searchWorkshop()
+            // (the HTML scraper with `searchtext=`), which uses a DIFFERENT
+            // filter format from browse (HTML: requiredtags[]/excludedtags[]/
+            // kvs[...]; JavaSteam/HTTP: requiredTags + matchAllTags=true +
+            // requiredKvTags). The same filters gave different result sets
+            // between browse and search — items that matched the user's
+            // filters would be missing from search.
+            //
+            // Now search uses the SAME 3-step fallback chain as browse so
+            // the two paths return consistent results:
+            //   PRIMARY:    queryFilesViaJavaSteam (Steam CM protocol)
+            //   FALLBACK 1: queryFiles (IPublishedFileService HTTP API)
+            //   FALLBACK 2: searchWorkshop (HTML scrape, last resort only)
+            //
+            // IMPORTANT: we ALWAYS pass sort = Sort.MOST_RELEVANT
+            // (queryType=12, RankedByTextSearch) for search.
+            // queryFilesViaJavaSteam() uses sort.queryType DIRECTLY and does
+            // NOT override it when `query` is set (unlike queryFiles which
+            // DOES override). So passing the browse sort would run a trend
+            // (queryType=3) or popularity (queryType=9) query with searchText
+            // — NOT a text-search ranking — Steam would either return the
+            // trend/popularity results ignoring the search text entirely, or
+            // return an empty result set. Passing MOST_RELEVANT makes the
+            // JavaSteam path query with RankedByTextSearch as intended.
+            //
+            // queryFiles() (HTTP API) ALREADY overrides to MOST_RELEVANT
+            // when query != null (see SteamApiService.queryFiles line ~366:
+            //   `val effectiveQueryType = if (query != null)
+            //    Sort.MOST_RELEVANT.queryType else sort.queryType`),
+            // so passing MOST_RELEVANT to it is technically redundant but
+            // documents the intent clearly.
+            //
+            // searchWorkshop (HTML) ignores the `sort` argument entirely
+            // (it always passes Sort.MOST_RELEVANT to its internal
+            // fetchWorkshopIds call) — passing MOST_RELEVANT here is a no-op
+            // but keeps the call site self-documenting.
+            val javaSteamResult = steamApi.queryFilesViaJavaSteam(
+                sort = SteamApiService.Sort.MOST_RELEVANT,
                 page = page,
                 tags = tags,
                 excludedTags = excludedTags,
                 mobileCompatible = mobileCompat,
-            ).getOrElse { e ->
+                query = query,
+            )
+
+            // Track which backend actually served this page so we can log
+            // it in the "done" line — mirrors the "loadNextPage: JavaSteam
+            // path failed" warning pattern in the browse fallback chain.
+            val finalResult: Result<List<WorkshopItemTyped>>
+            val servedBy: String
+
+            if (javaSteamResult.isSuccess) {
+                finalResult = javaSteamResult
+                servedBy = "javasteam"
+            } else {
+                // Log the failure then fall through to HTTP API + HTML fallbacks.
+                // Mirrors the existing "loadNextPage: JavaSteam path failed"
+                // warning in the browse fallback chain (see loadNextPageLocked).
+                WepWawetLogger.workshopWarn(
+                    "loadNextSearchPage: JavaSteam path failed — falling back to HTTP API",
+                    "page" to page,
+                    "query" to query.take(80),
+                    "exception" to (javaSteamResult.exceptionOrNull()?.javaClass?.name ?: "unknown"),
+                    "message" to (javaSteamResult.exceptionOrNull()?.message ?: ""),
+                )
+                // FALLBACK 1: IPublishedFileService HTTP API. Already overrides
+                // query_type to MOST_RELEVANT when query != null — so the sort
+                // we pass here is effectively a no-op for the query_type, but
+                // the trend_days branch (`if (sort.queryType == 3 && sort.trendDays > 0)`)
+                // is skipped because MOST_RELEVANT.queryType == 12 (not 3), so
+                // no `&days=` param is appended (correct — search has no trend).
+                val httpResult = steamApi.queryFiles(
+                    sort = SteamApiService.Sort.MOST_RELEVANT,
+                    page = page,
+                    tags = tags,
+                    excludedTags = excludedTags,
+                    mobileCompatible = mobileCompat,
+                    query = query,
+                )
+
+                if (httpResult.isSuccess) {
+                    finalResult = httpResult
+                    servedBy = "http_api"
+                } else {
+                    // FALLBACK 2 (last resort): HTML scraping endpoint
+                    // (steamcommunity.com/workshop/browse with searchtext=).
+                    // This is the ONLY path the previous implementation used;
+                    // it remains as the final fallback when both JavaSteam
+                    // and the HTTP API are unavailable (no API key, Steam
+                    // down, user not logged in to JavaSteam session, etc.).
+                    WepWawetLogger.workshopWarn(
+                        "loadNextSearchPage: HTTP API path failed — falling back to HTML scrape",
+                        "page" to page,
+                        "query" to query.take(80),
+                        "exception" to (httpResult.exceptionOrNull()?.javaClass?.name ?: "unknown"),
+                        "message" to (httpResult.exceptionOrNull()?.message ?: ""),
+                    )
+                    finalResult = steamApi.searchWorkshop(
+                        query = query,
+                        page = page,
+                        tags = tags,
+                        excludedTags = excludedTags,
+                        mobileCompatible = mobileCompat,
+                    )
+                    servedBy = "html_scrape"
+                }
+            }
+
+            val items = finalResult.getOrElse { e ->
                 _searchState.value = BrowseState.Error(
                     e.message ?: "Unknown error", page
                 )
                 WepWawetLogger.workshopWarn("loadNextSearchPage failed",
-                    "page" to page, "exception" to e.javaClass.name)
+                    "page" to page,
+                    "served_by" to servedBy,
+                    "exception" to e.javaClass.name,
+                    "message" to (e.message ?: ""))
                 return
             }
+
             if (items.isEmpty()) {
+                // Steam returned 0 items for this page — true end of results.
+                // (Distinct from the "items came back but client-side filters
+                // stripped them all" case, handled below — that case keeps
+                // loading the next page up to MAX_CONSECUTIVE_EMPTY_PAGES.)
                 searchHasMore = false
                 _searchState.value = BrowseState.Done
+                WepWawetLogger.workshop("loadNextSearchPage: end of results",
+                    "page" to page, "served_by" to servedBy)
                 return
             }
+
             // Apply the same client-side filtering + sorting pipeline as browse
             val filteredItems = if (filter != null) {
                 applyClientFilters(items, filter)
@@ -574,6 +729,53 @@ class WorkshopRepository constructor(
                 // No filter context — still apply mobile-compatible filter by default
                 applyClientFilters(items, Filter())
             }
+
+            // v0.7.1: Track consecutive empty SEARCH pages — same pattern as
+            // browse. When the API returns 30 items but applyClientFilters
+            // strips them all (e.g. mobileCompatible=true + 18 default-
+            // excluded resolution tags + age-rating exclusion → all 30 items
+            // have an excluded tag), keep loading the next page up to
+            // MAX_CONSECUTIVE_EMPTY_PAGES (20) consecutive empties before
+            // giving up. This prevents the search from stopping on page 1
+            // when the user's filters are restrictive but matching items
+            // exist further along.
+            //
+            // The counter is SEARCH-SPECIFIC (consecutiveEmptySearchPages,
+            // not the shared consecutiveEmptyPages) so a long restrictive
+            // BROWSE session doesn't bleed into search and vice versa.
+            // Reset in startSearch/clearSearch/refresh()/loadPage() — every
+            // entry point that resets currentSearchQuery/currentSearchPage.
+            if (filteredItems.isEmpty()) {
+                consecutiveEmptySearchPages++
+                if (consecutiveEmptySearchPages >= MAX_CONSECUTIVE_EMPTY_PAGES) {
+                    searchHasMore = false
+                    _searchState.value = BrowseState.Done
+                    WepWawetLogger.workshop(
+                        "loadNextSearchPage: max consecutive empty pages reached, giving up",
+                        "page" to page,
+                        "consecutive_empty" to consecutiveEmptySearchPages,
+                        "max" to MAX_CONSECUTIVE_EMPTY_PAGES,
+                        "served_by" to servedBy)
+                    return
+                }
+                // Still advance the page counter + set Loaded state so the
+                // UI knows it can trigger the next page load (the next
+                // loadNextSearchPage call will increment currentSearchPage
+                // from `page` to `page + 1` and try again).
+                currentSearchPage = page
+                _searchState.value = BrowseState.Loaded(page, searchHasMore)
+                WepWawetLogger.workshop(
+                    "loadNextSearchPage: empty after client filter, continuing",
+                    "page" to page,
+                    "consecutive_empty" to consecutiveEmptySearchPages,
+                    "filtered_out" to items.size,
+                    "served_by" to servedBy)
+                return
+            } else {
+                // Non-empty page — reset the counter.
+                consecutiveEmptySearchPages = 0
+            }
+
             filteredItems.forEach { detailCache[it.id] = it }
 
             // Resolve creator names for the new search items too
@@ -586,7 +788,8 @@ class WorkshopRepository constructor(
                 "page" to page,
                 "new_items" to filteredItems.size,
                 "filtered_out" to (items.size - filteredItems.size),
-                "total_items" to _searchItems.value.size)
+                "total_items" to _searchItems.value.size,
+                "served_by" to servedBy)
         } catch (e: CancellationException) {
             // See loadNextPageLocked for rationale — cancellation must propagate.
             WepWawetLogger.workshopDebug("loadNextSearchPage cancelled (coroutine scope disposed)",

@@ -25,7 +25,18 @@ android {
         // clickable Icon (no longer displaces text), WorkshopBrowserScreen
         // preserves search query when sort changes (re-runs search instead
         // of switching to browse), SteamApiService caches avatar URLs.
-        versionCode = 86
+        // v0.7.1-alpha build 87: SEARCH BACKEND FALLBACK CHAIN — search now
+        // uses the same 3-step chain as browse (JavaSteam → HTTP API → HTML
+        // scrape) so the two paths return consistent results for the same
+        // filters. Search also tracks consecutiveEmptySearchPages (separate
+        // counter) so a restrictive filter that strips every page's items
+        // doesn't stop the search on page 1. Creator row restructured so
+        // the name + heart sit on the right (not all the way left). Heart
+        // has its OWN clickable (parent Row no longer intercepts the tap,
+        // so the heart actually turns red and shows a "favorited (user)"
+        // snackbar at the bottom). Pagination bar compacted to 44dp (was
+        // ~56dp+) with a clear "Go to page:" label.
+        versionCode = 87
         versionName = "0.7.1-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {

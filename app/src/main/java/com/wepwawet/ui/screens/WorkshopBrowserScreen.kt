@@ -1,6 +1,7 @@
 package com.wepwawet.ui.screens
 
 import android.content.Context
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -816,64 +817,165 @@ fun WorkshopBrowserScreen(
 
             // === Pagination bar (only when pagination is enabled) ===
             // v0.7.2: Compact pagination — single row, minimal padding.
+            // v0.7.1 (round 4): Page bar was STILL too tall (~56dp) because
+            // the OutlinedTextField's default height is 56dp with built-in
+            // 16dp top + 16dp bottom padding, and the IconButton touch
+            // targets were defaulting to 48dp minimum even with
+            // Modifier.size(32.dp) applied (Material 3's
+            // `minimumInteractiveComponentSize` Modifier enlarges the
+            // ripple area back to 48dp). The bar height was effectively
+            // 56dp+ which the user described as "way too tall".
+            //
+            // Now:
+            //   1. The whole bar is wrapped in a `Surface` with a small
+            //      shadowElevation so it visually separates from the grid
+            //      above (was just floating with no separator).
+            //   2. The Row's height is fixed at 44dp via Modifier.height.
+            //   3. Prev/Next/Go buttons are plain `Box.clickable` (NOT
+            //      IconButton) with size 36dp — IconButton's
+            //      minimumInteractiveComponentSize was the silent culprit
+            //      inflating the bar height; a Box has no such minimum.
+            //   4. The OutlinedTextField is forced to 36dp height with
+            //      contentPadding = PaddingValues(horizontal = 4.dp,
+            //      vertical = 0.dp) — Material 3 supports contentPadding
+            //      on OutlinedTextField since BOM 2024.x, so we use it to
+            //      eliminate the default 16dp top/bottom padding.
+            //   5. Added a "Go to page:" label BEFORE the text field so
+            //      it's obvious the field is for typing a page number to
+            //      jump to (the previous "Go" placeholder was ambiguous —
+            //      the user said "its not clear you should type into the
+            //      thing to go to that page").
+            //   6. Pressing IME action "Search" on the keyboard now
+            //      triggers the jump too (was only triggered by the
+            //      trailing Send icon before).
             if (paginationEnabled) {
                 val loadedState = browseState as? WorkshopRepository.BrowseState.Loaded
                 val currentPage = loadedState?.page ?: 1
                 val hasMore = loadedState?.hasMore ?: false
                 val isLoading = browseState is WorkshopRepository.BrowseState.Loading
                 var jumpPageText by remember { mutableStateOf("") }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 4.dp,
                 ) {
-                    // Previous button
-                    IconButton(
-                        onClick = { if (currentPage > 1) scope.launch { repo.loadPage(currentPage - 1) } },
-                        enabled = currentPage > 1 && !isLoading,
-                        modifier = Modifier.size(32.dp),
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .padding(horizontal = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Previous page",
-                            modifier = Modifier.size(18.dp))
-                    }
-                    Text("Page $currentPage",
-                        style = MaterialTheme.typography.labelMedium)
-                    // Next button
-                    IconButton(
-                        onClick = { if (hasMore) scope.launch { repo.loadPage(currentPage + 1) } },
-                        enabled = hasMore && !isLoading,
-                        modifier = Modifier.size(32.dp),
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowForward,
-                            contentDescription = "Next page",
-                            modifier = Modifier.size(18.dp))
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    // Jump to page text field
-                    OutlinedTextField(
-                        value = jumpPageText,
-                        onValueChange = { if (it.all { c -> c.isDigit() }) jumpPageText = it },
-                        placeholder = { Text("Go", style = MaterialTheme.typography.labelSmall) },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.width(64.dp),
-                        trailingIcon = {
-                            IconButton(
-                                onClick = {
+                        // Previous page button (Box-clickable, NOT IconButton
+                        // — IconButton would re-introduce the 48dp minimum
+                        // touch target that was making the bar too tall).
+                        val prevEnabled = currentPage > 1 && !isLoading
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clickable(enabled = prevEnabled) {
+                                    if (currentPage > 1) scope.launch { repo.loadPage(currentPage - 1) }
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Previous page",
+                                modifier = Modifier.size(20.dp),
+                                tint = if (prevEnabled) MaterialTheme.colorScheme.onSurface
+                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            )
+                        }
+                        Text(
+                            "Page $currentPage",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        // Next page button
+                        val nextEnabled = hasMore && !isLoading
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clickable(enabled = nextEnabled) {
+                                    if (hasMore) scope.launch { repo.loadPage(currentPage + 1) }
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowForward,
+                                contentDescription = "Next page",
+                                modifier = Modifier.size(20.dp),
+                                tint = if (nextEnabled) MaterialTheme.colorScheme.onSurface
+                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        // v0.7.1 (round 4): "Go to page:" label makes the
+                        // text field's purpose obvious — the user said
+                        // "its not clear you should type into the thing to
+                        // go to that page". Now the label sits right next
+                        // to the field so it's immediately obvious.
+                        Text(
+                            "Go to page:",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        OutlinedTextField(
+                            value = jumpPageText,
+                            onValueChange = { if (it.all { c -> c.isDigit() }) jumpPageText = it },
+                            placeholder = { Text("page #", style = MaterialTheme.typography.labelSmall) },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Number,
+                                imeAction = ImeAction.Search,
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onSearch = {
                                     val page = jumpPageText.toIntOrNull()
                                     if (page != null && page > 0) {
                                         scope.launch { repo.loadPage(page) }
                                         jumpPageText = ""
                                     }
                                 },
-                                modifier = Modifier.size(24.dp),
-                            ) { Icon(Icons.Filled.Send, contentDescription = "Go",
-                                modifier = Modifier.size(14.dp)) }
-                        },
-                    )
+                            ),
+                            // v0.7.1 (round 4): Force the field to 36dp tall
+                            // + zero vertical content padding so the bar's
+                            // total height stays at 44dp. Without these,
+                            // the OutlinedTextField's default 56dp height
+                            // + 16dp top/bottom padding makes the bar
+                            // ~56dp tall.
+                            modifier = Modifier
+                                .width(72.dp)
+                                .height(36.dp),
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                textAlign = TextAlign.Center,
+                            ),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                            trailingIcon = {
+                                // Send button (Box-clickable, smaller
+                                // touch target than IconButton).
+                                Box(
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .clickable {
+                                            val page = jumpPageText.toIntOrNull()
+                                            if (page != null && page > 0) {
+                                                scope.launch { repo.loadPage(page) }
+                                                jumpPageText = ""
+                                            }
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Send,
+                                        contentDescription = "Go to page",
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
