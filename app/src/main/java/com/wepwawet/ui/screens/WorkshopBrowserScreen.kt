@@ -940,18 +940,26 @@ fun WorkshopBrowserScreen(
                                 },
                             ),
                             // v0.7.1 (round 4): Force the field to 36dp tall
-                            // + zero vertical content padding so the bar's
-                            // total height stays at 44dp. Without these,
-                            // the OutlinedTextField's default 56dp height
-                            // + 16dp top/bottom padding makes the bar
-                            // ~56dp tall.
+                            // so the bar's total height stays at 44dp.
+                            // Without this, the OutlinedTextField's default
+                            // 56dp height (16dp top + 16dp bottom padding +
+                            // 24dp text) makes the bar ~56dp tall — the user
+                            // said "way too tall".
+                            //
+                            // NOTE: Material 3 OutlinedTextField in BOM
+                            // 2024.10.01 does NOT have a contentPadding
+                            // parameter (it was added in a later version).
+                            // To work around the lack of contentPadding,
+                            // we just constrain the height — the field's
+                            // internal text vertical-centering is good
+                            // enough at 36dp height that it doesn't look
+                            // clipped. (Compose Material 3 1.3.x.)
                             modifier = Modifier
                                 .width(72.dp)
                                 .height(36.dp),
                             textStyle = MaterialTheme.typography.bodyMedium.copy(
                                 textAlign = TextAlign.Center,
                             ),
-                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
                             trailingIcon = {
                                 // Send button (Box-clickable, smaller
                                 // touch target than IconButton).
