@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -87,60 +88,44 @@ private const val KEY_PKG_CACHE_ENABLED = "pkg_cache_enabled"
 /**
  * The WepWawet Settings screen.
  *
- * v0.7.1 — card order + new toggles:
- *   - The **Cache** card and the **Steam Account** card were swapped — Cache
- *     is now at the top of the list (a frequent-action card), Steam Account
- *     is at the bottom (set-once, rarely touched).
- *   - The **Display** card gained a new "Cache .pkg files" toggle (off by
- *     default) — when enabled, downloaded .pkg files are kept in the app
- *     cache dir for faster re-packing on the next send-to-phone / debug
- *     download.
- *   - The verbose-logging toggle now actually does something — it calls
- *     [WepWawetLogger.setVerbose] on toggle change AND on screen entry
- *     (after loading the saved value). Before v0.7.1 the toggle was
- *     persisted but the logger never read it, so debug/info messages were
- *     always emitted regardless of the user's setting.
+ * Renders five cards inside a scrollable [LazyColumn]:
  *
- * v0.5.3 — a new "Steam Web API" card has been added. It lets the user
- * enter and save a Steam Web API key, which is required for the
- * IPublishedFileService/QueryFiles server-side sort options (Most Up Votes,
- * Most Subscriptions). The key is persisted to [PREFS_NAME] SharedPreferences
- * and loaded into the shared [com.wepwawet.data.SteamApiService] instance
- * by [com.wepwawet.ui.WepWawetNavHost] at app startup.
- *
- * v0.5.2 — the Pairing section has been removed (a dedicated Bluetooth button
- * on the WorkshopBrowserScreen's top bar now opens the Pairing screen, since
- * the pairing proxy always auto-starts in [com.wepwawet.MainActivity] onCreate
- * and there's no user-facing decision to make here).
- *
- * Renders six cards inside a scrollable [LazyColumn] (v0.7.1 order):
- *
- *  1. **Cache** — current cache size + "Clear Cache" button
+ *  1. **Steam account** — username/password fields, Save / Test Login / Clear
  *  2. **Steam Web API** — API key field + Save
- *  3. **Display** — verbose logging switch + .pkg caching switch
- *  4. **Browse Mode (Pagination)** — infinite scroll vs pagination toggle
+ *  3. **Others** — verbose logging, .pkg caching, and browse mode (pagination)
+ *  4. **Cache** — current cache size + "Clear Cache" button
  *  5. **About** — app name, version, git SHA, build time
- *  6. **Steam Account** — username/password fields, Save / Test Login / Clear
+ *
+ * **Logs button:** when the verbose-logging switch is ON, a Logs icon button
+ * appears in the top-right corner of the TopAppBar and opens [LogsScreen] via
+ * [onOpenLogs]. When verbose logging is OFF the button is hidden.
  *
  * The verbose-log toggle is persisted immediately to [PREFS_NAME]
- * SharedPreferences so it survives screen exits and app restarts. The saved
- * value is loaded once on screen entry via a [LaunchedEffect], and is also
- * applied to the running [WepWawetLogger] via [WepWawetLogger.setVerbose] so
- * the change takes effect without an app restart.
+ * SharedPreferences and applied to the running [WepWawetLogger] via
+ * [WepWawetLogger.setVerbose], so it takes effect without an app restart.
+ * Its initial value is read synchronously from SharedPreferences so the Logs
+ * button doesn't flash in/out on screen entry.
  *
- * @param onBack Called when the user taps the back arrow in the
- *               TopAppBar — typically `navController.popBackStack()`.
+ * @param onBack     Called when the user taps the back arrow in the TopAppBar.
+ * @param onOpenLogs Called when the user taps the Logs button (top-right,
+ *                   visible only while verbose logging is enabled).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    onOpenLogs: () -> Unit,
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
     // ---- Persisted toggle state (verbose log) ----
-    var verboseLog by remember { mutableStateOf(true) }
+    var verboseLog by remember {
+        mutableStateOf(
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_VERBOSE_LOG, true)
+        )
+    }
 
     // v0.7.1: .pkg caching toggle (off by default). When enabled, the
     // WorkshopDownloader keeps the raw .pkg files it fetches via JavaSteam
@@ -192,7 +177,15 @@ fun SettingsScreen(
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
-                }
+                },
+                // Logs button (top-right) — only shown while verbose logging is on.
+                actions = {
+                    if (verboseLog) {
+                        IconButton(onClick = onOpenLogs) {
+                            Icon(Icons.Filled.BugReport, contentDescription = "Logs")
+                        }
+                    }
+                },
             )
         }
     ) { innerPadding ->
@@ -203,112 +196,7 @@ fun SettingsScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // ===== 1. Cache (v0.7.1 swap) =====
-            // v0.7.1: This card was previously at the bottom of the Settings
-            // list. The user said they wanted the Steam input card and the
-            // Cache card swapped — so Cache is now at the top (here), and
-            // the Steam Account card moved to the bottom. Clearing the
-            // cache is a frequent action (downloaded .pkg/.mpkg files
-            // accumulate fast), so having it at the top makes it a one-tap
-            // action instead of requiring a scroll.
-            item {
-                CacheCard(context = context)
-            }
-
-            // ===== 2. Steam Web API =====
-            item {
-                SteamWebApiCard(
-                    apiKey = steamApiKey,
-                    apiKeySaved = steamApiKeySaved,
-                    onApiKeyChange = { steamApiKey = it },
-                    onSave = {
-                        val trimmed = steamApiKey.trim()
-                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                            .edit()
-                            .putString(KEY_STEAM_API_KEY, trimmed)
-                            .apply()
-                        steamApiKey = trimmed
-                        steamApiKeySaved = trimmed.isNotBlank()
-                        WepWawetLogger.appInfo(
-                            "settings_steam_api_key_saved",
-                            "length" to trimmed.length,
-                            "is_set" to trimmed.isNotBlank(),
-                        )
-                    },
-                )
-            }
-
-            // ===== 3. Display =====
-            item {
-                DisplayCard(
-                    verboseLog = verboseLog,
-                    onVerboseLogChange = { enabled ->
-                        verboseLog = enabled
-                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                            .edit()
-                            .putBoolean(KEY_VERBOSE_LOG, enabled)
-                            .apply()
-                        // v0.7.1: Actually apply the toggle to the running
-                        // logger — this is the call that makes the toggle do
-                        // something. Before v0.7.1 the toggle was persisted
-                        // but the logger never read it, so debug/info messages
-                        // were always emitted regardless of the setting.
-                        WepWawetLogger.setVerbose(enabled)
-                        WepWawetLogger.appInfo(
-                            "settings_verbose_log_changed",
-                            "enabled" to enabled,
-                        )
-                    },
-                    // v0.7.1: .pkg caching toggle. Off by default — keeps
-                    // downloaded .pkg files in the cache dir for faster
-                    // re-packing on the next send-to-phone / debug download.
-                    pkgCacheEnabled = pkgCacheEnabled,
-                    onPkgCacheChange = { enabled ->
-                        pkgCacheEnabled = enabled
-                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                            .edit()
-                            .putBoolean(KEY_PKG_CACHE_ENABLED, enabled)
-                            .apply()
-                        WepWawetLogger.appInfo(
-                            "settings_pkg_cache_changed",
-                            "enabled" to enabled,
-                        )
-                    },
-                )
-            }
-
-            // ===== 4. Pagination (v0.7.0) =====
-            item {
-                PaginationCard(
-                    paginationEnabled = paginationEnabled,
-                    pageSize = pageSize,
-                    onPaginationChange = { enabled ->
-                        paginationEnabled = enabled
-                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                            .edit().putBoolean(KEY_PAGINATION_ENABLED, enabled).apply()
-                    },
-                    onPageSizeChange = { size ->
-                        pageSize = size
-                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                            .edit().putInt(KEY_PAGE_SIZE, size).apply()
-                    },
-                )
-            }
-
-            // ===== 5. About =====
-            item {
-                AboutCard()
-            }
-
-            // ===== 6. Steam Account (v0.7.1 swap) =====
-            // v0.7.1: This card was previously in position 1 (top of the
-            // settings list). The user said they wanted the Steam input
-            // card and the Cache card swapped — Cache is now at the top,
-            // and the Steam Account card is here at the bottom. Most users
-            // set their Steam credentials once and rarely touch them again,
-            // so putting them at the bottom of Settings (below the
-            // frequently-touched Cache / Display / Pagination cards) keeps
-            // the top of the screen focused on the day-to-day controls.
+            // ===== 1. Steam Account =====
             item {
                 SteamAccountCard(
                     savedUsername = SteamCredentialsStore.getUsername(context),
@@ -368,6 +256,84 @@ fun SettingsScreen(
                     testLoginInProgress = testLoginInProgress,
                     testLoginResult = testLoginResult,
                 )
+            }
+
+            // ===== 2. Steam Web API =====
+            item {
+                SteamWebApiCard(
+                    apiKey = steamApiKey,
+                    apiKeySaved = steamApiKeySaved,
+                    onApiKeyChange = { steamApiKey = it },
+                    onSave = {
+                        val trimmed = steamApiKey.trim()
+                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit()
+                            .putString(KEY_STEAM_API_KEY, trimmed)
+                            .apply()
+                        steamApiKey = trimmed
+                        steamApiKeySaved = trimmed.isNotBlank()
+                        WepWawetLogger.appInfo(
+                            "settings_steam_api_key_saved",
+                            "length" to trimmed.length,
+                            "is_set" to trimmed.isNotBlank(),
+                        )
+                    },
+                )
+            }
+
+            // ===== 3. Others =====
+            // Verbose logging, .pkg caching and browse mode (pagination) all
+            // live here now (the old Display and Browse Mode cards were merged).
+            item {
+                OthersCard(
+                    verboseLog = verboseLog,
+                    onVerboseLogChange = { enabled ->
+                        verboseLog = enabled
+                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit()
+                            .putBoolean(KEY_VERBOSE_LOG, enabled)
+                            .apply()
+                        WepWawetLogger.setVerbose(enabled)
+                        WepWawetLogger.appInfo(
+                            "settings_verbose_log_changed",
+                            "enabled" to enabled,
+                        )
+                    },
+                    pkgCacheEnabled = pkgCacheEnabled,
+                    onPkgCacheChange = { enabled ->
+                        pkgCacheEnabled = enabled
+                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit()
+                            .putBoolean(KEY_PKG_CACHE_ENABLED, enabled)
+                            .apply()
+                        WepWawetLogger.appInfo(
+                            "settings_pkg_cache_changed",
+                            "enabled" to enabled,
+                        )
+                    },
+                    paginationEnabled = paginationEnabled,
+                    pageSize = pageSize,
+                    onPaginationChange = { enabled ->
+                        paginationEnabled = enabled
+                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit().putBoolean(KEY_PAGINATION_ENABLED, enabled).apply()
+                    },
+                    onPageSizeChange = { size ->
+                        pageSize = size
+                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit().putInt(KEY_PAGE_SIZE, size).apply()
+                    },
+                )
+            }
+
+            // ===== 4. Cache =====
+            item {
+                CacheCard(context = context)
+            }
+
+            // ===== 5. About =====
+            item {
+                AboutCard()
             }
         }
     }
@@ -591,90 +557,23 @@ private fun SteamWebApiCard(
 }
 
 /**
- * Section 3 — Display.
+ * Section 3 — Others.
  *
- * Hosts two toggles:
- *   - Verbose logging (capture detailed protocol messages for debugging)
- *   - .pkg caching (v0.7.1: keep downloaded .pkg files in the cache dir
- *     for faster re-packing on the next send-to-phone / debug download)
- *
- * @param verboseLog         Current value of the verbose-log toggle.
- * @param onVerboseLogChange Called with the new value when the user toggles
- *                           the verbose-log switch. The caller is responsible
- *                           for persisting the new value AND for applying it
- *                           to the running logger (see
- *                           [WepWawetLogger.setVerbose]).
- * @param pkgCacheEnabled    Current value of the .pkg caching toggle.
- *                           Defaults to false — .pkg files can be large
- *                           (10-100MB each) so caching is opt-in.
- * @param onPkgCacheChange  Called with the new value when the user toggles
- *                           the .pkg caching switch. The caller is
- *                           responsible for persisting the new value.
+ * Merges what used to be the Display and Browse Mode cards:
+ *   - Verbose logging (capture detailed protocol messages for debugging).
+ *     While enabled, a Logs button is shown in the Settings top bar.
+ *   - .pkg caching (keep downloaded .pkg files in the cache dir for faster
+ *     re-packing on the next send-to-phone / debug download). Off by
+ *     default — .pkg files can be large (10-100MB each).
+ *   - Browse mode: infinite scroll (default) vs pagination, with a page-size
+ *     slider shown only while pagination is on.
  */
 @Composable
-private fun DisplayCard(
+private fun OthersCard(
     verboseLog: Boolean,
     onVerboseLogChange: (Boolean) -> Unit,
     pkgCacheEnabled: Boolean,
     onPkgCacheChange: (Boolean) -> Unit,
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text("Display", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
-
-            Text(
-                "Verbose logging",
-                style = MaterialTheme.typography.bodyLarge,
-            )
-            Text(
-                "Capture detailed protocol messages for debugging.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(if (verboseLog) "Enabled" else "Disabled")
-                Switch(checked = verboseLog, onCheckedChange = onVerboseLogChange)
-            }
-
-            // v0.7.1: .pkg caching toggle.
-            Spacer(Modifier.height(16.dp))
-            Text(
-                "Cache .pkg files",
-                style = MaterialTheme.typography.bodyLarge,
-            )
-            Text(
-                "Save downloaded .pkg files to cache for faster re-packing. " +
-                    "Off by default.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(if (pkgCacheEnabled) "Enabled" else "Disabled")
-                Switch(checked = pkgCacheEnabled, onCheckedChange = onPkgCacheChange)
-            }
-        }
-    }
-}
-
-/**
- * Section 4 — Pagination (v0.7.0).
- *
- * Toggle between infinite scroll (default) and pagination mode.
- * When pagination is enabled, the user can choose the page size.
- */
-@Composable
-private fun PaginationCard(
     paginationEnabled: Boolean,
     pageSize: Int,
     onPaginationChange: (Boolean) -> Unit,
@@ -682,21 +581,64 @@ private fun PaginationCard(
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text("Browse Mode", style = MaterialTheme.typography.titleMedium)
+            Text("Others", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(8.dp))
+
+            // ---- Verbose logging ----
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Use pagination")
+                    Text("Verbose logging", style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        "Infinite scroll by default. Enable to load pages manually.",
-                        style = MaterialTheme.typography.bodySmall,
+                        "Capture detailed protocol messages for debugging. " +
+                            "Shows a Logs button in the top-right corner while enabled.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
                     )
                 }
+                Spacer(Modifier.width(12.dp))
+                Switch(checked = verboseLog, onCheckedChange = onVerboseLogChange)
+            }
+
+            // ---- .pkg caching ----
+            Spacer(Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Cache .pkg files", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Save downloaded .pkg files to cache for faster re-packing. " +
+                            "Off by default.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(checked = pkgCacheEnabled, onCheckedChange = onPkgCacheChange)
+            }
+
+            // ---- Pagination ----
+            Spacer(Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Use pagination", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Infinite scroll by default. Enable to load pages manually.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
                 Switch(checked = paginationEnabled, onCheckedChange = onPaginationChange)
             }
             if (paginationEnabled) {
@@ -706,7 +648,7 @@ private fun PaginationCard(
                     value = pageSize.toFloat(),
                     onValueChange = { onPageSizeChange(it.toInt()) },
                     valueRange = 10f..100f,
-                    steps = 18, // 10, 15, 20, ..., 100
+                    steps = 17, // 10, 15, 20, ..., 100 (19 stops → 17 intermediate steps)
                 )
             }
         }
@@ -745,7 +687,7 @@ private fun AboutCard() {
 }
 
 /**
- * Section 5 — Cache.
+ * Section 4 — Cache.
  *
  * Shows the current cache size and provides a "Clear cache" button that
  * deletes all files in the app's cache directory (downloaded .pkg files,
