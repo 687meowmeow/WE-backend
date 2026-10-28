@@ -17,11 +17,11 @@ android {
         applicationId = "com.wepwawet"
         minSdk = 26  // Android 8.0 — required for the WE pairing protocol + ImageDecoderDecoder GIF path
         targetSdk = 35
-        // v0.6.0-alpha: Major parity release — implements all 36 fixes from parity document
-        // (texture transcoding: BC6H/BC7/RG88/R8/RGBA8888, shader: glslang mandatory + all stages
-        // + #include resolver, video: H.265 + audio + frame rate + rotation + B-frames + profile)
-        versionCode = 83
-        versionName = "0.7.0-alpha"
+        // v0.7.1-alpha: UI cleanup pass — swap Settings card order, .pkg cache toggle,
+        // square wallpaper preview, smaller favorite heart, favorites route placeholder,
+        // verbose-logging now actually filters debug/info messages.
+        versionCode = 84
+        versionName = "0.7.1-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {
             abiFilters += "arm64-v8a"

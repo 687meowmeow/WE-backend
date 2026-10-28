@@ -10,10 +10,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -99,7 +101,8 @@ fun PairingScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp),
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -143,51 +146,54 @@ fun PairingScreen(
                 }
             }
 
-            // v0.7.0: PIN text field — user can type a custom PIN (1-8 digits)
-            OutlinedTextField(
-                value = pin,
-                onValueChange = { newPin ->
-                    // Only allow digits, max 8 chars
-                    if (newPin.all { it.isDigit() } && newPin.length <= 8) {
-                        pin = newPin
-                    }
-                },
-                label = { Text("PIN") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth(),
-            )
+            // v0.7.1: "Change PIN" button — opens a dialog with a text field.
+            // Removed the inline text field and the "Random PIN" button.
+            var showPinDialog by remember { mutableStateOf(false) }
 
-            // Save PIN button — saves to SharedPreferences and restarts the proxy
-            Button(onClick = {
-                val pinToSave = pin.ifBlank { "1234" }
-                WepWawetLogger.proxy("PairingScreen save pin", "pin" to pinToSave)
-                PairingService.setPairingPin(context, pinToSave)
-                pin = pinToSave
-                runCatching { PairingService.start(context, pinToSave) }
-            }) {
-                Icon(Icons.Filled.Save, contentDescription = "Save")
+            OutlinedButton(onClick = { showPinDialog = true }) {
+                Icon(Icons.Filled.Edit, contentDescription = "Change PIN")
                 Spacer(Modifier.width(8.dp))
-                Text("Save PIN")
+                Text("Change PIN")
             }
 
-            // Refresh PIN button — generates a new 4-digit code
-            OutlinedButton(onClick = {
-                val newPin = (1000..9999).random().toString()
-                WepWawetLogger.proxy("PairingScreen refresh pin",
-                    "old" to pin, "new" to newPin)
-                pin = newPin
-                PairingService.setPairingPin(context, newPin)
-                runCatching { PairingService.start(context, newPin) }
-            }) {
-                Icon(Icons.Filled.Refresh, contentDescription = "Random")
-                Spacer(Modifier.width(8.dp))
-                Text("Random PIN")
+            // PIN change dialog
+            if (showPinDialog) {
+                var dialogPin by remember { mutableStateOf(pin) }
+                AlertDialog(
+                    onDismissRequest = { showPinDialog = false },
+                    title = { Text("Change PIN") },
+                    text = {
+                        OutlinedTextField(
+                            value = dialogPin,
+                            onValueChange = { newPin ->
+                                if (newPin.all { it.isDigit() } && newPin.length <= 8) {
+                                    dialogPin = newPin
+                                }
+                            },
+                            label = { Text("Enter new PIN") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        )
+                    },
+                    confirmButton = {
+                        Button(onClick = {
+                            val pinToSave = dialogPin.ifBlank { "1234" }
+                            WepWawetLogger.proxy("PairingScreen change pin", "pin" to pinToSave)
+                            PairingService.setPairingPin(context, pinToSave)
+                            pin = pinToSave
+                            runCatching { PairingService.start(context, pinToSave) }
+                            showPinDialog = false
+                        }) { Text("Save") }
+                    },
+                    dismissButton = {
+                        OutlinedButton(onClick = { showPinDialog = false }) { Text("Cancel") }
+                    },
+                )
             }
 
             Spacer(Modifier.height(24.dp))
 
-            // Status info — the proxy is always running, so we always show this.
+            // Status info
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
@@ -206,11 +212,9 @@ fun PairingScreen(
                     Text("• RSA-1024 keypair generated (OAEP padding)")
                     Text("• AES-256-CBC + RSA/ECB/OAEPPadding")
                     Text("• PIN: $pin")
-                    Text("• Discovery: protocolVersion=4 (CONNECTION_PROTOCOL_VERSION)")
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Check the Logs tab for real-time protocol messages.\n" +
-                            "Use the copy button to copy logs for debugging.",
+                        "Open the Wallpaper Engine Android app and enter the PIN above.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

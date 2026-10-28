@@ -1,10 +1,24 @@
 package com.wepwawet.ui
 
 import android.content.Context
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -22,7 +36,7 @@ import com.wepwawet.ui.screens.WallpaperDetailScreen
 import com.wepwawet.ui.screens.WorkshopBrowserScreen
 
 /**
- * WepWawet navigation host. Seven destinations:
+ * WepWawet navigation host. Eight destinations:
  *
  *   - workshop             (default landing — WorkshopBrowserScreen, global browse)
  *   - creator/{steamId}    (WorkshopBrowserScreen scoped to a single creator)
@@ -31,6 +45,7 @@ import com.wepwawet.ui.screens.WorkshopBrowserScreen
  *   - pairing             (PairingScreen)
  *   - settings            (SettingsScreen)
  *   - logs                (LogsScreen)
+ *   - favorites           (v0.7.1: placeholder screen — full saved-creators grid TBD)
  *
  * A single [WorkshopRepository] is created at the NavHost level (via [remember])
  * so that the WorkshopBrowserScreen and WallpaperDetailScreen share the same
@@ -42,6 +57,13 @@ import com.wepwawet.ui.screens.WorkshopBrowserScreen
  * `creatorSteamId` set — the repo's `creatorSteamId` filter scopes the
  * fetch to that creator's /profiles/<steamId>/myworkshop/ page. A back arrow
  * is shown so the user can return to the global browse.
+ *
+ * v0.7.1 — the [com.wepwawet.ui.screens.WorkshopBrowserScreen] top bar
+ * now has a Favorites (heart) icon. That icon's `onOpenFavorites` callback
+ * is wired here to navigate to the new `favorites` route. The placeholder
+ * screen for now shows "Favorites coming soon" — the full implementation
+ * (a grid of saved creators + their wallpaper counts) is tracked as a
+ * follow-up task.
  *
  * v0.5.3 — the [SteamApiService] instance is now created separately (rather
  * than anonymously inside the [WorkshopRepository] constructor) so that the
@@ -108,7 +130,7 @@ fun WepWawetNavHost() {
                 onItemClick = { id -> nav.navigate("detail/$id") },
                 onOpenDownloads = { nav.navigate("downloads") },
                 onOpenSettings = { nav.navigate("settings") },
-                onOpenLogs = { nav.navigate("logs") },
+                onOpenFavorites = { nav.navigate("favorites") },
                 onOpenPairing = { nav.navigate("pairing") },
                 onCreatorClick = { steamId -> nav.navigate("creator/$steamId") },
                 repo = repo,
@@ -126,7 +148,7 @@ fun WepWawetNavHost() {
                 onItemClick = { id -> nav.navigate("detail/$id") },
                 onOpenDownloads = { nav.navigate("downloads") },
                 onOpenSettings = { nav.navigate("settings") },
-                onOpenLogs = { nav.navigate("logs") },
+                onOpenFavorites = { nav.navigate("favorites") },
                 onOpenPairing = { nav.navigate("pairing") },
                 onCreatorClick = { /* no nested creator navigation */ },
                 onBack = { nav.popBackStack() },
@@ -170,6 +192,65 @@ fun WepWawetNavHost() {
 
         composable("logs") {
             LogsScreen(onBack = { nav.popBackStack() })
+        }
+
+        // v0.7.1: Favorites route placeholder.
+        // The WorkshopBrowserScreen top bar's heart icon navigates here. The
+        // full screen (a grid of saved creators + their wallpaper counts,
+        // with a tap-to-browse-creator action) is a follow-up task — for now
+        // we just show a centered "Favorites coming soon" message + a back
+        // arrow so the icon isn't a dead button.
+        //
+        // Saved-creator Steam IDs are persisted in the `wepwawet_settings`
+        // SharedPreferences file under the `saved_creators` StringSet (see
+        // WallpaperDetailScreen's favorite-heart toggle). The follow-up
+        // implementation will read that set + resolve display names via
+        // WorkshopRepository's creatorNames StateFlow.
+        composable("favorites") {
+            WepWawetLogger.lifecycle("NavHost navigate to favorites")
+            FavoritesPlaceholderScreen(onBack = { nav.popBackStack() })
+        }
+    }
+}
+
+/**
+ * v0.7.1: Minimal placeholder for the favorites route — shows a centered
+ * "Favorites coming soon" message with a back arrow. The full screen
+ * (saved-creators grid + tap-to-browse-creator) is a follow-up task.
+ *
+ * Kept inside this file (rather than as its own screen file under
+ * ui/screens/) because it's tiny and the full implementation will live in
+ * its own file once the saved-creators repository + grid are built.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FavoritesPlaceholderScreen(onBack: () -> Unit) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Favorites") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                        )
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "Favorites coming soon",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

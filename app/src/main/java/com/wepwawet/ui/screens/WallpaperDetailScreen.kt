@@ -65,9 +65,19 @@ import com.wepwawet.pairing.PairingService
 /**
  * Wallpaper detail screen.
  *
+ * v0.7.1 layout changes:
+ *   - Preview image is now SQUARE (1:1) instead of 16:9.
+ *   - The "Type" metadata row was removed (type is implied by preview + tags).
+ *   - The send-to-phone + debug download buttons were moved ABOVE the
+ *     description so the user doesn't have to scroll past the (often very
+ *     long) workshop description to reach the action buttons.
+ *   - The favorite-heart IconButton on the Creator row was shrunk (icon
+ *     16dp, IconButton 28dp) so it no longer visually dominates the row.
+ *
  * Shows:
- *   - Full preview image (16:9)
- *   - Title, description, tags (chips), type, resolution guess, subs count, file size
+ *   - Square preview image (1:1)
+ *   - Title, tags (chips), creator (with smaller favorite-heart toggle),
+ *     resolution guess, subs count, file size
  *   - "Send to phone" button — calls [com.wepwawet.pairing.WorkshopDownloadJob.launchSendToPhone]
  *     which:
  *       1. Downloads the REAL .pkg via JavaSteam (SteamKit2 Java port — on-device,
@@ -84,6 +94,7 @@ import com.wepwawet.pairing.PairingService
  *     as send-to-phone, just saves to public Downloads instead of queueing
  *     for transfer).
  *   - Progress indicator (linear) during download/transfer.
+ *   - Description (shown LAST, below the action buttons).
  *
  * === Why we use the singleton WorkshopDownloadJob instead of rememberCoroutineScope ===
  *
@@ -221,11 +232,14 @@ fun WallpaperDetailScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             // === Preview image ===
+            // v0.7.1: Preview is now SQUARE (1:1) instead of 16:9 — the user
+            // said the rectangular preview wasted vertical space and the square
+            // crop matches what Wallpaper Engine's own tile preview uses.
             item {
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(16f / 9f),
+                        .aspectRatio(1f),
                     shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant,
                 ) {
@@ -254,7 +268,10 @@ fun WallpaperDetailScreen(
                 ) {
                     Column(modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        MetadataRow("Type", current.type.displayName)
+                        // v0.7.1: Removed the "Type" metadata row — the type is
+                        // already implied by the preview image and the tags, and
+                        // the row was visually noisy. (Type info is still
+                        // available in [WorkshopItemTyped] for anyone who needs it.)
                         val creatorName = creatorNames[current.creator] ?: current.creator.ifBlank { "Unknown" }
                         if (current.creator.isNotBlank()) {
                             Row(
@@ -283,22 +300,30 @@ fun WallpaperDetailScreen(
                                     val prefs = remember { context.getSharedPreferences("wepwawet_settings", Context.MODE_PRIVATE) }
                                     val savedCreators = remember { prefs.getStringSet("saved_creators", emptySet()) ?: emptySet() }
                                     val isSaved = current.creator in savedCreators
-                                    IconButton(onClick = {
-                                        val newSet = savedCreators.toMutableSet()
-                                        if (isSaved) {
-                                            newSet.remove(current.creator)
-                                            WepWawetLogger.workshop("creator_unsaved", "creator" to current.creator)
-                                        } else {
-                                            newSet.add(current.creator)
-                                            WepWawetLogger.workshop("creator_saved", "creator" to current.creator)
-                                        }
-                                        prefs.edit().putStringSet("saved_creators", newSet).apply()
-                                    }) {
+                                    // v0.7.1: Smaller favorite heart — icon is
+                                    // 16dp (down from 20dp) and the IconButton
+                                    // itself is shrunk to 28dp (down from the
+                                    // Material3 default of 48dp) so the heart
+                                    // doesn't visually dominate the Creator row.
+                                    IconButton(
+                                        onClick = {
+                                            val newSet = savedCreators.toMutableSet()
+                                            if (isSaved) {
+                                                newSet.remove(current.creator)
+                                                WepWawetLogger.workshop("creator_unsaved", "creator" to current.creator)
+                                            } else {
+                                                newSet.add(current.creator)
+                                                WepWawetLogger.workshop("creator_saved", "creator" to current.creator)
+                                            }
+                                            prefs.edit().putStringSet("saved_creators", newSet).apply()
+                                        },
+                                        modifier = Modifier.size(28.dp),
+                                    ) {
                                         Icon(
                                             if (isSaved) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
                                             contentDescription = if (isSaved) "Unsave creator" else "Save creator",
                                             tint = if (isSaved) Color.Red else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(20.dp),
+                                            modifier = Modifier.size(16.dp),
                                         )
                                     }
                                 }
@@ -335,17 +360,6 @@ fun WallpaperDetailScreen(
                             }
                         }
                     }
-                }
-            }
-
-            // === Description ===
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Description", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        current.description.ifBlank { "No description available." },
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
                 }
             }
 
@@ -501,6 +515,23 @@ fun WallpaperDetailScreen(
                             downloadState.workshopId == itemId && downloadState.errorMessage != null -> "Retry download"
                             else -> "Save .mpkg to Downloads (debug)"
                         }
+                    )
+                }
+            }
+
+            // === Description ===
+            // v0.7.1: Description moved to BELOW the send-to-phone / debug
+            // download buttons. The user said the send-to-phone button should
+            // come ABOVE the description — so the action buttons (which are
+            // what the user actually wants to interact with) sit higher on
+            // the screen, closer to the preview, without having to scroll
+            // past the (often very long) workshop description.
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Description", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        current.description.ifBlank { "No description available." },
+                        style = MaterialTheme.typography.bodyMedium,
                     )
                 }
             }

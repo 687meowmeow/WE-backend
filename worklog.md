@@ -904,3 +904,120 @@ Build Status (verified 2026-10-27):
   The build succeeded because glslang is optional (the regex fallback path handles HLSL→GLSL).
   For full native HLSL→GLSL conversion, vendor glslang+SPIRV-Cross as git submodules.
 
+
+---
+
+Task ID: v0.7.1-cleanup
+Agent: main (UI cleanup pass)
+
+Task: User's 6-item cleanup list for the v0.7.1-alpha release:
+  1. SettingsScreen — swap Cache/Steam Account card positions + add .pkg caching toggle
+  2. WallpaperDetailScreen — square preview, send-to-phone button above description,
+     remove Type metadata row, smaller favorite heart
+  3. WepWawetNavHost — add favorites route, remove onOpenLogs from WorkshopBrowserScreen calls
+  4. WepWawetLogger — make the verbose_log toggle actually filter debug/info messages
+  5. WorkshopBrowserScreen — reduce gap between filter bar and search bar to 0dp
+  6. build.gradle.kts — bump versionCode 83→84, versionName "0.7.0-alpha"→"0.7.1-alpha"
+
+Work Log:
+- SettingsScreen.kt:
+  - Added KEY_PKG_CACHE_ENABLED constant + pkgCacheEnabled state (default: false)
+  - Swapped the Steam Account item block (was position 1) with the Cache item
+    block (was position 5/6). Cache is now at the top, Steam Account at the bottom.
+  - Extended DisplayCard signature with pkgCacheEnabled + onPkgCacheChange params,
+    added a second Switch row labeled "Cache .pkg files" with description
+    "Save downloaded .pkg files to cache for faster re-packing. Off by default."
+  - Wired the verbose-log onVerboseLogChange handler to also call
+    WepWawetLogger.setVerbose(enabled) — before v0.7.1 the toggle was persisted
+    but the logger never read it.
+  - Added a WepWawetLogger.setVerbose(verboseLog) call in the LaunchedEffect(Unit)
+    that loads saved prefs on screen entry.
+  - NOTE: the .pkg cache toggle is currently UI-only. WorkshopDownloader doesn't
+    yet read KEY_PKG_CACHE_ENABLED — that wiring is a follow-up task.
+
+- WallpaperDetailScreen.kt:
+  - Preview image is now SQUARE (1:1) instead of 16:9. Changed
+    `.aspectRatio(16f / 9f)` → `.aspectRatio(1f)`.
+  - Removed `MetadataRow("Type", current.type.displayName)` — type is implied
+    by the preview + tags.
+  - Shrunk the favorite heart IconButton: `Modifier.size(28.dp)` on the
+    IconButton (down from the Material3 default 48dp), and the Icon is now
+    `Modifier.size(16.dp)` (down from 20dp).
+  - Moved the Description item block to AFTER the Debug download button. The
+    new order in the LazyColumn is: preview, title, metadata, tags, status
+    message, progress bar, send-to-phone button, helper hint, debug download
+    button, description, bottom spacer. (User said "send-to-phone button
+    should come ABOVE the description.")
+
+- WepWawetNavHost.kt:
+  - Removed `onOpenLogs = { nav.navigate("logs") }` from BOTH WorkshopBrowserScreen
+    calls (global + creator). The parameter doesn't exist on WorkshopBrowserScreen
+    anymore (it was removed when the logs icon was pulled from the top bar),
+    so the existing code wouldn't have compiled.
+  - Added `onOpenFavorites = { nav.navigate("favorites") }` to both calls.
+  - Added a new `composable("favorites")` route that shows a
+    FavoritesPlaceholderScreen (a centered "Favorites coming soon" message +
+    back arrow). Full saved-creators grid is a follow-up task.
+  - Updated the file-level docstring to mention the 8 destinations (was 7).
+  - Added imports: Box, fillMaxSize, padding, Icons, ArrowBack,
+    ExperimentalMaterial3Api, Icon, IconButton, MaterialTheme, Scaffold, Text,
+    TopAppBar, Alignment, Modifier.
+
+- WepWawetLogger.kt:
+  - Added SETTINGS_PREFS_NAME = "wepwawet_settings" and
+    SETTINGS_KEY_VERBOSE_LOG = "verbose_log" constants (hardcoded here
+    because the SettingsScreen constants are private — comment explains
+    the sync requirement).
+  - Modified init(context) to ALSO read the verbose_log setting from
+    wepwawet_settings and apply it: verbose=true → minLevel=TRACE,
+    verbose=false → minLevel=WARN. This OVERRIDES the legacy PREF_MIN_LEVEL
+    value loaded just above (the legacy mechanism is kept for future use).
+  - Added a new setVerbose(enabled: Boolean) function that adjusts the
+    in-memory minLevel. Doesn't persist (SettingsScreen owns persistence
+    under KEY_VERBOSE_LOG).
+
+- WorkshopBrowserScreen.kt:
+  - Removed vertical padding from the search bar (was
+    `.padding(horizontal = 16.dp, vertical = 2.dp)`, now
+    `.padding(horizontal = 16.dp)`).
+  - Removed vertical padding from the FilterBar Row (was
+    `.padding(horizontal = 12.dp, vertical = 2.dp)`, now
+    `.padding(horizontal = 12.dp)`). Total gap between search bar and
+    filter bar went from 4dp to 0dp.
+  - Removed the unused `import androidx.compose.material.icons.filled.Terminal`
+    (was the logs icon; logs button already removed in v0.7.0).
+  - Updated the file-level docstring: "Logs" → "Favorites" in the top-bar
+    description, replaced the @param onOpenLogs doc with @param onOpenFavorites.
+  - Updated the inline comment in the TopAppBar block to reflect the
+    Favorites-instead-of-Logs action set.
+  - The TopAppBar itself was already compact (title = { }, height = 56.dp,
+    windowInsets = WindowInsets(0,0,0,0)). No further shrinking possible
+    without removing action icons — left as-is.
+
+- app/build.gradle.kts:
+  - versionCode 83 → 84
+  - versionName "0.7.0-alpha" → "0.7.1-alpha"
+  - Updated the comment above to describe the v0.7.1-alpha changeset.
+
+Build Status:
+- Could NOT run a full Gradle build in this environment — the Android SDK is
+  not installed (ANDROID_HOME unset, /opt/android-sdk missing, no platform-tools
+  anywhere on disk). `./gradlew tasks` failed with "SDK location not found".
+- Verification was done by careful manual review of each modified file:
+  - imports are correct (especially the new WepWawetNavHost.kt imports for
+    the FavoritesPlaceholderScreen).
+  - LazyColumn structure in SettingsScreen.kt closes correctly (Cache →
+    Steam Web API → Display → Pagination → About → Steam Account → close).
+  - No leftover references to onOpenLogs in actual code (only in docstring
+    explaining what was removed).
+  - No leftover aspectRatio(16f / 9f) or MetadataRow("Type", ...) calls.
+  - Favorite heart IconButton is now 28dp with a 16dp icon (verified
+    via grep — `Modifier.size(20.dp)` no longer appears next to Favorite /
+    FavoriteBorder imports).
+  - The favorites route + FavoritesPlaceholderScreen are syntactically
+    valid Kotlin Compose code.
+
+Follow-up tasks (NOT done in this changeset):
+- Wire the KEY_PKG_CACHE_ENABLED setting into WorkshopDownloader so the
+  toggle actually controls .pkg file retention.
+- Implement the full Favorites screen (saved-creators grid + tap-to-browse).

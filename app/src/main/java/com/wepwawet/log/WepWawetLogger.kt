@@ -61,6 +61,16 @@ object WepWawetLogger {
     private const val PREF_NAME = "wepwawet_logger"
     private const val PREF_MIN_LEVEL = "min_level"
 
+    // v0.7.1: The user-facing "verbose_log" toggle lives in the
+    // "wepwawet_settings" SharedPreferences file (written by
+    // com.wepwawet.ui.screens.SettingsScreen). We hardcode the keys here
+    // rather than importing the SettingsScreen constants (those are private
+    // to the UI package; cross-package imports of private constants are not
+    // allowed by Kotlin visibility rules). The keys are kept in sync with
+    // SettingsScreen's PREFS_NAME / KEY_VERBOSE_LOG.
+    private const val SETTINGS_PREFS_NAME = "wepwawet_settings"
+    private const val SETTINGS_KEY_VERBOSE_LOG = "verbose_log"
+
     // v0.5.32 (audit L4): removed the unused `private val scope = CoroutineScope(...)`
     // field. It was declared here but never referenced anywhere in the
     // codebase (searched `WepWawetLogger.scope` and `scope\.` — zero hits).
@@ -90,6 +100,26 @@ object WepWawetLogger {
             val savedOrdinal = prefs.getInt(PREF_MIN_LEVEL, Level.INFO.ordinal)
             minLevel = Level.entries.getOrElse(savedOrdinal) { Level.INFO }
         }
+        // v0.7.1: Apply the user's verbose-logging toggle. The toggle is
+        // persisted by SettingsScreen under "verbose_log" in the
+        // "wepwawet_settings" prefs file. Previously this toggle was
+        // persisted but never actually applied to the logger — every call
+        // to WepWawetLogger.steamDebug / appDebug / proxyDebug emitted
+        // regardless of the user's setting (the minLevel stayed at INFO,
+        // which already lets DEBUG through). Now:
+        //   - verbose = true  → minLevel = TRACE (capture everything)
+        //   - verbose = false  → minLevel = WARN  (suppress INFO/DEBUG)
+        // This OVERRIDES the PREF_MIN_LEVEL value loaded above so the
+        // verbose toggle is the authoritative control. We still keep the
+        // PREF_MIN_LEVEL mechanism for future use (e.g. a granular level
+        // picker in Settings — see the existing setMinLevel() function).
+        runCatching {
+            val settingsPrefs = context.getSharedPreferences(
+                SETTINGS_PREFS_NAME, Context.MODE_PRIVATE,
+            )
+            val verboseLog = settingsPrefs.getBoolean(SETTINGS_KEY_VERBOSE_LOG, true)
+            minLevel = if (verboseLog) Level.TRACE else Level.WARN
+        }
         // WorkManager scheduling — wrap in try-catch. WorkManager.getInstance() can throw
         // IllegalStateException if the on-demand initializer is misconfigured, and we don't
         // want a WorkManager init failure to crash the app on boot. The in-memory ring
@@ -107,6 +137,31 @@ object WepWawetLogger {
         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit {
             putInt(PREF_MIN_LEVEL, level.ordinal)
         }
+    }
+
+    /**
+     * v0.7.1: Adjust the logger's minimum level based on the user's
+     * "verbose_log" toggle (set in SettingsScreen).
+     *
+     *   - enabled = true  → minLevel = TRACE (capture everything)
+     *   - enabled = false → minLevel = WARN  (suppress INFO/DEBUG)
+     *
+     * This is the actual mechanism that makes the verbose-log toggle work.
+     * Before v0.7.1 the toggle was persisted to SharedPreferences but never
+     * applied to the running logger — every debug/info message was always
+     * logged regardless of the setting. The Settings screen now calls this
+     * function on screen entry (after loading the saved value) and on every
+     * toggle change.
+     *
+     * NOTE: This does not persist the setting — SettingsScreen owns
+     * persistence under the "verbose_log" key. This function only adjusts
+     * the in-memory minLevel so the change takes effect immediately.
+     *
+     * @param enabled true to enable verbose (everything) logging,
+     *                false to suppress INFO/DEBUG messages.
+     */
+    fun setVerbose(enabled: Boolean) {
+        minLevel = if (enabled) Level.TRACE else Level.WARN
     }
 
     // ====== Convenience entry points per domain ======

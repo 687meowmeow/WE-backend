@@ -32,12 +32,12 @@ import androidx.compose.material.icons.filled.AccountBox
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.ViewModule
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -127,7 +127,13 @@ import kotlinx.coroutines.launch
  *     entry via [LaunchedEffect] and saved immediately whenever they change.
  *
  * Top bar (compact, single row): Back (creator mode only) | Bluetooth |
- * Refresh | Downloads | Settings | Logs.
+ * Refresh | Downloads | Favorites | Settings.
+ *
+ * v0.7.1: The Logs icon was removed (the in-app Logs screen is still
+ * reachable from other entry points, but the workshop browser's top bar
+ * was getting too crowded). A Favorites (heart) icon was added in its
+ * place — it navigates to the placeholder favorites route (see
+ * [com.wepwawet.ui.WepWawetNavHost]'s `favorites` composable).
  *
  * Filter row (single horizontal scroll, below the search bar):
  * Filter ▼ | Sort ▼ | Tile ▼.
@@ -144,7 +150,10 @@ import kotlinx.coroutines.launch
  * @param onItemClick invoked with a workshop item id when a card is tapped
  * @param onOpenDownloads invoked when the user taps the Downloads action icon
  * @param onOpenSettings invoked when the user taps the Settings action icon
- * @param onOpenLogs invoked when the user taps the Logs action icon
+ * @param onOpenFavorites invoked when the user taps the Favorites (heart) icon.
+ *   v0.7.1: Replaces the previous `onOpenLogs` parameter (the Logs icon was
+ *   removed). Defaults to a no-op so callers that haven't been updated yet
+ *   don't crash.
  * @param onOpenPairing invoked when the user taps the Bluetooth (pairing) icon
  * @param onCreatorClick invoked with a creator Steam ID64 when the user taps
  *   the "by <creator>" line on a wallpaper tile. Typically wires up to
@@ -165,7 +174,7 @@ fun WorkshopBrowserScreen(
     onItemClick: (String) -> Unit,
     onOpenDownloads: () -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenLogs: () -> Unit,
+    onOpenFavorites: () -> Unit = {},
     onOpenPairing: () -> Unit,
     repo: WorkshopRepository,
     onCreatorClick: (String) -> Unit = {},
@@ -510,7 +519,9 @@ fun WorkshopBrowserScreen(
             // Sort and Tile size selectors). What's left on the top bar:
             //   - Left (navigationIcon): Back arrow (creator mode only),
             //     Bluetooth (pairing) button.
-            //   - Right (actions): Refresh, Downloads, Settings, Logs.
+            //   - Right (actions): Refresh, Downloads, Favorites, Settings.
+            //     v0.7.1: Logs was removed (top bar was too crowded) and
+            //     Favorites was added in its place.
             //
             // The TopAppBar's windowInsets are set to WindowInsets(0) so
             // the bar's icons sit right at the top edge of the bar (no
@@ -551,26 +562,37 @@ fun WorkshopBrowserScreen(
                     }
                 },
                 actions = {
-                    // v0.7.0: Removed Refresh button per user request.
-                    // Pull-to-refresh still works for refreshing the list.
+                    // v0.7.1: Re-added Refresh button (user clarified they meant
+                    // remove the PIN refresh button, not the browse refresh).
+                    IconButton(onClick = {
+                        WepWawetLogger.workshop("topbar refresh tapped")
+                        onRefresh()
+                    }) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh",
+                            modifier = Modifier.size(22.dp))
+                    }
                     IconButton(onClick = {
                         WepWawetLogger.workshop("topbar downloads tapped")
                         onOpenDownloads()
                     }) {
-                        Icon(Icons.Filled.Download, contentDescription = "Downloads")
+                        Icon(Icons.Filled.Download, contentDescription = "Downloads",
+                            modifier = Modifier.size(22.dp))
+                    }
+                    IconButton(onClick = {
+                        WepWawetLogger.workshop("topbar favorites tapped")
+                        onOpenFavorites()
+                    }) {
+                        Icon(Icons.Filled.Favorite, contentDescription = "Favorites",
+                            modifier = Modifier.size(22.dp))
                     }
                     IconButton(onClick = {
                         WepWawetLogger.workshop("topbar settings tapped")
                         onOpenSettings()
                     }) {
-                        Icon(Icons.Filled.Settings, contentDescription = "Settings")
+                        Icon(Icons.Filled.Settings, contentDescription = "Settings",
+                            modifier = Modifier.size(22.dp))
                     }
-                    IconButton(onClick = {
-                        WepWawetLogger.workshop("topbar logs tapped")
-                        onOpenLogs()
-                    }) {
-                        Icon(Icons.Filled.Terminal, contentDescription = "Logs")
-                    }
+                    // v0.7.1: Removed logs icon per user request.
                 },
                 // Strip the TopAppBar's default status bar inset — we apply
                 // statusBarsPadding() ourselves above. This keeps the bar at
@@ -627,7 +649,11 @@ fun WorkshopBrowserScreen(
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 2.dp),
+                        // v0.7.1: vertical padding removed so the search bar
+                        // sits flush against the filter bar below — the user
+                        // asked for the gap to be 0dp (was 2dp top + 2dp bottom
+                        // of the filter row = 4dp gap).
+                        .padding(horizontal = 16.dp),
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Text,
                         imeAction = ImeAction.Search,
@@ -803,7 +829,10 @@ private fun FilterBar(
         modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 2.dp),
+            // v0.7.1: vertical padding removed so the filter bar sits flush
+            // against the search bar above — the user asked for the gap to
+            // be 0dp.
+            .padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
