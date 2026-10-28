@@ -140,7 +140,24 @@ android {
         //      that overflows + Icon centered) is preserved exactly —
         //      only the sizes change. Creator row stays exactly as
         //      tall as the other MetadataRow rows.
-        versionCode = 89
+        // v0.7.1-alpha build 90: REVERT MpkgPacker.kt shader conversion —
+        //   restore round 4 hotfix packing logic. My round 5/6 changes to
+        //   fixShadersForMobile (convertHlslFunctionCall balanced-parens
+        //   scanner + removing the !contains("mix(") guard) BROKE the
+        //   Mordred (X-Ray) wallpaper which was working before. The WE
+        //   Android renderer handles HLSL mul()/saturate() natively (it
+        //   has an HLSL compatibility shim). Converting them to GLSL
+        //   (vec*mat / clamp) made the shader fail to compile on WE
+        //   Android → wallpaper rendered as gray "invalid image".
+        //   Reverting to round 4 hotfix state: mul/saturate/lerp NOT
+        //   converted (the !contains("mix(") guard prevents the regex
+        //   from running on shaders that have both mul() and mix()).
+        //   The other xray wallpaper (id=2347762662) remains gray — it
+        //   was already gray before round 5, so the shader conversion
+        //   was NOT the issue for that one. The pairing persistence,
+        //   BootReceiver, heart-smaller, and all other round 6 changes
+        //   are KEPT (only MpkgPacker.kt is reverted).
+        versionCode = 90
         versionName = "0.7.1-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {
