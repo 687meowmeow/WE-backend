@@ -187,6 +187,9 @@ fun WepWawetNavHost() {
         composable("settings") {
             SettingsScreen(
                 onBack = { nav.popBackStack() },
+                // Logs button in Settings' top-right corner (visible only
+                // while verbose logging is enabled).
+                onOpenLogs = { nav.navigate("logs") },
             )
         }
 
