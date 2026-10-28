@@ -65,7 +65,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.wepwawet.data.WorkshopRepository
-import com.wepwawet.data.model.WallpaperType
 import com.wepwawet.data.model.WorkshopItemTyped
 import com.wepwawet.log.WepWawetLogger
 import com.wepwawet.pairing.PairingService
@@ -138,7 +137,7 @@ fun WallpaperDetailScreen(
     onBack: () -> Unit,
     repo: WorkshopRepository,
     onCreatorClick: (String) -> Unit = {},
-    onVideoTrim: (itemId: String, videoPath: String, itemTitle: String) -> Unit = { _, _, _ -> },
+    onVideoTrim: (videoFile: java.io.File, itemTitle: String, itemId: String) -> Unit = { _, _, _ -> },
 ) {
     val context = LocalContext.current
 
@@ -519,74 +518,13 @@ fun WallpaperDetailScreen(
             // .mpkg → black wallpaper on phone.
             // User said: "send to phone should make the same thing the debug
             // download makes and sends it perfectly" — this restores that.
-            //
-            // v0.7.1 (round 9): For VIDEO wallpapers, the send-to-phone button
-            // first downloads the .pkg via Steam, detects that it's a video via
-            // magic bytes, and navigates to the VideoTrimScreen where the user
-            // can trim the video (set start/end) with a live ExoPlayer preview
-            // before sending. For scene/image wallpapers, the behavior is
-            // unchanged — send directly.
             item {
                 Button(
                     onClick = {
                         if (!downloadState.isRunning) {
-                            // Check if this wallpaper is a VIDEO type — if so,
-                            // download first, then navigate to the trim screen
-                            // with the downloaded video file.
-                            val isVideo = current.type == WallpaperType.VIDEO
-                            if (isVideo) {
-                                // Launch a "download only" that saves the .pkg
-                                // to cache and then navigates to VideoTrimScreen.
-                                // We use launchDebugDownload which downloads +
-                                // packs to .mpkg — but for video we want the RAW
-                                // video file, not the .mpkg. So we'll use a
-                                // custom approach: download via the same Steam
-                                // protocol, detect the video file, and navigate.
-                                //
-                                // For now: use launchSendToPhone which downloads
-                                // + packs + queues. But we intercept BEFORE
-                                // packing by checking if the downloaded file is
-                                // a video. We can't easily intercept mid-flight,
-                                // so instead we navigate to the trim screen
-                                // which does its own download.
-                                //
-                                // Actually the cleanest approach: use the
-                                // WorkshopDownloadJob to just download the .pkg
-                                // (without packing), detect the video file,
-                                // and navigate to VideoTrimScreen.
-                                //
-                                // But WorkshopDownloadJob.launchSendToPhone
-                                // does download + pack + queue all in one. We
-                                // can't intercept mid-flight.
-                                //
-                                // So: for video wallpapers, we navigate directly
-                                // to VideoTrimScreen. The VideoTrimScreen will
-                                // download the video via its own coroutine using
-                                // WorkshopDownloader, then show the preview +
-                                // trim UI.
-                                //
-                                // The video file path will be passed as a nav
-                                // argument. The trim screen downloads it first,
-                                // then shows the UI.
-                                //
-                                // For now, use a simplified approach: use
-                                // launchDebugDownload which saves to Downloads
-                                // — but that packs to .mpkg. We need the RAW
-                                // video file.
-                                //
-                                // OK, simplest approach: call launchSendToPhone
-                                // for non-video, and for video navigate to
-                                // videoTrim with a placeholder path. The trim
-                                // screen will download the video itself.
-                                //
-                                // Actually even simpler: just pass the itemId
-                                // and title. The VideoTrimScreen will handle
-                                // the download internally.
-                                onVideoTrim(itemId, "", current.title)
-                            } else {
-                                // Non-video (scene/image) — send directly as before
-                                com.wepwawet.pairing.WorkshopDownloadJob.launchSendToPhone(context, current)
-                            }
+                            // Use the singleton WorkshopDownloadJob — its state
+                            // flows into `downloadState` which we already observe.
+                            com.wepwawet.pairing.WorkshopDownloadJob.launchSendToPhone(context, current)
                         }
                     },
                     enabled = !downloadState.isRunning,
@@ -601,7 +539,6 @@ fun WallpaperDetailScreen(
                                 else -> "Sending…"
                             }
                         }
-                        else if (current.type == WallpaperType.VIDEO) "Send to phone (trim video)"
                         else if (!isPaired) "Send to phone (pair first)"
                         else if (!hasSteamCredentials) "Send to phone (enter Steam login in Settings)"
                         else if (downloadState.workshopId == itemId && downloadState.resultMessage != null) "Sent ✓ (tap again to re-send)"
@@ -684,6 +621,41 @@ fun WallpaperDetailScreen(
             // === Bottom spacer ===
             item { Spacer(Modifier.height(48.dp)) }
         }
+    }
+
+    // v0.7.1 (round 10): Video trim dialog — pops up when the download detects
+    // the file is a video (downloadState.pendingVideoFile != null). The user
+    // can choose to trim, send the full video, or cancel.
+    val pendingVideoFile = downloadState.pendingVideoFile
+    val pendingVideoItem = downloadState.pendingVideoItem
+    if (pendingVideoFile != null && pendingVideoItem != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { },
+            title = { Text("Video Downloaded") },
+            text = { Text("Do you want to trim this video before sending it to your phone?") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        val videoFile = java.io.File(pendingVideoFile)
+                        onVideoTrim(videoFile, pendingVideoItem.title, pendingVideoItem.id)
+                    },
+                ) { Text("Trim Video") }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            com.wepwawet.pairing.WorkshopDownloadJob.continueVideoSend(context)
+                        },
+                    ) { Text("Send Full Video") }
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            com.wepwawet.pairing.WorkshopDownloadJob.cancelVideoSend()
+                        },
+                    ) { Text("Cancel") }
+                }
+            },
+        )
     }
 }
 

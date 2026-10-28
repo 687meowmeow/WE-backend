@@ -134,7 +134,7 @@ object VideoTrimmer {
 
                 bufferInfo.offset = 0
                 bufferInfo.size = sampleSize
-                bufferInfo.presentationTimeUs = sampleTime - (startMs * 1000) // shift to 0-based
+                bufferInfo.presentationTimeUs = sampleTime
                 bufferInfo.flags = when {
                     extractor.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0 ->
                         android.media.MediaCodec.BUFFER_FLAG_KEY_FRAME

@@ -59,6 +59,14 @@ object WorkshopDownloadJob {
         val savedFilePath: String? = null,
         /** Final saved file size in bytes (success only). */
         val savedFileSize: Long = 0L,
+        /** v0.7.1 (round 10): When the downloaded .pkg is a video, this is
+         *  set to the downloaded file path so the UI can show a dialog asking
+         *  "Do you want to trim the video?" before proceeding with pack + queue.
+         *  Null for non-video wallpapers (the normal pack + queue flow runs
+         *  immediately). */
+        val pendingVideoFile: String? = null,
+        /** v0.7.1 (round 10): The workshop item associated with pendingVideoFile. */
+        val pendingVideoItem: WorkshopItemTyped? = null,
     )
 
     private val _state = MutableStateFlow(State())
@@ -659,6 +667,41 @@ object WorkshopDownloadJob {
                     "install_dir" to installDir.absolutePath,
                     "install_dir_exists" to installDir.exists(),
                     "is_video" to isVideo)
+
+                // v0.7.1 (round 10): If the downloaded file is a video, pause
+                // BEFORE packing and set pendingVideoFile so the UI can show
+                // a dialog asking "Do you want to trim the video?". The user
+                // can either:
+                //   a) Tap "Trim" → navigate to VideoTrimScreen with the
+                //      downloaded video file. The trim screen handles pack +
+                //      queue after trimming.
+                //   b) Tap "Send Full" → call continueVideoSend() which
+                //      resumes the pack + queue flow below (skipping trim).
+                //   c) Tap "Cancel" → call cancelVideoSend() which deletes
+                //      the downloaded file and resets state.
+                if (isVideo) {
+                    _state.update { s -> s.copy(
+                        isRunning = false,  // Not "running" anymore — waiting for user decision
+                        status = "Video downloaded — do you want to trim?",
+                        progress = 0.85f,
+                        pendingVideoFile = downloadedPkg.absolutePath,
+                        pendingVideoItem = item,
+                    ) }
+                    // Mirror into DownloadManager
+                    onDownloadProgress(
+                        itemId = item.id,
+                        progress = 0.85f,
+                        status = com.wepwawet.data.DownloadStatus.PACKING,
+                        statusMessage = "Video downloaded — waiting for trim decision",
+                    )
+                    // Return here — the UI will call continueVideoSend() or
+                    // the VideoTrimScreen will handle the rest.
+                    WepWawetLogger.workshop("WorkshopDownloadJob.send: video downloaded — waiting for trim decision",
+                        "video_file" to downloadedPkg.absolutePath,
+                        "video_size" to downloadedPkg.length())
+                    return@launchSafely
+                }
+
                 val pm = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
                 val wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "WepWawet:MpkgPacker")
                 wakeLock.setReferenceCounted(false)
@@ -810,6 +853,123 @@ object WorkshopDownloadJob {
             }
         }
         return true
+    }
+
+    /**
+     * v0.7.1 (round 10): Continue the video send flow WITHOUT trimming.
+     * Called when the user taps "Send Full Video" in the trim dialog.
+     * Packs the downloaded video into a .mpkg and queues it for transfer
+     * — exactly the same code as the normal send-to-phone flow for video.
+     */
+    fun continueVideoSend(context: Context) {
+        val pendingFile = _state.value.pendingVideoFile
+        val pendingItem = _state.value.pendingVideoItem
+        if (pendingFile == null || pendingItem == null) {
+            WepWawetLogger.workshopWarn("WorkshopDownloadJob.continueVideoSend: no pending video",
+                "pending_file" to (pendingFile ?: "null"))
+            return
+        }
+        val appContext = context.applicationContext
+        val videoFile = File(pendingFile)
+        if (!videoFile.exists()) {
+            WepWawetLogger.workshopWarn("WorkshopDownloadJob.continueVideoSend: video file gone",
+                "path" to pendingFile)
+            _state.update { it.copy(
+                pendingVideoFile = null,
+                pendingVideoItem = null,
+                errorMessage = "Video file not found",
+            ) }
+            return
+        }
+        // Clear the pending state — we're resuming
+        _state.update { it.copy(
+            pendingVideoFile = null,
+            pendingVideoItem = null,
+            isRunning = true,
+            status = "Packing video → .mpkg…",
+        ) }
+        val sendId = System.currentTimeMillis()
+        val cacheMpkg = File(appContext.cacheDir, "${pendingItem.id}_${sendId}_send.mpkg")
+        val installDir = File(appContext.cacheDir, "workshop_downloads/${pendingItem.id}")
+        job = WepWawetApplication.appScope.launchSafely {
+            try {
+                val pm = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+                val wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "WepWawet:MpkgPacker")
+                wakeLock.setReferenceCounted(false)
+                wakeLock.acquire(10 * 60 * 1000L)
+                val mpkgSize = try {
+                    val previewFile = File(installDir, "preview.jpg")
+                        .takeIf { it.exists() }
+                        ?: File(installDir, "preview.gif")
+                            .takeIf { it.exists() }
+                    com.wepwawet.pairing.MpkgPacker.packVideoWallpaper(
+                        item = pendingItem,
+                        videoFile = videoFile,
+                        outputFile = cacheMpkg,
+                        previewFile = previewFile,
+                    )
+                } finally {
+                    if (wakeLock.isHeld) wakeLock.release()
+                }
+                // Queue for transfer
+                _state.update { s -> s.copy(
+                    status = "Queuing for transfer…",
+                    progress = 0.95f,
+                ) }
+                onDownloadProgress(
+                    itemId = pendingItem.id,
+                    progress = 0.95f,
+                    status = com.wepwawet.data.DownloadStatus.QUEUING,
+                    statusMessage = "Queuing for transfer to phone…",
+                )
+                val deviceName = PairingService.pairedDeviceName ?: "phone"
+                PairingService.queueWallpaper(cacheMpkg, pendingItem.title)
+                PairingService.launchWallpaperEngineApp(appContext)
+                runCatching { videoFile.delete() }
+                val msg = "Queued ${formatBytes(cacheMpkg.length())} for transfer to $deviceName"
+                WepWawetLogger.workshop("WorkshopDownloadJob.continueVideoSend: QUEUED",
+                    "file" to cacheMpkg.name, "size" to cacheMpkg.length())
+                _state.update { s -> s.copy(
+                    isRunning = false,
+                    progress = 1f,
+                    status = msg,
+                    resultMessage = msg,
+                    endedAt = System.currentTimeMillis(),
+                    savedFilePath = cacheMpkg.absolutePath,
+                    savedFileSize = cacheMpkg.length(),
+                ) }
+                onDownloadCompleted(pendingItem, cacheMpkg.length(), deviceName)
+            } catch (e: Exception) {
+                WepWawetLogger.workshopWarn("WorkshopDownloadJob.continueVideoSend: failed",
+                    "exception" to e.javaClass.name, "message" to (e.message ?: ""))
+                _state.update { s -> s.copy(
+                    isRunning = false,
+                    status = "Failed: ${e.message}",
+                    errorMessage = "Failed: ${e.message}",
+                    endedAt = System.currentTimeMillis(),
+                ) }
+            }
+        }
+    }
+
+    /**
+     * v0.7.1 (round 10): Cancel a pending video send (user tapped "Cancel"
+     * in the trim dialog). Deletes the downloaded video file and resets state.
+     */
+    fun cancelVideoSend() {
+        val pendingFile = _state.value.pendingVideoFile
+        WepWawetLogger.workshop("WorkshopDownloadJob.cancelVideoSend",
+            "pending_file" to (pendingFile ?: "null"))
+        if (pendingFile != null) {
+            runCatching { File(pendingFile).delete() }
+        }
+        _state.update { it.copy(
+            isRunning = false,
+            pendingVideoFile = null,
+            pendingVideoItem = null,
+            status = "Cancelled",
+            endedAt = System.currentTimeMillis(),
+        ) }
     }
 
     fun cancel() {
