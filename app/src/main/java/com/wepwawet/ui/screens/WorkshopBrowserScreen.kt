@@ -507,6 +507,34 @@ fun WorkshopBrowserScreen(
     val displayState = if (inSearchMode) searchState else browseState
     val displayItems: List<WorkshopItemTyped> = if (inSearchMode) searchItems else items
 
+    // v0.7.3: When manual pagination is enabled, scroll the grid back to
+    // the top whenever the loaded page changes. Without this, navigating
+    // to the next page (or jumping to page N via the Go-to-page field)
+    // leaves the scroll position wherever it was on the previous page —
+    // usually near the bottom, just above the pagination bar — so the
+    // user has to manually scroll up to see the new page's first row.
+    // Only fires when pagination is on (the infinite-scroll mode does
+    // its own scroll management via the snapshotFlow near-bottom
+    // detector and doesn't need to be reset on each page).
+    //
+    // Keyed on `displayState` so it re-fires whenever the state
+    // transitions from Loading(N) → Loaded(N, hasMore). The
+    // `lastSeenPage` guard prevents the scroll from firing on the
+    // initial composition (where Loaded(1) would equal the initial
+    // state and we'd be at the top anyway) and avoids redundant
+    // scrolls when the Loaded state hasn't actually changed.
+    var lastSeenPage by remember { mutableStateOf(0) }
+    LaunchedEffect(displayState, paginationEnabled) {
+        if (!paginationEnabled) return@LaunchedEffect
+        val loadedState = displayState as? WorkshopRepository.BrowseState.Loaded
+        if (loadedState != null && loadedState.page != lastSeenPage) {
+            lastSeenPage = loadedState.page
+            gridState.scrollToItem(0)
+            WepWawetLogger.workshop("pagination_scroll_to_top",
+                "page" to loadedState.page)
+        }
+    }
+
     // === Infinite scroll: snapshotFlow reads State<T> directly (C2 fix) ===
     // v0.5.14-alpha: Read State<T> delegates (items, browseState, etc.)
     // DIRECTLY inside snapshotFlow block — NOT captured local vals.

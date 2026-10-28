@@ -157,8 +157,8 @@ android {
         //   was NOT the issue for that one. The pairing persistence,
         //   BootReceiver, heart-smaller, and all other round 6 changes
         //   are KEPT (only MpkgPacker.kt is reverted).
-        versionCode = 94
-        versionName = "0.7.2-alpha"
+        versionCode = 95
+        versionName = "0.7.3-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {
             abiFilters += "arm64-v8a"

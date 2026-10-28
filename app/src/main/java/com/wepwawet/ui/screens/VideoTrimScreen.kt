@@ -2,6 +2,7 @@ package com.wepwawet.ui.screens
 
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,7 +26,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -40,8 +44,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -62,18 +68,37 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * Video trim screen — a standard video trimmer UI with:
- *   - Video preview at the top (matching the video's actual aspect ratio)
- *   - A single timeline bar with frame preview thumbnails
- *   - Two draggable handles on the bar (start + end) like every other video
- *     trimming app
+ * Video trim screen — a standard mobile video trimmer UI:
  *
- * The user drags the start/end handles to set the trim range. The preview
- * seeks to the handle position while dragging.
+ *   ┌──────────────────────────────────────────────────────┐
+ *   │  Video preview (matches video's actual aspect ratio) │
+ *   └──────────────────────────────────────────────────────┘
  *
- * When done, "Trim & Send" trims the video (lossless stream copy) and
- * queues it for transfer. "Send Full Video" skips trimming and sends the
- * full video (same pack + queue code as the pre-trim send-to-phone).
+ *   start                                              end
+ *   00:03                                            00:14
+ *
+ *   ┌─▼─┬────────────────────────────────────────────┬─▼─┐
+ *   │░░░│ [thumb][thumb][thumb][thumb][thumb][thumb] │░░░│
+ *   │░░░│ [thumb][thumb][thumb][thumb][thumb][thumb] │░░░│
+ *   └───┴────────────────────────────────────────────┴───┘
+ *
+ *   ↑ dimmed    ↑ thumbnails form the bar background     ↑ dimmed
+ *               (selected region — frames visible)
+ *
+ *   [ Trim & Send ] [ Send Full Video (No Trim) ]
+ *
+ * The video frames ARE the bar. Two dim overlays cover the parts
+ * outside the selected range. The RangeSlider sits on top with
+ * transparent track colors — only the thumb handles are visible,
+ * sitting on top of the strip like every other mobile video trimmer
+ * (WhatsApp / iMovie / CapCut / etc.). 16 frame thumbnails evenly
+ * spaced across the bar so the user has a clear visual sense of the
+ * video's content as they drag.
+ *
+ * "Trim & Send" trims the video (lossless stream copy via
+ * [VideoTrimmer.trim]) and queues it for transfer.
+ * "Send Full Video" skips trimming and sends the full video
+ * (same pack + queue code as the pre-trim send-to-phone).
  *
  * @param videoFile The downloaded video file (already exists on disk).
  * @param itemTitle Wallpaper title.
@@ -95,7 +120,7 @@ fun VideoTrimScreen(
 
     val videoUri = remember { Uri.fromFile(videoFile).toString() }
 
-    // ExoPlayer
+    // ExoPlayer — preview loop of the video.
     val player = remember {
         ExoPlayer.Builder(context).build().apply {
             setMediaItem(MediaItem.fromUri(videoUri))
@@ -106,7 +131,7 @@ fun VideoTrimScreen(
     }
     DisposableEffect(Unit) { onDispose { player.release() } }
 
-    // Video metadata
+    // Video metadata + trimmer state.
     var durationMs by remember { mutableLongStateOf(0L) }
     var videoWidth by remember { mutableStateOf(0) }
     var videoHeight by remember { mutableStateOf(0) }
@@ -116,10 +141,14 @@ fun VideoTrimScreen(
     var isTrimming by remember { mutableStateOf(false) }
     var trimStatus by remember { mutableStateOf("") }
 
-    // Frame thumbnails for the timeline
+    // v0.7.3: 16 frame thumbnails (was 8). More frames = clearer
+    // visual sense of the video's content as the user drags. The
+    // thumbnails form the BACKGROUND of the trim bar (not a separate
+    // row above it) — the standard pattern used by every mobile video
+    // trimmer (WhatsApp, iMovie, CapCut, VN, etc.).
     val thumbnails = remember { mutableStateListOf<android.graphics.Bitmap>() }
 
-    // Get video metadata (duration, width, height) + generate thumbnails
+    // Get video metadata (duration, width, height) + generate thumbnails.
     LaunchedEffect(videoFile) {
         withContext(Dispatchers.IO) {
             try {
@@ -135,18 +164,30 @@ fun VideoTrimScreen(
                 WepWawetLogger.workshop("VideoTrimScreen: metadata loaded",
                     "duration_ms" to dur, "width" to w, "height" to h)
 
-                // Generate 8 frame thumbnails evenly spaced
-                val thumbCount = 8
+                // Generate 16 frame thumbnails evenly spaced across the
+                // video duration. Using OPTION_CLOSEST_SYNC (sync frames
+                // only) is fast — each call is ~10-30ms even for big videos,
+                // so 16 calls add up to well under a second.
+                val thumbCount = 16
                 for (i in 0 until thumbCount) {
                     val t = if (thumbCount > 1) dur * i / (thumbCount - 1) else 0
                     val bmp = retriever.getFrameAtTime(t * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                     if (bmp != null) {
-                        // Scale down to ~80px wide
-                        val scaled = android.graphics.Bitmap.createScaledBitmap(bmp, 80, (80f * h / w).toInt(), true)
+                        // Scale down to height=160px (crisp at 72dp on xhdpi+)
+                        // and width proportional to the video's aspect ratio.
+                        // ContentScale.FillBounds in the strip Row will then
+                        // stretch/squash each frame to its uniform-weight slot,
+                        // giving the filmstrip look.
+                        val targetH = 160
+                        val targetW = (targetH * w / h).toInt().coerceAtLeast(1)
+                        val scaled = android.graphics.Bitmap.createScaledBitmap(bmp, targetW, targetH, true)
+                        if (scaled != bmp) bmp.recycle()
                         thumbnails.add(scaled)
                     }
                 }
                 retriever.release()
+                WepWawetLogger.workshop("VideoTrimScreen: thumbnails generated",
+                    "count" to thumbnails.size)
             } catch (e: Exception) {
                 WepWawetLogger.workshopWarn("VideoTrimScreen: metadata/thumbnail failed",
                     "exception" to e.javaClass.name, "message" to (e.message ?: ""))
@@ -154,7 +195,7 @@ fun VideoTrimScreen(
         }
     }
 
-    // Poll current position
+    // Poll current position for the progress bar.
     LaunchedEffect(player) {
         while (true) {
             currentPosition = player.currentPosition
@@ -220,54 +261,132 @@ fun VideoTrimScreen(
                     color = MaterialTheme.colorScheme.primary)
             }
 
-            // === Timeline with frame previews + range slider ===
+            // === v0.7.3: Trimmer bar with frames INSIDE the bar ===
+            // Layout (bottom to top in a Box):
+            //   1. Row of 16 frame thumbnails filling the box (the strip
+            //      background — frames ARE the bar, not above it).
+            //   2. Row with three weight-based Boxes: left-dim |
+            //      transparent-selected | right-dim. The dimmed Boxes are
+            //      semi-transparent black overlays covering the frames
+            //      OUTSIDE the selected range (the standard "dim the
+            //      unselected portion" look used by every mobile video
+            //      trimmer — WhatsApp, iMovie, CapCut, etc.).
+            //   3. Material3 RangeSlider on top with transparent track
+            //      colors. The slider's track is invisible (so the frames
+            //      show through); only the two thumb handles are visible,
+            //      sitting on top of the strip at the start/end positions.
+            // The whole Box is clipped to a rounded rectangle for a
+            // nice filmstrip look.
             if (durationMs > 0) {
-                // Thumbnail strip
+                val startRange = startMs.toFloat() / durationMs
+                val endRange = endMs.toFloat() / durationMs
+                val leftDimWeight = startRange.coerceIn(0f, 1f)
+                val middleWeight = (endRange - startRange).coerceIn(0f, 1f)
+                val rightDimWeight = (1f - endRange).coerceIn(0f, 1f)
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp)
-                        .background(Color.DarkGray, RoundedCornerShape(4.dp)),
+                        .height(72.dp)
+                        .clip(RoundedCornerShape(6.dp)),
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxSize(),
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        thumbnails.forEach { bmp ->
-                            androidx.compose.foundation.Image(
-                                bitmap = bmp.asImageBitmap(),
-                                contentDescription = null,
+                    // 1) Thumbnail strip background (frames ARE the bar)
+                    if (thumbnails.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalArrangement = Arrangement.spacedBy(1.dp),
+                        ) {
+                            thumbnails.forEach { bmp ->
+                                Image(
+                                    bitmap = bmp.asImageBitmap(),
+                                    contentDescription = null,
+                                    contentScale = ContentScale.FillBounds,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxSize(),
+                                )
+                            }
+                        }
+                    } else {
+                        // Fallback while thumbnails load
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.DarkGray),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        }
+                    }
+
+                    // 2) Dimmed overlays outside the selected region.
+                    // Three weighted Boxes — when startRange=0 the left
+                    // dim is invisible (weight 0 = 0 width); same for the
+                    // right dim when endRange=1. The middle Box is
+                    // transparent so the frames show through.
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        if (leftDimWeight > 0f) {
+                            Box(
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxSize(),
+                                    .weight(leftDimWeight)
+                                    .fillMaxHeight()
+                                    .background(Color.Black.copy(alpha = 0.55f)),
+                            )
+                        }
+                        if (middleWeight > 0f) {
+                            Box(modifier = Modifier.weight(middleWeight))
+                        }
+                        if (rightDimWeight > 0f) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(rightDimWeight)
+                                    .fillMaxHeight()
+                                    .background(Color.Black.copy(alpha = 0.55f)),
                             )
                         }
                     }
-                }
 
-                // Single RangeSlider with start + end handles
-                val startRange = if (durationMs > 0) startMs.toFloat() / durationMs else 0f
-                val endRange = if (durationMs > 0) endMs.toFloat() / durationMs else 1f
-                androidx.compose.material3.RangeSlider(
-                    value = startRange..endRange,
-                    onValueChange = { range ->
-                        val newStart = (range.start * durationMs).toLong()
-                            .coerceAtMost((endMs - 500).coerceAtLeast(0))
-                        val newEnd = (range.endInclusive * durationMs).toLong()
-                            .coerceAtLeast(startMs + 500).coerceAtMost(durationMs)
-                        startMs = newStart
-                        endMs = newEnd
-                    },
-                    onValueChangeFinished = {
-                        player.seekTo(startMs)
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                    // 3) RangeSlider on top — transparent track colors so
+                    //    only the two thumb handles are visible, sitting
+                    //    on top of the strip. The handles' positions match
+                    //    the dimmed-overlay boundaries (modulo the slider's
+                    //    internal half-thumb padding, which is small and
+                    //    visually unnoticeable on a 72dp-tall strip).
+                    RangeSlider(
+                        value = startRange..endRange,
+                        onValueChange = { range ->
+                            // Enforce a 500ms minimum selection so the
+                            // start/end can't collapse onto each other.
+                            val newStart = (range.start * durationMs).toLong()
+                                .coerceAtMost((endMs - 500).coerceAtLeast(0))
+                            val newEnd = (range.endInclusive * durationMs).toLong()
+                                .coerceAtLeast(startMs + 500).coerceAtMost(durationMs)
+                            startMs = newStart
+                            endMs = newEnd
+                        },
+                        onValueChangeFinished = {
+                            // Seek the preview to the start handle when the
+                            // user lifts their finger — gives a "preview
+                            // from the trim point" effect.
+                            player.seekTo(startMs)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.Center),
+                        colors = SliderDefaults.colors(
+                            // Both tracks transparent so the frames show
+                            // through; only the thumbs (white) are visible.
+                            activeTrackColor = Color.Transparent,
+                            inactiveTrackColor = Color.Transparent,
+                            thumbColor = Color.White,
+                        ),
+                    )
+                }
             } else {
                 CircularProgressIndicator(modifier = Modifier.size(32.dp))
             }
 
-            // === Progress bar ===
+            // === Progress bar (current playback position) ===
             if (durationMs > 0 && !isTrimming) {
                 LinearProgressIndicator(
                     progress = { currentPosition.toFloat() / durationMs.toFloat() },
@@ -275,7 +394,7 @@ fun VideoTrimScreen(
                 )
             }
 
-            // === Trim status ===
+            // === Trim status (during Trim & Send / Send Full) ===
             if (isTrimming) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 Text(trimStatus, style = MaterialTheme.typography.bodySmall,
@@ -284,92 +403,99 @@ fun VideoTrimScreen(
 
             Spacer(Modifier.weight(1f))
 
-            // === Buttons ===
-            Button(
-                onClick = {
-                    if (isTrimming) return@Button
-                    isTrimming = true
-                    trimStatus = "Trimming video…"
-                    scope.launch {
-                        withContext(Dispatchers.IO) {
-                            try {
-                                val trimmedFile = File(context.cacheDir, "${itemId}_trimmed.mp4")
-                                trimStatus = "Trimming ${formatTime(startMs)}–${formatTime(endMs)}…"
-                                val success = VideoTrimmer.trim(videoFile, trimmedFile, startMs, endMs)
-                                val packedFile = if (success) trimmedFile else videoFile
-                                trimStatus = if (success) "Packing trimmed video…" else "Trim failed — packing full video…"
+            // === Trim & Send + Send Full Video side by side ===
+            // Both buttons in a single Row (side by side, not stacked
+            // vertically) per the v0.7.2 dialog redesign.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = {
+                        if (isTrimming) return@Button
+                        isTrimming = true
+                        trimStatus = "Trimming video…"
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                try {
+                                    val trimmedFile = File(context.cacheDir, "${itemId}_trimmed.mp4")
+                                    trimStatus = "Trimming ${formatTime(startMs)}–${formatTime(endMs)}…"
+                                    val success = VideoTrimmer.trim(videoFile, trimmedFile, startMs, endMs)
+                                    val packedFile = if (success) trimmedFile else videoFile
+                                    trimStatus = if (success) "Packing trimmed video…" else "Trim failed — packing full video…"
 
-                                val mpkgFile = File(context.cacheDir, "${itemId}_${System.currentTimeMillis()}_send.mpkg")
-                                val item = WorkshopItemTyped(
-                                    item = WorkshopItem(publishedfileid = itemId, title = itemTitle),
-                                    type = WallpaperType.VIDEO,
-                                )
-                                val installDir = File(context.cacheDir, "workshop_downloads/$itemId")
-                                val previewFile = File(installDir, "preview.jpg").takeIf { it.exists() }
-                                    ?: File(installDir, "preview.gif").takeIf { it.exists() }
-                                com.wepwawet.pairing.MpkgPacker.packVideoWallpaper(
-                                    item = item, videoFile = packedFile,
-                                    outputFile = mpkgFile, previewFile = previewFile,
-                                )
-                                trimStatus = "Queuing for transfer…"
-                                PairingService.queueWallpaper(mpkgFile, itemTitle)
-                                PairingService.launchWallpaperEngineApp(context)
-                                runCatching { trimmedFile.delete() }
-                                runCatching { videoFile.delete() }
-                                WepWawetLogger.workshop("VideoTrimScreen: trim + send complete",
-                                    "item_id" to itemId, "mpkg_size" to mpkgFile.length())
-                                isTrimming = false
-                                onSendComplete()
-                            } catch (e: Exception) {
-                                isTrimming = false
-                                trimStatus = "Failed: ${e.message}"
+                                    val mpkgFile = File(context.cacheDir, "${itemId}_${System.currentTimeMillis()}_send.mpkg")
+                                    val item = WorkshopItemTyped(
+                                        item = WorkshopItem(publishedfileid = itemId, title = itemTitle),
+                                        type = WallpaperType.VIDEO,
+                                    )
+                                    val installDir = File(context.cacheDir, "workshop_downloads/$itemId")
+                                    val previewFile = File(installDir, "preview.jpg").takeIf { it.exists() }
+                                        ?: File(installDir, "preview.gif").takeIf { it.exists() }
+                                    com.wepwawet.pairing.MpkgPacker.packVideoWallpaper(
+                                        item = item, videoFile = packedFile,
+                                        outputFile = mpkgFile, previewFile = previewFile,
+                                    )
+                                    trimStatus = "Queuing for transfer…"
+                                    PairingService.queueWallpaper(mpkgFile, itemTitle)
+                                    PairingService.launchWallpaperEngineApp(context)
+                                    runCatching { trimmedFile.delete() }
+                                    runCatching { videoFile.delete() }
+                                    WepWawetLogger.workshop("VideoTrimScreen: trim + send complete",
+                                        "item_id" to itemId, "mpkg_size" to mpkgFile.length())
+                                    isTrimming = false
+                                    onSendComplete()
+                                } catch (e: Exception) {
+                                    isTrimming = false
+                                    trimStatus = "Failed: ${e.message}"
+                                }
                             }
                         }
-                    }
-                },
-                enabled = !isTrimming && durationMs > 0,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(if (isTrimming) "Processing…" else "Trim & Send")
-            }
+                    },
+                    enabled = !isTrimming && durationMs > 0,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(if (isTrimming) "Processing…" else "Trim & Send")
+                }
 
-            Button(
-                onClick = {
-                    if (isTrimming) return@Button
-                    isTrimming = true
-                    trimStatus = "Packing full video…"
-                    scope.launch {
-                        withContext(Dispatchers.IO) {
-                            try {
-                                val mpkgFile = File(context.cacheDir, "${itemId}_${System.currentTimeMillis()}_send.mpkg")
-                                val item = WorkshopItemTyped(
-                                    item = WorkshopItem(publishedfileid = itemId, title = itemTitle),
-                                    type = WallpaperType.VIDEO,
-                                )
-                                val installDir = File(context.cacheDir, "workshop_downloads/$itemId")
-                                val previewFile = File(installDir, "preview.jpg").takeIf { it.exists() }
-                                    ?: File(installDir, "preview.gif").takeIf { it.exists() }
-                                com.wepwawet.pairing.MpkgPacker.packVideoWallpaper(
-                                    item = item, videoFile = videoFile,
-                                    outputFile = mpkgFile, previewFile = previewFile,
-                                )
-                                trimStatus = "Queuing for transfer…"
-                                PairingService.queueWallpaper(mpkgFile, itemTitle)
-                                PairingService.launchWallpaperEngineApp(context)
-                                runCatching { videoFile.delete() }
-                                isTrimming = false
-                                onSendComplete()
-                            } catch (e: Exception) {
-                                isTrimming = false
-                                trimStatus = "Failed: ${e.message}"
+                Button(
+                    onClick = {
+                        if (isTrimming) return@Button
+                        isTrimming = true
+                        trimStatus = "Packing full video…"
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                try {
+                                    val mpkgFile = File(context.cacheDir, "${itemId}_${System.currentTimeMillis()}_send.mpkg")
+                                    val item = WorkshopItemTyped(
+                                        item = WorkshopItem(publishedfileid = itemId, title = itemTitle),
+                                        type = WallpaperType.VIDEO,
+                                    )
+                                    val installDir = File(context.cacheDir, "workshop_downloads/$itemId")
+                                    val previewFile = File(installDir, "preview.jpg").takeIf { it.exists() }
+                                        ?: File(installDir, "preview.gif").takeIf { it.exists() }
+                                    com.wepwawet.pairing.MpkgPacker.packVideoWallpaper(
+                                        item = item, videoFile = videoFile,
+                                        outputFile = mpkgFile, previewFile = previewFile,
+                                    )
+                                    trimStatus = "Queuing for transfer…"
+                                    PairingService.queueWallpaper(mpkgFile, itemTitle)
+                                    PairingService.launchWallpaperEngineApp(context)
+                                    runCatching { videoFile.delete() }
+                                    isTrimming = false
+                                    onSendComplete()
+                                } catch (e: Exception) {
+                                    isTrimming = false
+                                    trimStatus = "Failed: ${e.message}"
+                                }
                             }
                         }
-                    }
-                },
-                enabled = !isTrimming,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("Send Full Video (No Trim)")
+                    },
+                    enabled = !isTrimming,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Send Full Video")
+                }
             }
         }
     }

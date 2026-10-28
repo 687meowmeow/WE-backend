@@ -953,21 +953,52 @@ object WorkshopDownloadJob {
     }
 
     /**
-     * v0.7.1 (round 10): Cancel a pending video send (user tapped "Cancel"
-     * in the trim dialog). Deletes the downloaded video file and resets state.
+     * v0.7.1 (round 10): Cancel a pending video send (user tapped the X
+     * in the trim dialog corner). Deletes the downloaded video file and
+     * resets state.
+     *
+     * v0.7.3 — Bug fix: previously, cancelling the trim dialog left the
+     * download status stuck on the stale "Video downloaded — waiting for
+     * trim decision" message that [launchSendToPhone] sets via
+     * `onDownloadProgress(..., statusMessage = "Video downloaded — waiting
+     * for trim decision")` when it detects the file is a video. The
+     * DownloadManager entry was never cleared because cancelVideoSend did
+     * NOT call `onDownloadCancelled` (the mirror that removes the entry
+     * from DownloadManager.activeDownloads). The local WorkshopDownloadJob
+     * status was updated to "Cancelled" but the DownloadManager screen
+     * still showed the waiting-for-trim-decision status indefinitely.
+     *
+     * Fix: call `onDownloadCancelled(workshopId)` so the DownloadManager
+     * entry is removed too, reset progress to 0 (it was sitting at 0.85f
+     * from the trim-wait state — leaving it at 0.85f made the Downloads
+     * screen show a frozen 85% bar), and clear any stale result/error
+     * messages so a fresh send-to-phone starts clean.
      */
     fun cancelVideoSend() {
         val pendingFile = _state.value.pendingVideoFile
+        val workshopId = _state.value.workshopId
         WepWawetLogger.workshop("WorkshopDownloadJob.cancelVideoSend",
-            "pending_file" to (pendingFile ?: "null"))
+            "pending_file" to (pendingFile ?: "null"),
+            "workshop_id" to (workshopId ?: "null"))
         if (pendingFile != null) {
             runCatching { File(pendingFile).delete() }
         }
+        // v0.7.3: Mirror the cancel into DownloadManager so the Downloads
+        // screen's entry for this item is removed — otherwise it stays
+        // in activeDownloads with the stale "waiting for trim decision"
+        // statusMessage and 85% progress until the next event clears it.
+        onDownloadCancelled(workshopId)
         _state.update { it.copy(
             isRunning = false,
             pendingVideoFile = null,
             pendingVideoItem = null,
+            progress = 0f,  // Reset — was sitting at 0.85f from the trim-wait state
             status = "Cancelled",
+            // v0.7.3: Clear stale result/error messages so the next
+            // send-to-phone for this item starts fresh and doesn't
+            // show a stale "Sent ✓" or error pill from a prior run.
+            resultMessage = null,
+            errorMessage = null,
             endedAt = System.currentTimeMillis(),
         ) }
     }
