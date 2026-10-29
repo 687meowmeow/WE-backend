@@ -677,8 +677,64 @@ object MpkgPacker {
             // PNG magic at offset 87, which was missed by the search from offset 91.
             // The Mordred (X-Ray) wallpaper (id=2279314480) worked because its .tex
             // files contained JPEG magic at offset > 91 (deep inside the data).
+            //
+            // v0.7.6-alpha (parity FIX 3 — never drop .tex):
+            // If the .tex body is LZ4-compressed (IsLZ4=1), the PNG/JPEG magic byte
+            // search at offset 87+ WILL MISS the PNG/JPEG (because the bytes there
+            // are LZ4-compressed, not raw PNG/JPEG). The pre-v0.7.6 behavior was to
+            // fall through to passthrough — meaning the raw LZ4-compressed RGBA8888
+            // or PNG .tex was shipped to the .mpkg as-is, and the WE Android
+            // renderer couldn't load it (no LZ4 decompression + PNG parsing inside
+            // TEXV). For the wallpaper id 3655958892 in wepwawet-logs, 3 .tex
+            // files (HD-wallpaper-aesthetic...thumbnail.tex, output-onlinepngtools.tex,
+            // waterflowphase.tex) were silently passed through unconverted — and
+            // waterflowphase.tex is the texture the waterflow shader samples to
+            // drive its time/phase offset, so missing → constant default sampled →
+            // flow phase periodically resets → the "snapping back to original
+            // position" symptom.
+            //
+            // The fix: if IsLZ4=1, FIRST decompress the body using our
+            // decompressTexBodyIfLz4 helper. The decompressed .tex has the same
+            // header but with IsLZ4=0 and the decompressed body bytes — so the
+            // PNG/JPEG magic search now finds the magic at offset 91+, and the
+            // existing convertTexPngToEtc2 path handles the rest.
+            //
+            // If the decompressed body still has no PNG/JPEG magic, the .tex
+            // likely contains raw RGBA8888 pixel data (TEXI format=0 with raw
+            // RGBA, no PNG container). We then route to convertTexRgba8888ToEtc2
+            // which handles LZ4 internally and treats the body as raw RGBA8888
+            // (using the TEXI width/height fields). This converts to ETC2_RGBA8+LZ4
+            // which the WE Android renderer can load natively.
+            //
+            // Success criterion: every .tex file in the .pkg is either:
+            //   - Already mobile-compatible (format=5 ETC2_RGBA8 — skip)
+            //   - Converted to ETC2_RGBA8 via one of the convertTex* paths
+            // The ONLY case where a .tex is passed through unchanged is when
+            // conversion truly fails (e.g., LZ4 decompression error, native lib
+            // unavailable, body bytes out of range) — and in those cases we
+            // WARN explicitly so the user knows the texture will likely fail.
+            var effectiveBlob = blob
+            var didDecompressForDetection = false
+            if (isLz4) {
+                val decompressed = decompressTexBodyIfLz4(blob, name)
+                if (decompressed != null && decompressed.size != blob.size) {
+                    effectiveBlob = decompressed
+                    didDecompressForDetection = true
+                    WepWawetLogger.proxy("MpkgPacker.packFromPkg: .tex was LZ4-compressed — decompressed for PNG/JPEG detection",
+                        "name" to name,
+                        "original_size" to blob.size,
+                        "decompressed_size" to decompressed.size,
+                        "is_lz4" to isLz4,
+                        "texi_format" to texiFormat)
+                } else if (decompressed == null) {
+                    WepWawetLogger.proxyWarn("MpkgPacker.packFromPkg: .tex LZ4 decompression failed — falling back to passthrough",
+                        "name" to name,
+                        "reason" to "LZ4 decompression failed (invalid header or corrupt body)")
+                }
+            }
+
             val searchStartOffset = 87
-            val hasPng = findBytes(blob, PNG_MAGIC, searchStartOffset) >= 0
+            val hasPng = findBytes(effectiveBlob, PNG_MAGIC, searchStartOffset) >= 0
             val hasJpeg = run {
                 // Stricter JPEG detection: FFD8FF must be followed by a valid
                 // JPEG marker byte. We re-implement the same logic as
@@ -686,10 +742,10 @@ object MpkgPacker {
                 // log "JPEG found" for false positives.
                 var pos = searchStartOffset
                 while (true) {
-                    val jpgStart = findBytes(blob, JPEG_MAGIC, pos)
+                    val jpgStart = findBytes(effectiveBlob, JPEG_MAGIC, pos)
                     if (jpgStart < 0) return@run false
-                    if (jpgStart + 3 >= blob.size) return@run false
-                    val markerByte = blob[jpgStart + 3]
+                    if (jpgStart + 3 >= effectiveBlob.size) return@run false
+                    val markerByte = effectiveBlob[jpgStart + 3]
                     if (isValidJpegMarker(markerByte)) {
                         return@run true
                     }
@@ -703,8 +759,12 @@ object MpkgPacker {
                 val imageType = if (hasPng) "PNG" else "JPEG"
                 WepWawetLogger.proxy("MpkgPacker.packFromPkg: .tex contains $imageType (format=$texiFormat), will convert",
                     "name" to name,
-                    "original_size" to blob.size)
-                val converted = convertTexPngToEtc2(blob, name)
+                    "original_size" to blob.size,
+                    "decompressed_for_detection" to didDecompressForDetection,
+                    "effective_size" to effectiveBlob.size)
+                // Pass the (possibly decompressed) effectiveBlob to convertTexPngToEtc2
+                // so the PNG search inside it can find the magic at offset 91+.
+                val converted = convertTexPngToEtc2(effectiveBlob, name)
                 if (converted != null) {
                     processedEntries.add(Pair(name, converted))
                     texConverted++
@@ -715,11 +775,75 @@ object MpkgPacker {
                         "name" to name,
                         "original_size" to blob.size,
                         "converted_size" to converted.size,
-                        "size_ratio" to "%.2fx".format(converted.size.toDouble() / blob.size.toDouble()))
+                        "size_ratio" to "%.2fx".format(converted.size.toDouble() / blob.size.toDouble()),
+                        "decompressed_for_detection" to didDecompressForDetection)
                 } else {
                     processedEntries.add(texEntry)
                     WepWawetLogger.proxyWarn("MpkgPacker.packFromPkg: .tex PNG conversion FAILED — using original (will likely show yellow/black on Android)",
-                        "name" to name)
+                        "name" to name,
+                        "decompressed_for_detection" to didDecompressForDetection)
+                }
+            } else if (didDecompressForDetection) {
+                // LZ4-decompressed body but no PNG/JPEG found — treat as raw
+                // RGBA8888 (TEXI format=0 with raw RGBA pixel data, no PNG
+                // container). convertTexRgba8888ToEtc2 handles LZ4 internally
+                // and reads width/height from the TEXI header.
+                WepWawetLogger.proxy("MpkgPacker.packFromPkg: .tex is raw RGBA8888 (format=0, LZ4-compressed, no PNG magic) — converting to ETC2_RGBA8+LZ4",
+                    "name" to name,
+                    "original_size" to blob.size,
+                    "decompressed_size" to effectiveBlob.size,
+                    "texi_format" to texiFormat,
+                    "is_lz4" to isLz4)
+                val converted = convertTexRgba8888ToEtc2(blob, name)
+                if (converted != null) {
+                    processedEntries.add(Pair(name, converted))
+                    texConverted++
+                    texRgbaConverted++
+                    totalOriginalTexBytes += blob.size
+                    totalConvertedTexBytes += converted.size
+                    WepWawetLogger.proxy("MpkgPacker.packFromPkg: raw RGBA8888 .tex converted (LZ4-compressed input)",
+                        "name" to name,
+                        "original_size" to blob.size,
+                        "converted_size" to converted.size,
+                        "size_ratio" to "%.2fx".format(converted.size.toDouble() / blob.size.toDouble()))
+                } else {
+                    // ETC2 path failed (e.g., ETC2 native lib unavailable) —
+                    // fall back to passthrough of the original (LZ4-compressed)
+                    // .tex. The WE Android renderer MAY be able to load it if
+                    // it has its own LZ4+RGBA8888 .tex loader; if not, this
+                    // texture will be missing and the shader will sample the
+                    // default. WARN explicitly.
+                    processedEntries.add(texEntry)
+                    WepWawetLogger.proxyWarn("MpkgPacker.packFromPkg: raw RGBA8888 .tex conversion FAILED — using original (LZ4-compressed .tex passthrough — may fail to load on Android)",
+                        "name" to name,
+                        "reason" to "ETC2 native lib unavailable or RGBA8888 decode failed")
+                }
+            } else if (texiFormat == 0) {
+                // format=0, IsLZ4=0, no PNG/JPEG magic — likely raw RGBA8888
+                // uncompressed. Try convertTexRgba8888ToEtc2 (which handles
+                // the uncompressed case).
+                WepWawetLogger.proxy("MpkgPacker.packFromPkg: .tex is raw RGBA8888 (format=0, uncompressed, no PNG magic) — converting to ETC2_RGBA8+LZ4",
+                    "name" to name,
+                    "original_size" to blob.size,
+                    "texi_format" to texiFormat,
+                    "is_lz4" to isLz4)
+                val converted = convertTexRgba8888ToEtc2(blob, name)
+                if (converted != null) {
+                    processedEntries.add(Pair(name, converted))
+                    texConverted++
+                    texRgbaConverted++
+                    totalOriginalTexBytes += blob.size
+                    totalConvertedTexBytes += converted.size
+                    WepWawetLogger.proxy("MpkgPacker.packFromPkg: raw RGBA8888 .tex converted (uncompressed input)",
+                        "name" to name,
+                        "original_size" to blob.size,
+                        "converted_size" to converted.size,
+                        "size_ratio" to "%.2fx".format(converted.size.toDouble() / blob.size.toDouble()))
+                } else {
+                    processedEntries.add(texEntry)
+                    WepWawetLogger.proxyWarn("MpkgPacker.packFromPkg: raw RGBA8888 .tex conversion FAILED — using original (uncompressed .tex passthrough — may fail to load on Android)",
+                        "name" to name,
+                        "reason" to "ETC2 native lib unavailable or RGBA8888 decode failed")
                 }
             } else {
                 processedEntries.add(texEntry)
@@ -3831,11 +3955,275 @@ object MpkgPacker {
      *     causing "undeclared identifier g_Texture0" errors.
      *     Fix: hoist ALL uniform sampler2D declarations to BEFORE any #include.
      */
+
+    /**
+     * v0.7.6-alpha (parity FIX 4 — zcompat shader substitution):
+     *
+     * WE PC ships a "zcompat" mechanism that, when preparing shaders for
+     * mobile, substitutes known-broken workshop shaders from
+     * `assets/zcompat/scene/shaders/<effectWorkshopId>/` (with config.json
+     * stage mapping). WE 2.8.42 ships exactly two:
+     *   - 2084198056 (Simple_Audio_Bars) — uses lerp(), uint arithmetic,
+     *     integer RESOLUTION #define in float context, ApplyBlending from
+     *     common_blending.h. The stock shader fails to compile on GLSL ES
+     *     3.00 with 11 errors. The zcompat version uses mix(), explicit
+     *     float() casts, mod2() precision helper, and explicit int() index
+     *     casts — all already mobile-safe.
+     *   - 2078835426 (pixelate) — uses lerp as a *variable name* in HLSL
+     *     builds (would be mis-rewritten by a naive lerp→mix textual swap).
+     *     The zcompat version is the canonical mobile build.
+     *
+     * The substitution is verified byte-identical to a real WE 2.8.42 install
+     * (mirror: github.com/yakisoba0728/Waple under
+     * Sources/WapleRender/Resources/WEAssets/zcompat/scene/shaders/).
+     *
+     * This function:
+     *  1. Parses the shader's VFS path to extract the workshop effect id
+     *     (the *last* `workshop/<id>/effects/<name>.(frag|vert)` segment).
+     *  2. Looks up `assets/zcompat/scene/shaders/<id>/config.json` to find
+     *     the configured frag/vert filenames for that effect id.
+     *  3. Returns the zcompat shader bytes for the matching stage (frag/vert),
+     *     or null if no zcompat entry exists for this effect id.
+     *
+     * The caller (fixShadersForMobile) MUST skip the generic fixer for any
+     * substituted file — zcompat files are already mobile-safe and would be
+     * CORRUPTED by the generic fixer (e.g., the saturate→clamp regex would
+     * break the existing `#define saturate(x) clamp(x, 0.0, 1.0)` macro that
+     * WE Android's preprocessor expects to see, and the int→float regex
+     * would convert the explicit `int(barFreq1)` index cast into invalid
+     * `int(barFreq1.0)`).
+     *
+     * @param name The shader VFS path (e.g.
+     *             `shaders/workshop/3306828160/workshop/2084198056/effects/Simple_Audio_Bars.frag`)
+     * @param original The original shader bytes (used for size logging only)
+     * @return The zcompat-substituted shader bytes, or null if no zcompat
+     *         entry exists for this effect id (caller proceeds with the
+     *         generic fixer).
+     */
+    private fun substituteZcompatShader(name: String, original: ByteArray): ByteArray? {
+        // Extract the LAST workshop effect id from the shader path.
+        // Examples:
+        //   shaders/workshop/3306828160/effects/pulse.frag
+        //     → no nested workshop id → returns null (not a zcompat candidate
+        //       unless 3306828160 itself is in zcompat, which it isn't)
+        //   shaders/workshop/3306828160/workshop/2084198056/effects/Simple_Audio_Bars.frag
+        //     → effect id 2084198056, shader name Simple_Audio_Bars.frag
+        //   shaders/workshop/3655958892/workshop/2078835426/effects/pixelate.frag
+        //     → effect id 2078835426, shader name pixelate.frag
+        //
+        // We accept BOTH levels (parent workshop and nested workshop
+        // effect) — the parent's own effects (`shaders/workshop/<parentId>/effects/...`)
+        // are checked against zcompat too, since a workshop could itself be
+        // a known-broken effect (although none ship in 2.8.42 today).
+        val zcompatIdRegex = Regex("""workshop/(\d+)/effects/([^/]+\.(?:frag|vert))$""")
+        val matches = zcompatIdRegex.findAll(name).toList()
+        if (matches.isEmpty()) return null
+
+        // Use the LAST match (the innermost workshop effect id, which is the
+        // actual effect being referenced — the outer is just the parent
+        // wallpaper that bundles the effect).
+        val match = matches.last()
+        val effectId = match.groupValues[1]
+        val shaderFileName = match.groupValues[2]
+
+        // Determine the stage (frag or vert) from the file extension.
+        val stage = when {
+            name.endsWith(".frag", ignoreCase = true) -> "frag"
+            name.endsWith(".vert", ignoreCase = true) -> "vert"
+            else -> return null
+        }
+
+        // Load the zcompat config.json for this effect id.
+        // The config.json contains:
+        //   {
+        //     "maximumprojectid": "<int>",  // ignored (used by WE PC for object slot pre-alloc)
+        //     "frag": "<filename>.frag",   // the mobile-safe .frag shader filename
+        //     "vert": "<filename>.vert"    // the mobile-safe .vert shader filename
+        //   }
+        val configPath = "zcompat/scene/shaders/$effectId/config.json"
+        val configBytes = try {
+            com.wepwawet.WepWawetApplication.instance.assets.open(configPath).use { it.readBytes() }
+        } catch (e: Exception) {
+            // No zcompat entry for this effect id — fall through to the generic fixer.
+            return null
+        }
+
+        // Parse the config to find the stage's shader filename.
+        val stageFile = try {
+            val config = JsonParser.parseString(String(configBytes, Charsets.UTF_8)).asJsonObject
+            config.get(stage)?.asString
+        } catch (e: Exception) {
+            WepWawetLogger.proxyWarn("MpkgPacker.substituteZcompatShader: config.json parse failed",
+                "name" to name, "effect_id" to effectId, "exception" to e.javaClass.name)
+            return null
+        }
+        if (stageFile == null) {
+            WepWawetLogger.proxyWarn("MpkgPacker.substituteZcompatShader: config.json missing stage entry",
+                "name" to name, "effect_id" to effectId, "stage" to stage)
+            return null
+        }
+
+        // Sanity-check: the stage filename in config.json should match the
+        // original shader's filename (e.g., Simple_Audio_Bars.frag → frag:
+        // "Simple_Audio_Bars.frag"). If they don't match, the zcompat entry
+        // is for a DIFFERENT shader name (e.g., the workshop renamed the
+        // shader) — fall back to the generic fixer for safety.
+        //
+        // We compare basenames only, since the zcompat stageFile is a
+        // relative filename within the zcompat dir, while the original
+        // shader's name is its full VFS path.
+        val stageFileBase = stageFile.substringAfterLast('/')
+        val originalFileBase = shaderFileName.substringAfterLast('/')
+        if (!stageFileBase.equals(originalFileBase, ignoreCase = true)) {
+            WepWawetLogger.proxyWarn("MpkgPacker.substituteZcompatShader: stage filename mismatch — skipping substitution",
+                "name" to name, "effect_id" to effectId, "stage" to stage,
+                "expected_stage_file" to stageFile, "actual_shader_file" to shaderFileName,
+                "reason" to "zcompat entry is for a different shader name")
+            return null
+        }
+
+        // Load the zcompat shader bytes for this stage.
+        val zcompatPath = "zcompat/scene/shaders/$effectId/$stageFile"
+        val zcompatBytes = try {
+            com.wepwawet.WepWawetApplication.instance.assets.open(zcompatPath).use { it.readBytes() }
+        } catch (e: Exception) {
+            WepWawetLogger.proxyWarn("MpkgPacker.substituteZcompatShader: zcompat shader file not found",
+                "name" to name, "effect_id" to effectId, "zcompat_path" to zcompatPath,
+                "exception" to e.javaClass.name)
+            return null
+        }
+
+        WepWawetLogger.proxy("MpkgPacker.substituteZcompatShader: SUBSTITUTED",
+            "file" to name,
+            "effect_id" to effectId,
+            "stage" to stage,
+            "zcompat_path" to zcompatPath,
+            "original_size" to original.size,
+            "zcompat_size" to zcompatBytes.size,
+            "reason" to "zcompat shaders are already mobile-safe (mix, float() casts, int() casts, mod2()) — skipping generic fixer to avoid double-fixing")
+        return zcompatBytes
+    }
+
+    /**
+     * v0.7.6-alpha (parity FIX 3 — .tex body LZ4 decompression helper):
+     *
+     * For .tex files where the TEXI format=0 (FIF_UNKNOWN — auto-detect via
+     * magic bytes) AND IsLZ4=1, the PNG/JPEG magic search at offset 87+
+     * fails because the bytes there are LZ4-compressed, not raw PNG/JPEG.
+     * This causes the dispatcher to fall through to passthrough — meaning
+     * the raw LZ4-compressed RGBA8888/PNG .tex is shipped as-is to the
+     * .mpkg, and the WE Android renderer can't load it (it doesn't
+     * decompress LZ4 + parse PNG inside TEXV — it expects the .tex to
+     * either be already in a renderable format like ETC2_RGBA8 or contain
+     * an uncompressed PNG it can decode).
+     *
+     * This helper returns a NEW .tex with the body bytes decompressed and
+     * the IsLZ4 field reset to 0, so subsequent magic-byte search and the
+     * existing convertTexPngToEtc2 / convertTexRgba8888ToEtc2 paths can
+     * operate on the decompressed body.
+     *
+     * If the body is not LZ4-compressed (IsLZ4=0), returns the original
+     * .tex unchanged.
+     *
+     * Returns null on decompression failure (caller should fall back to
+     * passthrough of the original .tex).
+     */
+    private fun decompressTexBodyIfLz4(texData: ByteArray, name: String): ByteArray? {
+        if (texData.size < 91) return texData
+        // Reuse parseTexHeader to get (format, isLz4) — but we only need isLz4.
+        val header = parseTexHeader(texData) ?: return texData
+        val isLz4 = header.second
+        if (!isLz4) return texData
+
+        // Read the mipmap-0 header fields needed for decompression.
+        // Layout (per parseTexHeader's documented offsets):
+        //   71..74: width, 75..78: height, 79..82: IsLZ4, 83..86: DecompressedSize
+        //   87..90: byteCount, 91+: body data
+        val decompressedSize = readU32Le(texData, 83).toInt()
+        val byteCount = readU32Le(texData, 87).toInt()
+        if (decompressedSize <= 0 || byteCount <= 0 || 91 + byteCount > texData.size) {
+            WepWawetLogger.proxyWarn("MpkgPacker.decompressTexBodyIfLz4: invalid mipmap-0 fields",
+                "name" to name,
+                "decompressed_size" to decompressedSize,
+                "byte_count" to byteCount,
+                "tex_size" to texData.size)
+            return null
+        }
+        val bodyBytes = texData.copyOfRange(91, 91 + byteCount)
+        val decompressed = try {
+            val lz4Factory = net.jpountz.lz4.LZ4Factory.safeInstance()
+            lz4Factory.safeDecompressor().decompress(bodyBytes, decompressedSize)
+        } catch (e: Exception) {
+            WepWawetLogger.proxyWarn("MpkgPacker.decompressTexBodyIfLz4: LZ4 decompression failed",
+                "name" to name,
+                "exception" to e.javaClass.name,
+                "compressed_size" to bodyBytes.size,
+                "expected_decompressed_size" to decompressedSize)
+            return null
+        }
+        if (decompressed.size != decompressedSize) {
+            WepWawetLogger.proxyWarn("MpkgPacker.decompressTexBodyIfLz4: decompressed size mismatch",
+                "name" to name,
+                "actual" to decompressed.size,
+                "expected" to decompressedSize)
+            return null
+        }
+
+        // Build a new .tex with the same header (0..90 inclusive) but with
+        // IsLZ4=0 and the decompressed body. byteCount field is set to the
+        // decompressed size. The TEXI format field is preserved (caller
+        // will decide whether to treat this as PNG-containing or raw
+        // RGBA8888 based on magic-byte search).
+        //
+        // Header layout (offsets that we need to patch):
+        //   79..82: IsLZ4 → 0
+        //   83..86: DecompressedSize → unchanged (== new byteCount)
+        //   87..90: byteCount → decompressedSize
+        //   91+: body → decompressed bytes
+        val out = java.io.ByteArrayOutputStream()
+        // Copy header bytes 0..90 (91 bytes total) but patch offsets 79, 87.
+        out.write(texData, 0, 79)
+        writeLeIntToStream(out, 0)  // IsLZ4 = 0 (uncompressed now)
+        writeLeIntToStream(out, decompressedSize)  // DecompressedSize (unchanged but write explicitly)
+        writeLeIntToStream(out, decompressedSize)  // byteCount = decompressedSize
+        out.write(decompressed)
+        val result = out.toByteArray()
+        WepWawetLogger.proxy("MpkgPacker.decompressTexBodyIfLz4: decompressed body",
+            "name" to name,
+            "compressed_body_size" to byteCount,
+            "decompressed_body_size" to decompressedSize,
+            "new_tex_size" to result.size,
+            "original_tex_size" to texData.size)
+        return result
+    }
+
     private fun fixShadersForMobile(entries: MutableList<Pair<String, ByteArray>>) {
         var fixedCount = 0
+        var zcompatSubstitutedCount = 0
         for (i in entries.indices) {
             val (name, blob) = entries[i]
             if (!name.endsWith(".vert") && !name.endsWith(".frag")) continue
+
+            // =========================================================================
+            // v0.7.6-alpha (parity FIX 4): zcompat shader substitution FIRST.
+            // =========================================================================
+            // If this shader's path matches a zcompat entry (workshop effect
+            // id 2084198056 or 2078835426 in WE 2.8.42), substitute the
+            // mobile-safe zcompat shader INSTEAD of running the generic fixer.
+            // zcompat files are already mobile-safe (mix, explicit float()
+            // casts, mod2(), int() index casts) and would be CORRUPTED by
+            // the generic fixer.
+            val zcompatSubstituted = substituteZcompatShader(name, blob)
+            if (zcompatSubstituted != null) {
+                entries[i] = Pair(name, zcompatSubstituted)
+                zcompatSubstitutedCount++
+                fixedCount++
+                WepWawetLogger.proxy("MpkgPacker.fixShaders: zcompat-substituted — skipping generic fixer",
+                    "file" to name,
+                    "zcompat_size" to zcompatSubstituted.size,
+                    "original_size" to blob.size)
+                continue  // Skip the generic fixer for this file.
+            }
 
             val original = String(blob, Charsets.UTF_8)
             var modified = original
@@ -3902,56 +4290,204 @@ object MpkgPacker {
             }
 
             // =========================================================================
-            // PHASE 0.5: HLSL→GLSL syntax conversion (regex fallback path — v0.6.0 §7-6)
+            // PHASE 0.5: HLSL→GLSL syntax conversion (unconditional regex pass).
             // =========================================================================
-            // v0.6.0 (parity §7-6): If the native transcoder is unavailable OR the file is
-            // GLSL but contains HLSL syntax, do basic HLSL→GLSL conversions.
-            // This is a stopgap for the case where glslang failed to compile (network issue
-            // during build, etc.) but the wallpaper still needs to render.
+            // v0.7.6-alpha (parity FIX 1): UNCONDITIONAL lerp→mix + saturate→clamp.
+            // Previously this block was gated on `!ShaderTranscoder.isAvailable()
+            // || contains(cbuffer) || contains(SamplerState) || contains(Texture2D)`,
+            // meaning that when ShaderTranscoder's native lib failed to load
+            // (UnsatisfiedLinkError) — which is the COMMON case in the field —
+            // AND the shader didn't contain HLSL-specific syntax like cbuffer,
+            // PHASE 0.5 silently did NOTHING. The result: shaders that used
+            // `lerp(a, b, t)` (HLSL function call, not a #define macro) kept
+            // their `lerp()` call and failed to compile on GLSL ES 3.00 with
+            // "no matching overloaded function found for lerp". This was the
+            // ROOT CAUSE of the Simple_Audio_Bars shader failure (workshop
+            // id 3655958892, 4 lerp() calls at lines 269, 271, 275, 317).
             //
-            // Conversions:
-            //   cbuffer Name { ... } → uniform Name { ... };
-            //   SamplerState s; → sampler2D s;
-            //   Texture2D t; → sampler2D t;
-            //   mul(a, b) → (a * b)
-            //   saturate(x) → clamp(x, 0.0, 1.0)
-            //   lerp(a, b, t) → mix(a, b, t)
-            //   frac(x) → fract(x)
-            //   ddx(x) → dFdx(x)
-            //   ddy(x) → dFdy(x)
-            if (!ShaderTranscoder.isAvailable() || modified.contains("cbuffer ") ||
-                modified.contains("SamplerState ") || modified.contains("Texture2D ")) {
-                // cbuffer Name { ... } → uniform Name { ... };
-                val beforeHlsl = modified.length
+            // The new behavior: run the lerp→mix conversion on EVERY .frag/.vert
+            // unconditionally. WE semantics: lerp(a,b,t) ≡ mix(a,b,t), identical
+            // arg order, so a TEXTUAL swap is safe — we don't need to re-parse
+            // the args (the old `([^,]+),\s*([^,]+),\s*([^)]+)` regex was BUGGY:
+            // it failed on nested parens like `saturate(lerp(...))` because
+            // `[^)]+` for the third arg stopped at the inner `)`, producing
+            // `mix(arg1, arg2, smoothstep(...,frac(frequency))` with unbalanced
+            // parens. The new simple `lerp(` → `mix(` textual swap leaves the
+            // args untouched, so any nested parens are preserved).
+            //
+            // saturate(x) → clamp(x, 0.0, 1.0) is run ONLY when the shader
+            // doesn't already define `saturate` as a macro (i.e., no
+            // `#define saturate` line exists). WE Android's preprocessor
+            // already provides `#define saturate(x) clamp(x, 0.0, 1.0)` as
+            // part of its HLSL compat layer, so most shaders already have
+            // `saturate()` handled by the preprocessor. Converting `saturate(`
+            // calls in those shaders would DOUBLE-convert (the existing
+            // `#define saturate` line would be re-mangled by the regex,
+            // producing `#define clamp(x, 0.0, 1.0)(x) clamp(x, 0.0, 1.0)` —
+            // invalid #define).
+            //
+            // cbuffer/SamplerState/Texture2D/mul/frac/ddx/ddy conversions
+            // remain gated on their respective `contains()` checks (these
+            // are pure HLSL syntax that only appears in HLSL-source files).
+            val beforeHlsl = modified.length
+
+            // --- cbuffer → uniform (HLSL cbuffer declaration) ---
+            if (modified.contains("cbuffer ")) {
                 modified = modified.replace(
                     Regex("""cbuffer\s+(\w+)\s*\{([^}]+)\}""", RegexOption.DOT_MATCHES_ALL)
                 ) { mr ->
                     "uniform ${mr.groupValues[1]} {\n${mr.groupValues[2]}\n};"
                 }
-                // SamplerState s; → sampler2D s;
+            }
+            // --- SamplerState → sampler2D (HLSL sampler declaration) ---
+            if (modified.contains("SamplerState ")) {
                 modified = modified.replace(Regex("""\bSamplerState\s+(\w+)\s*;"""), "sampler2D $1;")
-                // Texture2D t; → sampler2D t;
+            }
+            // --- Texture2D → sampler2D (HLSL texture declaration) ---
+            if (modified.contains("Texture2D ")) {
                 modified = modified.replace(Regex("""\bTexture2D\s+(\w+)\s*;"""), "sampler2D $1;")
-                // mul(a, b) → (a * b)
-                modified = modified.replace(Regex("""\bmul\s*\(([^,]+),\s*([^)]+)\)""")) { mr ->
+            }
+            // --- mul(a, b) → (a * b) (HLSL matrix multiply) ---
+            // NOTE: WE Android's preprocessor already provides
+            //   #define mul(x, y) ((y) * (x))
+            // so this conversion is only needed when the shader uses `mul()`
+            // without the preprocessor's #define (i.e., raw HLSL files that
+            // bypass the preprocessor). For .frag/.vert files that go through
+            // the preprocessor, this is a no-op (mul( is preserved and the
+            // preprocessor expands it at compile time).
+            // We keep this conversion gated on `contains("mul(")` for safety —
+            // if the shader doesn't use mul() at all, skip the regex.
+            if (modified.contains("mul(")) {
+                // Only convert `mul(` calls NOT already inside a #define macro.
+                // The WE Android preprocessor's `#define mul(x, y) ((y) * (x))`
+                // line would be corrupted if we blindly rewrote `mul(` inside
+                // the #define. To avoid this, we skip lines starting with
+                // `#define mul` (after trim).
+                val mulRegex = Regex("""\bmul\s*\(([^,]+),\s*([^)]+)\)""")
+                modified = modified.replace(mulRegex) { mr ->
+                    // Find the start of the line containing this match.
+                    val matchStart = mr.range.first
+                    val lineStart = modified.lastIndexOf('\n', matchStart - 1).coerceAtLeast(0)
+                    val linePrefix = modified.substring(lineStart, matchStart)
+                    val trimmedPrefix = linePrefix.trimStart()
+                    if (trimmedPrefix.startsWith("#")) {
+                        // Inside a preprocessor directive — skip (don't break #define mul)
+                        return@replace mr.value
+                    }
                     "(${mr.groupValues[1]} * ${mr.groupValues[2]})"
                 }
-                // saturate(x) → clamp(x, 0.0, 1.0)
-                modified = modified.replace(Regex("""\bsaturate\s*\(([^)]+)\)""")) { mr ->
-                    "clamp(${mr.groupValues[1]}, 0.0, 1.0)"
+            }
+            // --- saturate(x) → clamp(x, 0.0, 1.0) (HLSL saturate) ---
+            // v0.7.6 (FIX 1): only convert if the shader does NOT already
+            // define `saturate` as a macro. If `#define saturate` exists,
+            // the WE Android preprocessor will expand `saturate(x)` to
+            // `clamp(x, 0.0, 1.0)` at compile time — converting it here
+            // would double-convert and break the #define.
+            val hasSaturateDefine = modified.contains("#define saturate")
+            val hasSaturateCall = modified.contains("saturate(") && !hasSaturateDefine
+            if (hasSaturateCall) {
+                // Use a paren-balanced scan: find `saturate(` and walk to the
+                // matching close paren, then replace with `clamp(arg, 0.0, 1.0)`.
+                // The old `[^)]+` regex broke on nested parens (e.g.,
+                // `saturate(lerp(0.0, 1.0, x))` captured `lerp(0.0, 1.0, x`
+                // — missing the inner `)`, producing
+                // `clamp(lerp(0.0, 1.0, x, 0.0, 1.0)` with broken paren balance).
+                val sb = StringBuilder()
+                var i = 0
+                var convertedCount = 0
+                while (i < modified.length) {
+                    // Check for `saturate(` at this position (case-sensitive,
+                    // word-boundary on the left).
+                    if (modified.regionMatches(i, "saturate(", 0, 9, ignoreCase = false) &&
+                        (i == 0 || !modified[i - 1].isLetterOrDigit() && modified[i - 1] != '_')) {
+                        // Find the matching close paren.
+                        var depth = 1
+                        var j = i + 9
+                        while (j < modified.length && depth > 0) {
+                            when (modified[j]) {
+                                '(' -> depth++
+                                ')' -> depth--
+                            }
+                            if (depth > 0) j++
+                        }
+                        if (depth == 0) {
+                            // `modified[i+9 .. j-1]` is the inner expression.
+                            val inner = modified.substring(i + 9, j)
+                            sb.append("clamp(")
+                            sb.append(inner)
+                            sb.append(", 0.0, 1.0)")
+                            i = j + 1
+                            convertedCount++
+                            continue
+                        }
+                    }
+                    sb.append(modified[i])
+                    i++
                 }
-                // lerp(a, b, t) → mix(a, b, t)
-                modified = modified.replace(Regex("""\blerp\s*\(([^,]+),\s*([^,]+),\s*([^)]+)\)""")) { mr ->
-                    "mix(${mr.groupValues[1]}, ${mr.groupValues[2]}, ${mr.groupValues[3]})"
+                if (convertedCount > 0) {
+                    modified = sb.toString()
+                    fixesApplied.add("saturate→clamp ($convertedCount calls, paren-balanced)")
                 }
-                // frac(x) → fract(x)
-                modified = modified.replace(Regex("""\bfrac\s*\("""), "fract(")
-                // ddx(x) → dFdx(x), ddy(x) → dFdy(x)
-                modified = modified.replace(Regex("""\bddx\s*\("""), "dFdx(")
-                modified = modified.replace(Regex("""\bddy\s*\("""), "dFdy(")
-                if (modified.length != beforeHlsl) {
-                    fixesApplied.add("HLSL→GLSL syntax conversion (fallback path)")
-                }
+            }
+            // --- lerp(a, b, t) → mix(a, b, t) (HLSL lerp ≡ GLSL mix) ---
+            // v0.7.6 (FIX 1): UNCONDITIONAL textual swap on ALL .frag/.vert.
+            // lerp(a,b,t) ≡ mix(a,b,t) — identical arg order, identical
+            // semantics, so a textual `lerp(` → `mix(` swap is safe regardless
+            // of the arg structure. The old `([^,]+),\s*([^,]+),\s*([^)]+)`
+            // regex was BUGGY on nested parens (e.g., for
+            // `lerp(a, b, smoothstep(0.0, 1.0, frac(frequency)))` it captured
+            // `a, b, smoothstep(0.0, 1.0, frac(frequency` — missing the inner
+            // `)` — producing `mix(a, b, smoothstep(0.0, 1.0, frac(frequency))` 
+            // with unbalanced parens). The simple textual swap leaves the
+            // args (and any nested parens) untouched.
+            //
+            // Edge case (verified against the zcompat pixelate shader): when
+            // `lerp` is used as a *variable name* (e.g.,
+            // `vec2 lerp = fract(v_PixelCoord);`), our `lerp(` regex doesn't
+            // match because the next char is `=` or space, not `(`. The
+            // zcompat pixelate shader's `vec2 lerp = fract(v_PixelCoord);`
+            // and `lerp.x * lerp.y` would NOT be touched by our `lerp(`
+            // regex (since `lerp` is followed by `=`, `.`, `*`, `+`, etc.,
+            // not `(`). Verified safe.
+            //
+            // Case-sensitivity: `lerp(` is matched case-sensitively (lowercase
+            // only). HLSL's `lerp` is always lowercase. A variable named
+            // `Lerp` or `LerpCall(` (capitalized) wouldn't be touched.
+            //
+            // Word boundary on the left: `blerp(` (e.g., as part of a longer
+            // identifier like `MyBlerpFunc(`) is NOT matched because the
+            // preceding char is a letter (not a word boundary).
+            val lerpCount = Regex("""\blerp\(""").findAll(modified).count()
+            if (lerpCount > 0) {
+                modified = modified.replace(Regex("""\blerp\("""), "mix(")
+                fixesApplied.add("lerp→mix ($lerpCount calls, unconditional textual swap)")
+            }
+            // --- frac(x) → fract(x) (HLSL frac ≡ GLSL fract) ---
+            // Gated on contains("frac(") to skip if not used. Word-boundary
+            // ensures we don't match `fract(` (which contains `frac` as a
+            // prefix but is followed by `t`, not `(`).
+            if (modified.contains("frac(") && !modified.contains("#define frac")) {
+                // Only swap if not already `fract(`. The regex `\bfrac\(`
+                // matches `frac(` (word boundary before `frac`), so `fract(`
+                // (which is `frac` followed by `t`) is NOT matched because
+                // `fract` has the word boundary AFTER the `t`, not after `c`.
+                // Actually, `\bfrac\(` matches `frac(` because `\b` is between
+                // non-word and word chars. `fract(` has `frac` followed by `t`,
+                // so the `(` is preceded by `t` (a word char), not by `c`.
+                // Wait — `\bfrac\(` requires a word boundary BEFORE `frac`,
+                // then `frac`, then `(`. `fract(` has `frac` followed by `t`,
+                // not `(` — so `\bfrac\(` does NOT match `fract(`. Good.
+                modified = modified.replace(Regex("""\bfrac\("""), "fract(")
+            }
+            // --- ddx(x) → dFdx(x), ddy(x) → dFdy(x) ---
+            if (modified.contains("ddx(")) {
+                modified = modified.replace(Regex("""\bddx\("""), "dFdx(")
+            }
+            if (modified.contains("ddy(")) {
+                modified = modified.replace(Regex("""\bddy\("""), "dFdy(")
+            }
+            if (modified.length != beforeHlsl) {
+                fixesApplied.add("HLSL→GLSL syntax conversion (unconditional pass)")
             }
 
             // =========================================================================
@@ -4171,6 +4707,61 @@ object MpkgPacker {
             // Approach: We tokenize the shader line-by-line. For each line, we identify
             // the "code" portion (everything before `//` or inside `/* */` blocks) and
             // only convert ints inside the code portion, NOT inside string literals.
+            //
+            // v0.7.6-alpha (parity FIX 2): Type-aware int→float conversion.
+            // Previously this pass was TYPE-BLIND — it would convert `1` to `1.0`
+            // regardless of whether the adjacent operand was a uint variable.
+            // For shaders like Simple_Audio_Bars that declare `uint barFreq1;`
+            // and then use `barFreq1 + 1`, the conversion produced
+            // `barFreq1 + 1.0` which is `uint + float` — illegal in GLSL ES 3.00
+            // (no implicit conversion between uint and float). The original
+            // `barFreq1 + 1` (uint + int) was also illegal, but the bad rewrite
+            // made things WORSE by changing the error from "no implicit uint↔int
+            // conversion" (which the GLSL compiler might warn about but accept in
+            // some modes) to "no implicit uint↔float conversion" (which is a
+            // hard error in all modes).
+            //
+            // The fix: pre-scan the shader for uint variable declarations and
+            // build a set of uint variable names. When the int→float regex
+            // matches an int literal, inspect the adjacent operand (the
+            // character immediately before the operator that precedes the
+            // int). If the preceding token is a uint variable name, SKIP the
+            // conversion (don't append .0).
+            //
+            // Unit test (added in app/src/test/java/com/wepwawet/pairing/):
+            //   `uint barFreq1 = ...; ... barFreq1 + 1 ...`
+            //   must NOT be rewritten to `barFreq1 + 1.0`.
+            //
+            // Patterns we scan for to build the uint variable set:
+            //   `uint <name>`                — local uint variable declaration
+            //   `uniform uint <name>`         — uniform uint declaration
+            //   `uint <name> =`               — uint with initializer
+            //   `uint <name>[`                — uint array
+            //   `uint <name>,`                — uint in multi-declaration list
+            //   `uint <name>);`               — uint function parameter
+            //   `const uint <name>`           — const uint
+            //   `static const uint <name>`    — static const uint (HLSL-style)
+            // We exclude GLSL keywords (uint themselves, vec types, etc.)
+            // by requiring the name to start with a letter or underscore and
+            // not be a known keyword.
+            val uintVarNamePattern = Regex(
+                """\b(?:uniform\s+|const\s+|static\s+const\s+|static\s+)?uint\s+(\w+)"""
+            )
+            val uintVarNames = mutableSetOf<String>()
+            uintVarNamePattern.findAll(modified).forEach { mr ->
+                val name = mr.groupValues[1]
+                // Exclude GLSL keywords that could be confused with variable names
+                if (name !in setOf("main", "return", "void", "if", "else", "for", "while",
+                        "float", "int", "vec2", "vec3", "vec4", "uint", "bool",
+                        "mat2", "mat3", "mat4", "sampler2D", "sampler3D",
+                        "uvec2", "uvec3", "uvec4", "ivec2", "ivec3", "ivec4",
+                        "bvec2", "bvec3", "bvec4", "in", "out", "inout", "attribute",
+                        "varying", "uniform", "const", "static", "layout")) {
+                    uintVarNames.add(name)
+                }
+            }
+            val uintVarSkipCount = IntArray(1)  // [0] = skip count, mutable from closure
+
             val intConversionRegex = Regex("""([\s=/()\+\-\*%\\\],])(\d+)(?!\.)(\b)""")
             var intConversionCount = 0
 
@@ -4249,11 +4840,117 @@ object MpkgPacker {
                 if (trimmedPrefix.startsWith("#")) {
                     return@replace mr.value
                 }
+                // v0.7.6 (FIX 2): Type-aware skip — if the int literal is
+                // adjacent to a uint variable on either side, SKIP the
+                // conversion. This prevents the bad `barFreq1 + 1.0` rewrite
+                // for shaders that declare `uint barFreq1` and use
+                // `barFreq1 + 1`. The original `barFreq1 + 1` (uint + int) is
+                // illegal in GLSL ES 3.00 too, but the bad rewrite made the
+                // error message worse and masked the real fix (which is
+                // zcompat substitution for known problematic shaders like
+                // Simple_Audio_Bars).
+                //
+                // The "adjacent operand" check: the captured group 1 is the
+                // char IMMEDIATELY before the int (could be space, +, =, (,
+                // etc.). For `barFreq1 + 1`, group 1 is the SPACE (not the
+                // `+`) — the `+` is BEFORE the space. So we first walk back
+                // past any whitespace to find the actual arithmetic operator
+                // (+, -, *, /, %), then walk back past THAT operator (and
+                // any whitespace) to read the preceding token. If it's a
+                // uint variable name, skip the conversion.
+                //
+                // Similarly, look at the operator that FOLLOWS the int
+                // literal (if any). Walk forwards from the int's end,
+                // skipping whitespace, and read the next token. If it's a
+                // uint variable name, skip the conversion.
+                //
+                // This catches both `barFreq1 + 1` (uint before int) and
+                // `1 + barFreq1` (uint after int).
+                if (uintVarNames.isNotEmpty()) {
+                    val operatorChar = mr.groupValues[1]  // char immediately before the int
+                    val intEnd = mr.range.last + 1  // position after the int
+
+                    // Find the actual arithmetic operator. The captured char
+                    // might be:
+                    //   - An operator (+, -, *, /, %) — common case for
+                    //     `a + 1`, `b * 2` (where the captured char IS the
+                    //     operator).
+                    //   - A space (whitespace before int) — common case for
+                    //     `a + 1` where the captured char is the space
+                    //     between `+` and `1`. Walk back past whitespace to
+                    //     find the operator.
+                    //   - An open paren, comma, equals, etc. — no preceding
+                    //     arithmetic operator (e.g., `vec4(0, 0, 0, 0)` —
+                    //     the `0`s are args, not operands of an arithmetic
+                    //     op).
+                    var opPos = -1
+                    if (operatorChar.length == 1 && "+-*/%".contains(operatorChar)) {
+                        // The captured char IS the operator.
+                        opPos = matchStart
+                    } else {
+                        // Walk back past whitespace to find the actual operator.
+                        var p = matchStart - 1
+                        while (p >= 0 && modified[p].isWhitespace()) p--
+                        if (p >= 0 && "+-*/%".contains(modified[p])) {
+                            opPos = p
+                        }
+                    }
+
+                    if (opPos >= 0) {
+                        // Check the operand BEFORE opPos (uint + int pattern).
+                        var p = opPos - 1
+                        while (p >= 0 && modified[p].isWhitespace()) p--
+                        // Now `p` points to the last char of the preceding token (or -1).
+                        if (p >= 0 && (modified[p].isLetterOrDigit() || modified[p] == '_')) {
+                            // Walk back to the start of the token.
+                            var tokenEnd = p + 1
+                            var tokenStart = p
+                            while (tokenStart > 0 &&
+                                (modified[tokenStart - 1].isLetterOrDigit() || modified[tokenStart - 1] == '_')) {
+                                tokenStart--
+                            }
+                            val precedingToken = modified.substring(tokenStart, tokenEnd)
+                            if (precedingToken in uintVarNames) {
+                                uintVarSkipCount[0]++
+                                return@replace mr.value
+                            }
+                        }
+                    }
+
+                    // Check the operand AFTER the int (int + uint pattern).
+                    // Walk forwards from `intEnd`, skipping whitespace, then read the next token.
+                    var q = intEnd
+                    while (q < modified.length && modified[q].isWhitespace()) q++
+                    // Now `q` points to the first non-whitespace char after the int.
+                    // If it's an operator (+, -, *, /, %, etc.), look at the operand after it.
+                    if (q < modified.length && "+-*/%".contains(modified[q])) {
+                        var r = q + 1
+                        while (r < modified.length && modified[r].isWhitespace()) r++
+                        if (r < modified.length && (modified[r].isLetterOrDigit() || modified[r] == '_')) {
+                            var tokenStart = r
+                            var tokenEnd = r + 1
+                            while (tokenEnd < modified.length &&
+                                (modified[tokenEnd].isLetterOrDigit() || modified[tokenEnd] == '_')) {
+                                tokenEnd++
+                            }
+                            val followingToken = modified.substring(tokenStart, tokenEnd)
+                            if (followingToken in uintVarNames) {
+                                uintVarSkipCount[0]++
+                                return@replace mr.value
+                            }
+                        }
+                    }
+                }
                 intConversionCount++
                 "${mr.groupValues[1]}${mr.groupValues[2]}.0"
             }
             if (intConversionCount > 0) {
-                fixesApplied.add("int→float ($intConversionCount literals via WE PC general regex, comments/strings skipped)")
+                val skipDesc = if (uintVarSkipCount[0] > 0)
+                    "; ${uintVarSkipCount[0]} uint-adjacent literals skipped (FIX 2)"
+                else ""
+                fixesApplied.add("int→float ($intConversionCount literals via WE PC general regex, comments/strings skipped$skipDesc)")
+            } else if (uintVarSkipCount[0] > 0) {
+                fixesApplied.add("int→float (${uintVarSkipCount[0]} uint-adjacent literals skipped (FIX 2))")
             }
 
             // --- Fix 1E: Scientific notation normalization ---
@@ -5293,7 +5990,9 @@ vec3 ApplyChromaticAberration(sampler2D tex, vec2 uv, float intensity) {
             }
         }
         if (fixedCount > 0) {
-            WepWawetLogger.proxy("MpkgPacker.fixShaders: fixed $fixedCount shader files for mobile compatibility")
+            WepWawetLogger.proxy("MpkgPacker.fixShaders: fixed $fixedCount shader files for mobile compatibility",
+                "zcompat_substituted" to zcompatSubstitutedCount,
+                "generic_fixed" to (fixedCount - zcompatSubstitutedCount))
         }
     }
 

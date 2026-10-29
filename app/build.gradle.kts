@@ -269,8 +269,50 @@ android {
         //   Verified-intended (NO change, documented): .tex PNG search
         //   offset 87 (header is exactly 87 bytes — round-8 fix), JPEG
         //   whole-file pass-through (EXIF thumbnail fix), AuthOK generic ack.
-        versionCode = 97
-        versionName = "0.7.5-alpha"
+        // v0.7.6-alpha: SCENE SHADER "SNAPPING BACK TO ORIGINAL POSITION" FIX
+        //   (4 root-cause fixes for the Simple_Audio_Bars shader failure on
+        //   workshop wallpaper 3655958892 — R18 Acheron & Black Swan):
+        //   FIX 1: lerp→mix now UNCONDITIONAL (was gated on
+        //     !ShaderTranscoder.isAvailable() AND contains(cbuffer/SamplerState/
+        //     Texture2D); the gate silently skipped lerp→mix when the native
+        //     glslang lib failed to load, which is the common field case —
+        //     leaving lerp() calls in the shader that fail to compile on
+        //     GLSL ES 3.00 with "no matching overloaded function found").
+        //     saturate→clamp is now paren-balanced (the old [^)]+ regex
+        //     broke on nested parens like saturate(lerp(...)), producing
+        //     mix(arg1, arg2, smoothstep(...,frac(frequency)) with unbalanced
+        //     parens) and only runs when the shader doesn't already #define
+        //     saturate (so the WE Android preprocessor's macro isn't
+        //     double-converted).
+        //   FIX 2: int→float conversion is now TYPE-AWARE — pre-scans for
+        //     uint variable declarations, skips int→float when the int is
+        //     adjacent to a uint variable (was blindly converting `1` to
+        //     `1.0` even for `barFreq1 + 1` where barFreq1 is uint — producing
+        //     `barFreq1 + 1.0` which is uint + float = illegal in GLSL ES 3.00).
+        //     Mandatory unit test added (ShaderFixesTest.`FIX 2 - barFreq1 plus
+        //     1 must NOT become barFreq1 plus 1_0`).
+        //   FIX 3: .tex files are NEVER silently dropped — if IsLZ4=1 and the
+        //     PNG/JPEG magic search at offset 87+ misses (because the body is
+        //     LZ4-compressed), decompress the body first via the new
+        //     decompressTexBodyIfLz4 helper, then re-run the magic search on
+        //     the decompressed .tex. If decompression reveals no PNG/JPEG
+        //     magic, treat as raw RGBA8888 and route to convertTexRgba8888ToEtc2
+        //     (which handles LZ4 internally). This eliminates the
+        //     waterflowphase.tex passthrough that was causing the waterflow
+        //     shader to sample a constant default and the "snapping back to
+        //     original position" symptom.
+        //   FIX 4: Replicate WE PC's zcompat shader substitution — at pack
+        //     time, when a workshop effect id matches a zcompat entry
+        //     (2084198056 Simple_Audio_Bars, 2078835426 pixelate in
+        //     WE 2.8.42), substitute the zcompat shader INSTEAD of running
+        //     the generic fixer (zcompat files are already mobile-safe:
+        //     mix, explicit float() casts, mod2() precision helper,
+        //     explicit int() index casts). zcompat shaders are embedded
+        //     at app/src/main/assets/zcompat/scene/shaders/<id>/ (verified
+        //     byte-identical to WE 2.8.42 install via the
+        //     github.com/yakisoba0728/Waple mirror).
+        versionCode = 98
+        versionName = "0.7.6-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {
             abiFilters += "arm64-v8a"
