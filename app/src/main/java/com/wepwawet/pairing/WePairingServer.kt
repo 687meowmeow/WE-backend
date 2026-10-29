@@ -94,6 +94,26 @@ class WePairingServer {
         private const val AES_IV_SIZE = 16
         // VERIFIED from decompiled TransferService.java
         private const val CONNECTION_PROTOCOL_VERSION = 4
+
+        // ════════════════════════════════════════════════════════════════
+        // v0.7.4 (parity G1): the .mpkg container version the currently-
+        // paired phone reported in its EncAuthRequest
+        // ("mpkgVersion":"PKGMdddd"). 0 = no phone paired yet (or it
+        // reported something unparseable) — [MpkgPacker.negotiateMagic]
+        // then falls back to PKGM0020, the behavior of every previous
+        // WepWawet release.
+        //
+        // Set when a pairing succeeds (AuthOK), kept across a phone
+        // disconnect (a queued .mpkg may still be picked up by the next
+        // heartbeat; the next phone to pair overwrites it), reset when the
+        // server stops. The PC does the same thing per-device through its
+        // persisted paired-devices configuration before selecting the
+        // per-transfer magic (FUN_14003d0e0: scene → device version,
+        // video → unconditionally 14).
+        // ════════════════════════════════════════════════════════════════
+        @Volatile
+        var negotiatedMpkgVersion: Int = 0
+            private set
     }
 
     private var serverSocket: ServerSocket? = null
@@ -287,7 +307,12 @@ class WePairingServer {
         currentClient = null
         currentAesKey = null
         currentIv = null
-        WepWawetLogger.proxy("Pairing server stop requested")
+        // v0.7.4 (parity G1): a stopped server has no paired phone — clear
+        // the negotiated .mpkg version so packers fall back to PKGM0020
+        // until the next phone pairs and reports its own version.
+        negotiatedMpkgVersion = 0
+        WepWawetLogger.proxy("Pairing server stop requested",
+            "negotiated_mpkg_version_reset" to true)
     }
 
     /**
@@ -604,6 +629,18 @@ class WePairingServer {
 
                 // Step 8: Pairing successful!
                 pairingSuccess = true
+                // v0.7.4 (parity G1): record the phone's reported .mpkg version
+                // so the packer can negotiate the per-transfer magic — the PC
+                // never hands a phone a container NEWER than its own reported
+                // version, and forces version 14 for video wallpapers.
+                negotiatedMpkgVersion = authReq.mpkgVersion
+                    ?.takeIf { it.startsWith("PKGM") && it.length == 8 }
+                    ?.substring(4)
+                    ?.toIntOrNull()
+                    ?: 0
+                WepWawetLogger.proxy("Negotiated phone .mpkg version (G1)",
+                    "reported" to (authReq.mpkgVersion ?: ""),
+                    "negotiated_int" to negotiatedMpkgVersion)
                 // v0.7.1 (round 6 — pairing persistence): close any older
                 // currentClient that isn't this one BEFORE assigning the
                 // new client. If a previous phone session is still hanging
@@ -842,7 +879,17 @@ class WePairingServer {
             //     to tempWriteFile and decrements tempTransmissionInfo.size.
             //   - When tempTransmissionInfo.size reaches 0, phone moves the
             //     tempWriteFile to <filesDir>/downloads/wallpapers/X.mpkg.
-            val chunkSize = 1024 * 1024  // 1 MB chunks
+            //
+            // v0.7.4 (parity G8): chunk size reduced from 1 MiB to 128 KiB to
+            // match the PC's framing EXACTLY. With 1 MiB chunks the AES-CBC
+            // ciphertext frame is 1,048,592 bytes — twenty bytes OVER the
+            // phone-side constant MAX_SAFE_DATA_LENGTH = 1,048,572 that this
+            // very file documents. Transfers demonstrably worked (the phone
+            // evidently does not enforce that ceiling on data frames), but
+            // the margin was twenty bytes on every chunk. 128 KiB (=131,072
+            // + 16 bytes padding overhead) sits far inside the limit and is
+            // byte-for-byte the PC's chunk cadence (FUN_14003b4c0).
+            val chunkSize = 128 * 1024  // 128 KiB — matches the PC transfer loop
             var bytesSent = 0L
             var chunkNum = 0
             val startTime = System.currentTimeMillis()
@@ -869,7 +916,7 @@ class WePairingServer {
 
                     bytesSent += read
                     chunkNum++
-                    if (chunkNum % 10 == 0 || bytesSent == totalSize) {
+                    if (chunkNum % 80 == 0 || bytesSent == totalSize) {
                         WepWawetLogger.proxy("transferWallpaper: chunk sent",
                             "chunk" to chunkNum,
                             "chunk_bytes" to read,

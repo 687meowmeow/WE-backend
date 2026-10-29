@@ -74,6 +74,11 @@ import kotlinx.coroutines.launch
  */
 private const val PREFS_NAME = "wepwawet_settings"
 private const val KEY_VERBOSE_LOG = "verbose_log"
+
+// v0.7.4 (parity G5/G9): wallpaper packing settings — texture shrink factor
+// (1/2/4) and video alignment position (0–100, 0 = centered).
+private const val KEY_TEXTURE_SHRINK = "texture_shrink"
+private const val KEY_VIDEO_ALIGNMENT = "video_alignment"
 private const val KEY_STEAM_API_KEY = "steam_api_key"
 private const val KEY_PAGINATION_ENABLED = "pagination_enabled"
 private const val KEY_PAGE_SIZE = "page_size"
@@ -137,6 +142,25 @@ fun SettingsScreen(
     var paginationEnabled by remember { mutableStateOf(false) }
     var pageSize by remember { mutableStateOf(30) }
 
+    // ---- Wallpaper packing settings (v0.7.4 — parity G5/G9) ----
+    // Texture shrink: 1 = full resolution (default, previous behavior),
+    // 2 = half, 4 = quarter — the PC's "texturereduction" / -shrink lever.
+    // Video alignment position: 0 = centered (default, previous behavior),
+    // 0–100 slider — written to project.json for video wallpapers exactly
+    // like the PC transcoder writes the device/export config value.
+    var textureShrink by remember {
+        mutableStateOf(
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getInt(KEY_TEXTURE_SHRINK, 1)
+        )
+    }
+    var videoAlignment by remember {
+        mutableStateOf(
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getInt(KEY_VIDEO_ALIGNMENT, 0)
+        )
+    }
+
     // ---- Steam Web API key state ----
     var steamApiKey by remember { mutableStateOf("") }
     var steamApiKeySaved by remember { mutableStateOf(false) }
@@ -149,6 +173,8 @@ fun SettingsScreen(
         pkgCacheEnabled = prefs.getBoolean(KEY_PKG_CACHE_ENABLED, false)
         paginationEnabled = prefs.getBoolean(KEY_PAGINATION_ENABLED, false)
         pageSize = prefs.getInt(KEY_PAGE_SIZE, 30)
+        textureShrink = prefs.getInt(KEY_TEXTURE_SHRINK, 1)
+        videoAlignment = prefs.getInt(KEY_VIDEO_ALIGNMENT, 0)
         val savedKey = prefs.getString(KEY_STEAM_API_KEY, "") ?: ""
         steamApiKey = savedKey
         steamApiKeySaved = savedKey.isNotBlank()
@@ -159,6 +185,11 @@ fun SettingsScreen(
         // adjusts the in-memory minLevel so the change takes effect
         // immediately (no app restart needed).
         WepWawetLogger.setVerbose(verboseLog)
+        // v0.7.4: Apply the packing settings to the MpkgPacker holders —
+        // same immediate-effect pattern as setVerbose above (no restart
+        // needed for the next pack).
+        com.wepwawet.pairing.MpkgPacker.textureShrinkFactor = textureShrink
+        com.wepwawet.pairing.MpkgPacker.videoAlignmentPosition = videoAlignment
     }
 
     // ---- Steam credentials state ----
@@ -324,12 +355,40 @@ fun SettingsScreen(
                 )
             }
 
-            // ===== 4. Cache =====
+            // ===== 4. Wallpaper packing (v0.7.4 — parity G5/G9) =====
+            item {
+                WallpaperPackingCard(
+                    textureShrink = textureShrink,
+                    onTextureShrinkChange = { factor ->
+                        textureShrink = factor
+                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit().putInt(KEY_TEXTURE_SHRINK, factor).apply()
+                        com.wepwawet.pairing.MpkgPacker.textureShrinkFactor = factor
+                        WepWawetLogger.appInfo(
+                            "settings_texture_shrink_changed",
+                            "factor" to factor,
+                        )
+                    },
+                    videoAlignment = videoAlignment,
+                    onVideoAlignmentChange = { value ->
+                        videoAlignment = value
+                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit().putInt(KEY_VIDEO_ALIGNMENT, value).apply()
+                        com.wepwawet.pairing.MpkgPacker.videoAlignmentPosition = value
+                        WepWawetLogger.appInfo(
+                            "settings_video_alignment_changed",
+                            "value" to value,
+                        )
+                    },
+                )
+            }
+
+            // ===== 5. Cache =====
             item {
                 CacheCard(context = context)
             }
 
-            // ===== 5. About =====
+            // ===== 6. About =====
             item {
                 AboutCard()
             }
@@ -648,6 +707,77 @@ private fun OthersCard(
                     steps = 17, // 10, 15, 20, ..., 100 (19 stops → 17 intermediate steps)
                 )
             }
+        }
+    }
+}
+
+/**
+ * Section 4½ — Wallpaper packing (v0.7.4 — parity G5/G9).
+ *
+ * Two levers that mirror the WE PC transcoder's per-device export options:
+ *
+ *  - Texture resolution (G5, the PC's "texturereduction" / -shrink):
+ *    Full (default) / Half / Quarter. Applied to every texture that goes
+ *    through the decode → ETC2 re-encode pipeline when packing a scene —
+ *    smaller .mpkg files and lighter GPU load on the phone at the cost of
+ *    sharpness. Already-ETC2 textures pass through unchanged (no decoder).
+ *
+ *  - Video alignment position (G9): 0–100, default 0 = centered. Written
+ *    into project.json for video wallpapers exactly like the PC transcoder
+ *    writes the device/export configuration value (as the field
+ *    "alignmentposition": "{\"value\": N}").
+ */
+@Composable
+private fun WallpaperPackingCard(
+    textureShrink: Int,
+    onTextureShrinkChange: (Int) -> Unit,
+    videoAlignment: Int,
+    onVideoAlignmentChange: (Int) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Wallpaper packing", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+
+            Text("Texture resolution", style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Shrinks scene textures before packing (the PC's texturereduction). " +
+                    "Full keeps the source resolution.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf(1 to "Full", 2 to "Half", 4 to "Quarter").forEach { (factor, label) ->
+                    OutlinedButton(
+                        onClick = { onTextureShrinkChange(factor) },
+                        enabled = textureShrink != factor,
+                    ) {
+                        Text(if (textureShrink == factor) "$label ✓" else label)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            Text("Video alignment position", style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Written to video wallpapers' project.json like the PC exporter " +
+                    "(${videoAlignment} — 0 is centered).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text("Alignment: $videoAlignment")
+            Slider(
+                value = videoAlignment.toFloat(),
+                onValueChange = { onVideoAlignmentChange(it.toInt()) },
+                valueRange = 0f..100f,
+            )
         }
     }
 }

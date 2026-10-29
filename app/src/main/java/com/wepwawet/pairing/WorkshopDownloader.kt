@@ -851,14 +851,14 @@ class WorkshopDownloader(
                     onStatusUpdate("Downloaded ${formatBytes(outputFile.length())} .mp4 (Video wallpaper)")
                     outputFile
                 } else {
-                    // Neither .pkg nor .mp4 found — list directory contents so we can debug
+                    // Neither .pkg nor media found — list directory contents so we can debug
                     val listing = installDir.walkTopDown().toList().take(20).joinToString("\n  ") { f ->
                         "${if (f.isDirectory) "[DIR] " else ""}${f.name} (${f.length()} B)"
                     }
-                    WepWawetLogger.proxyWarn("$TAG: no .pkg or .mp4 found",
+                    WepWawetLogger.proxyWarn("$TAG: no .pkg or media file found",
                         "dir" to installDir.absolutePath,
                         "dir_listing" to listing)
-                    onStatusUpdate("No .pkg or .mp4 file found after download (see logs for directory listing)")
+                    onStatusUpdate("No .pkg or media file found after download (see logs for directory listing)")
                     return@withContext null
                 }
             }
@@ -1473,33 +1473,36 @@ class WorkshopDownloader(
      * Returns the .mp4 File, or null if no .mp4 found.
      */
     private fun findVideoFile(searchDir: File): File? {
+        // === v0.7.4 (parity G2): ALL video containers + still images. ===
+        // The v0.4.8 version only looked for .mp4/.m4v/.mov/.webm AND verified
+        // the MP4 "ftyp" magic — which REJECTED WebM (EBML magic) and never
+        // looked for AVI/WMV/MKV/FLV/TS/GIF video wallpapers or JPEG/PNG/WebP/
+        // BMP image wallpapers at all. Now every file > 1 MB is sniffed with
+        // [VideoContainerSniffer] — no extension trust, no per-format magic
+        // re-implementation. The largest video-kind or image-kind file wins
+        // (the largest file is the content, not a preview).
         if (!searchDir.exists()) return null
-        var largestMp4: File? = null
+        var largestMedia: File? = null
         var largestSize = 0L
         searchDir.walkTopDown().forEach { file ->
             if (file.isFile && file.length() > 1024 * 1024) {  // > 1MB to skip tiny files
-                val nameLower = file.name.lowercase()
-                if (nameLower.endsWith(".mp4") || nameLower.endsWith(".m4v") ||
-                    nameLower.endsWith(".mov") || nameLower.endsWith(".webm")) {
-                    // Also verify by magic bytes (MP4 files start with ftyp box at offset 4)
-                    try {
-                        val raf = java.io.RandomAccessFile(file, "r")
-                        val header = ByteArray(12)
-                        raf.readFully(header)
-                        raf.close()
-                        // MP4: bytes 4-7 are "ftyp"
-                        if (header[4] == 'f'.code.toByte() && header[5] == 't'.code.toByte() &&
-                            header[6] == 'y'.code.toByte() && header[7] == 'p'.code.toByte()) {
-                            if (file.length() > largestSize) {
-                                largestSize = file.length()
-                                largestMp4 = file
-                            }
-                        }
-                    } catch (_: Exception) {}
+                val kind = VideoContainerSniffer.sniff(file)
+                val isMedia = VideoContainerSniffer.isVideoKind(kind) ||
+                    VideoContainerSniffer.isImageKind(kind)
+                if (isMedia && file.length() > largestSize) {
+                    largestSize = file.length()
+                    largestMedia = file
                 }
             }
         }
-        return largestMp4
+        if (largestMedia != null) {
+            WepWawetLogger.proxy("$TAG.findVideoFile: media file found",
+                "file" to largestMedia!!.name,
+                "size" to largestMedia!!.length(),
+                "container" to VideoContainerSniffer.label(
+                    VideoContainerSniffer.sniff(largestMedia!!)))
+        }
+        return largestMedia
     }
 
     /**

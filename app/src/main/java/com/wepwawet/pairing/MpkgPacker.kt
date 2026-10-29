@@ -83,8 +83,76 @@ import android.graphics.BitmapFactory
  */
 object MpkgPacker {
 
-    const val MAGIC = "PKGM0020"  // bumped from PKGM0014 to match the latest wallpaperui.exe (2026-06-29 build)
+    const val MAGIC = "PKGM0020"  // default / ceiling — see [negotiateMagic] for the
+                                  // per-transfer selection (v0.7.4, parity G1)
+
     const val HEADER_MARKER = 8
+
+    // ══════════════════════════════════════════════════════════════════════
+    // v0.7.4 (parity G5): optional texture shrink ("texturereduction" on the
+    // PC — the -shrink lever that halves/quarters texture resolution per
+    // device). 1 = off (default, current behavior), 2 = half, 4 = quarter.
+    // Applied ONLY to textures that go through the decode → ETC2 re-encode
+    // pipeline (PNG/DXT/RG88/R8/RGBA8888); already-ETC2 textures (format=5)
+    // are passed through unchanged because the device has no ETC2 decoder
+    // to shrink them with. Set from SettingsScreen.
+    // ══════════════════════════════════════════════════════════════════════
+    @Volatile
+    var textureShrinkFactor: Int = 1
+
+    // ══════════════════════════════════════════════════════════════════════
+    // v0.7.4 (parity G9): video wallpaper alignment position. The PC writes
+    // the device-configured alignment into project.json as
+    // {"alignmentposition": {"value": <int>}} (FUN_14003d0e0, disasm
+    // 14003f27b–14003f2be: "{"value":" + int + "}"). The int follows the
+    // desktop "alignment position" semantics (0 = centered default; the
+    // PC UI exposes a 0–100 slider whose value lands in config.json's
+    // 'alignmentposition'). WepWawet surfaces the same control as a
+    // settings slider, defaulting to 0 = centered, which is byte-identical
+    // to the previous hardcoded behavior.
+    // ══════════════════════════════════════════════════════════════════════
+    @Volatile
+    var videoAlignmentPosition: Int = 0
+
+    /**
+     * v0.7.4 (parity G1): select the .mpkg magic for one transfer, mirroring
+     * the PC packer (wallpaperui.exe 2.8.0.42, FUN_14003d0e0 at the
+     * FUN_14020a660 call site; container layout itself is magic-independent
+     * — FUN_14020a660 writes the 8-char magic as a plain string):
+     *
+     *   int version;
+     *   if (isVideo) version = 0xe;                 // 14 — ALWAYS for video
+     *   else version = this->deviceMpkgVersion;      // phone's reported int
+     *   string magic = "PKGM0020";                   // default string
+     *   if (version > 0) magic = "PKGM" + "%04i" % version;
+     *
+     * The phone reports its .mpkg version in the pairing auth JSON
+     * ("mpkgVersion":"PKGMdddd" — parsed by WePairingServer into
+     * [WePairingServer.negotiatedMpkgVersion]). The PC therefore:
+     *   - never hands a phone a container NEWER than the phone's own
+     *     reported version, and
+     *   - unconditionally delivers video wallpapers as PKGM0014 (the
+     *     VideoDrawable format that every phone generation understands).
+     *
+     * WepWawet policy (identical output for real devices):
+     *   - video wallpapers → PKGM0014, always;
+     *   - scene wallpapers → min(deviceVersion, 20), where an unknown
+     *     device version (0, no phone paired yet) yields PKGM0020 — the
+     *     exact behavior of every previous WepWawet release.
+     *
+     * The extra min(…, 20) guard is WepWawet's: our packer's content is at
+     * most v20-level, so a hypothetical future phone reporting PKGM0030
+     * still receives a container its parser fully understands.
+     */
+    fun negotiateMagic(wallpaperType: String): String {
+        val deviceVersion = WePairingServer.negotiatedMpkgVersion
+        return if (wallpaperType.equals("video", ignoreCase = true)) {
+            "PKGM0014"
+        } else {
+            val version = if (deviceVersion in 1..20) deviceVersion else 20
+            "PKGM" + "%04d".format(version)
+        }
+    }
 
     /**
      * Bump whenever the DXT decoder, ETC2 encoder, effort policy, or .tex
@@ -317,12 +385,58 @@ object MpkgPacker {
             }
         }
 
+        // v0.7.4 (parity G6): the PC guarantees every .mpkg carries a preview
+        // — it generates a 360 px thumbnail when possible and falls back to
+        // its bundled nopreview.jpg placeholder otherwise (FUN_140018a50 +
+        // the "nopreview.jpg" string in wallpaperui.exe). Degenerate local
+        // projects that ship NO preview at all got none from WepWawet, so
+        // the phone showed a blank card in its wallpaper list. Add the same
+        // placeholder as a preview.jpg entry of last resort.
+        val hasAnyPreview = entries.any { (name, _) ->
+            name.equals("preview.jpg", true) || name.equals("preview.jpeg", true) ||
+                name.equals("preview.gif", true) || name.equals("preview.png", true) ||
+                name.equals("preview.webp", true)
+        }
+        if (!hasAnyPreview) {
+            entries.add("preview.jpg" to buildNoPreviewJpeg())
+            WepWawetLogger.proxy("MpkgPacker.packFromPkg: no preview present — added nopreview placeholder entry (G6)",
+                "entry" to "preview.jpg")
+        }
+
         // Step 2b: Detect wallpaper type from project.json (AFTER adding standalone files,
         // because project.json might only be in the install dir, not in the .pkg)
         val type = PkgReader.detectWallpaperType(entries)
         WepWawetLogger.proxy("MpkgPacker.packFromPkg type detected",
             "type" to type,
             "entry_count" to entries.size)
+
+        // v0.7.4 (parity G7): the full set of VFS entry names, used by the
+        // missing-texture scan below. In streaming mode `entries` only holds
+        // the modified subset, so union in the .pkg's VFS paths.
+        val allVfsNames: Set<String> = buildSet {
+            addAll(entries.map { it.first })
+            vfsData?.first?.forEach { add(it.path) }
+        }
+
+        // Step 3b-fix (v0.7.4, parity G7 — MISSING-SCENETEXTURE REMOVAL):
+        // The PC removes scenetexture references whose file is absent from
+        // the package (FUN_14003d0e0's entry-erasure loop around the
+        // "scenetexture" comparison; each missing map entry is erased and
+        // its "files"-manifest line dropped). WepWawet previously kept the
+        // dangling reference, producing phantom-texture render artifacts
+        // (yellow/black checkerboards) on the phone.
+        //
+        // Conservative, namespace-scoped rule — only a reference that:
+        //   1. looks like a content file (known texture extension), AND
+        //   2. is NOT present in the VFS, AND
+        //   3. lives under a top-level directory that DOES exist in the VFS
+        //      (e.g. "materials/foo.tex" when materials/ entries exist)
+        // is treated as missing. WE built-in assets ("particle/halo_6",
+        // "util/blur.png", …) ship inside the phone app, not the .pkg, so
+        // they are never touched. A nulled slot is then filled with the
+        // shader's declared default by fixSceneJsonTextureBindings below —
+        // exactly the PC's end state for such materials.
+        removeMissingSceneTextures(entries, allVfsNames)
 
         // Step 3b-fix: Fix scene.json — replace null texture bindings with
         // shader-declared defaults. On WE PC, null means "use default from
@@ -628,69 +742,164 @@ object MpkgPacker {
                 "size_increase_mb" to "%.1f".format((totalConvertedTexBytes - totalOriginalTexBytes) / 1024.0 / 1024.0))
         }
 
-        // Step 3d: Transcode .webm videos to .mp4 with H.264 (100% parity with WE PC)
+        // Step 3d: Transcode exotic videos to .mp4 with H.264 (100% parity with WE PC)
         //
-        // Real WE PC's transcoder writes `mp4_h264` as the codec identifier for
-        // video wallpapers (disasm line 14003f017). For .webm source files,
-        // WE PC uses `ffmpeg_mp4_h264` to transcode to .mp4 with H.264 codec.
-        // We do the same on-device using FFmpegKit.
+        // v0.7.4 (parity G2 — EXOTIC CONTAINERS): the PC re-encodes EVERY
+        // video entry that is not already MP4 before packing — Media
+        // Foundation for H264/H265/VP8/VP9/VP10/WMV3/YUY2 (FUN_140213e20
+        // topology GUIDs) and the bundled ffmpeg for the fallback codec
+        // identifiers `ffmpeg_avi_raw` / `ffmpeg_avi_yuv420` /
+        // `ffmpeg_avi_yuv422` / `ffmpeg_gif` / `ffmpeg_mp4_h264` /
+        // `ffmpeg_mp4_h265` / `ffmpeg_mp4_vp8` / `ffmpeg_mp4_vp9`
+        // (FUN_1400e21d0, strings verified in wallpaperui.exe 2.8.0.42).
+        // The phone's VideoDrawable only understands MP4/WebM-class
+        // content delivered as `mp4_h264`.
         //
-        // The Android app's VideoDrawable expects MP4 with H.264 codec. WebM
-        // files (VP8/VP9 + Vorbis/Opus) may not be supported by all Android
-        // VideoDrawable implementations.
-        if (type == "video" || type == "unknown") {
-            // Find any .webm entries and transcode them to .mp4
-            val webmEntries = entries.filter { it.first.endsWith(".webm", ignoreCase = true) }
-            if (webmEntries.isNotEmpty()) {
-                WepWawetLogger.proxy("MpkgPacker.packFromPkg: found .webm video(s) — will transcode to .mp4",
-                    "count" to webmEntries.size,
-                    "files" to webmEntries.map { it.first })
-                for ((webmName, webmBytes) in webmEntries) {
-                    val mp4Name = webmName.substringBeforeLast('.') + ".mp4"
-                    WepWawetLogger.proxy("MpkgPacker.packFromPkg: transcoding .webm → .mp4",
-                        "webm_name" to webmName,
-                        "mp4_name" to mp4Name,
-                        "webm_size" to webmBytes.size)
+        // WepWawet previously converted ONLY .webm entries — a wallpaper
+        // whose .pkg carried a .wmv/.avi/.gif video shipped those bytes
+        // untouched and rendered black on the phone. This pass now routes
+        // every non-.mp4 video entry through the matching on-device
+        // converter:
+        //   .webm/.mkv/.wmv/.flv/.ts/.m4v/.mov/.3gp → VideoTranscoder
+        //       (MediaExtractor + MediaCodec — WMV/FLV succeed on devices
+        //        that ship the vendor demuxer)
+        //   .avi → AviToMp4Transcoder (custom RIFF demux; MJPG/raw-DIB/
+        //        H264-in-AVI/XVID via MediaCodec)
+        //   .gif → GifToMp4Transcoder (Movie frame decode + H264 encode)
+        // and keeps the same rename + project.json rewrite the WebM path
+        // has always used. On failure the original entry is kept (the
+        // current, logged behavior) — better a loud log than a broken
+        // silent rename.
+        // v0.7.4: in-pkg video entries whose VFS path was replaced by a
+        // transcoded .mp4 (streaming mode only) — the pack step filters these
+        // out so the .mpkg does not contain BOTH the original and the mp4.
+        var inPkgDroppedVfsPaths: Set<String> = emptySet()
 
-                    // Write .webm to temp file, transcode, read .mp4 back
-                    val tempWebm = File.createTempFile("wepwawet_transcode_", ".webm")
+        if (type == "video" || type == "unknown") {
+            val videoExtensions = listOf(
+                ".webm", ".mkv", ".wmv", ".avi", ".flv", ".ts",
+                ".m4v", ".mov", ".3gp", ".gif",
+            )
+
+            // v0.7.4: in STREAMING mode the video entries are NOT in `entries`
+            // (only shaders/JSONs were loaded), so collect the work list from
+            // the VFS table and stream each source to a temp file instead of
+            // holding it in memory. Non-streaming mode uses the loaded list.
+            // Sources above MAX_IN_PKG_VIDEO_BYTES are left untouched — reading
+            // them back (or holding the re-encoded result) risks OOM for
+            // multi-hundred-MB videos, and matches the previous behavior.
+            val MAX_IN_PKG_VIDEO_BYTES = 256L * 1024 * 1024
+            val droppedVfsPaths = mutableSetOf<String>()
+
+            data class PendingVideo(val name: String, val vfs: PkgReader.VfsEntry?)
+            val pendingVideos = mutableListOf<PendingVideo>()
+            if (vfsData != null) {
+                val (vfsEntriesForVideo, _) = vfsData!!
+                for (vfs in vfsEntriesForVideo) {
+                    if (videoExtensions.any { vfs.path.endsWith(it, ignoreCase = true) }) {
+                        pendingVideos.add(PendingVideo(vfs.path, vfs))
+                    }
+                }
+            } else {
+                for ((name, _) in entries) {
+                    if (videoExtensions.any { name.endsWith(it, ignoreCase = true) }) {
+                        pendingVideos.add(PendingVideo(name, null))
+                    }
+                }
+            }
+
+            if (pendingVideos.isNotEmpty()) {
+                WepWawetLogger.proxy("MpkgPacker.packFromPkg: found non-MP4 video(s) — will transcode to .mp4",
+                    "count" to pendingVideos.size,
+                    "files" to pendingVideos.map { it.name },
+                    "streaming_mode" to (vfsData != null))
+                for (pending in pendingVideos) {
+                    val videoName = pending.name
+                    val mp4Name = videoName.substringBeforeLast('.') + ".mp4"
+                    val sourceExt = videoName.substringAfterLast('.', "bin").lowercase()
+
+                    val tempSource = File.createTempFile("wepwawet_transcode_", ".$sourceExt")
                     val tempMp4 = File.createTempFile("wepwawet_transcode_", ".mp4")
                     try {
-                        tempWebm.writeBytes(webmBytes)
-                        if (VideoTranscoder.transcodeToMp4H264(tempWebm, tempMp4)) {
-                            val mp4Bytes = tempMp4.readBytes()
-                            // Replace the .webm entry with the .mp4 entry
-                            val webmIndex = entries.indexOfFirst { it.first == webmName }
-                            if (webmIndex >= 0) {
-                                entries[webmIndex] = mp4Name to mp4Bytes
-                                WepWawetLogger.proxy("MpkgPacker.packFromPkg: .webm transcoded to .mp4",
-                                    "webm_name" to webmName,
-                                    "mp4_name" to mp4Name,
-                                    "webm_size" to webmBytes.size,
-                                    "mp4_size" to mp4Bytes.size,
-                                    "size_ratio" to "%.2fx".format(mp4Bytes.size.toDouble() / webmBytes.size))
-                            }
-                            // Also update project.json's "file" field if it references the .webm
-                            val pjIndex = entries.indexOfFirst { it.first == "project.json" }
-                            if (pjIndex >= 0) {
-                                val pjStr = String(entries[pjIndex].second, Charsets.UTF_8)
-                                val updatedPj = pjStr.replace(webmName, mp4Name)
-                                if (updatedPj != pjStr) {
-                                    entries[pjIndex] = "project.json" to updatedPj.toByteArray(Charsets.UTF_8)
-                                    WepWawetLogger.proxy("MpkgPacker.packFromPkg: updated project.json file field",
-                                        "old" to webmName, "new" to mp4Name)
-                                }
-                            }
+                        // Materialize the source bytes:
+                        //  - loaded list mode: take the entry's bytes directly
+                        //  - streaming mode: stream the VFS entry to the temp file
+                        val videoBytes: ByteArray? = if (pending.vfs == null) {
+                            entries.firstOrNull { it.first == videoName }?.second
+                        } else if (pending.vfs.size > MAX_IN_PKG_VIDEO_BYTES) {
+                            WepWawetLogger.proxyWarn("MpkgPacker.packFromPkg: in-pkg video too large to transcode — passing through unchanged",
+                                "name" to videoName,
+                                "size" to pending.vfs.size,
+                                "cap" to MAX_IN_PKG_VIDEO_BYTES)
+                            null
                         } else {
-                            WepWawetLogger.proxyWarn("MpkgPacker.packFromPkg: .webm transcode FAILED — keeping .webm as-is",
-                                "webm_name" to webmName)
+                            val (_, dataStart) = vfsData!!
+                            java.io.FileOutputStream(tempSource).use { fos ->
+                                PkgReader.streamEntryData(pkgFile, dataStart,
+                                    pending.vfs.offset, pending.vfs.size.toLong(), fos)
+                            }
+                            tempSource.readBytes()
+                        }
+
+                        if (videoBytes != null) {
+                            WepWawetLogger.proxy("MpkgPacker.packFromPkg: transcoding → .mp4",
+                                "source_name" to videoName,
+                                "mp4_name" to mp4Name,
+                                "source_size" to videoBytes.size,
+                                "kind" to sourceExt)
+                            tempSource.writeBytes(videoBytes)
+                            val transcodeOk = when (sourceExt) {
+                                "avi" -> AviToMp4Transcoder.transcode(tempSource, tempMp4)
+                                "gif" -> GifToMp4Transcoder.transcode(tempSource, tempMp4)
+                                else -> VideoTranscoder.transcodeToMp4H264(tempSource, tempMp4)
+                            }
+                            if (transcodeOk && tempMp4.exists() && tempMp4.length() > 0) {
+                                val mp4Bytes = tempMp4.readBytes()
+                                if (pending.vfs != null) {
+                                    // Streaming mode: the converted entry becomes a
+                                    // "standalone" modified entry (its .mp4 name is not
+                                    // in the VFS table), and the original VFS path is
+                                    // dropped from the pack list below.
+                                    entries.add(mp4Name to mp4Bytes)
+                                    droppedVfsPaths.add(videoName)
+                                } else {
+                                    val srcIndex = entries.indexOfFirst { it.first == videoName }
+                                    if (srcIndex >= 0) entries[srcIndex] = mp4Name to mp4Bytes
+                                }
+                                WepWawetLogger.proxy("MpkgPacker.packFromPkg: video transcoded to .mp4",
+                                    "source_name" to videoName,
+                                    "mp4_name" to mp4Name,
+                                    "source_size" to videoBytes.size,
+                                    "mp4_size" to mp4Bytes.size,
+                                    "size_ratio" to "%.2fx".format(mp4Bytes.size.toDouble() / videoBytes.size))
+                                // Also update project.json's "file" field if it references the source
+                                val pjIndex = entries.indexOfFirst { it.first == "project.json" }
+                                if (pjIndex >= 0) {
+                                    val pjStr = String(entries[pjIndex].second, Charsets.UTF_8)
+                                    val updatedPj = pjStr.replace(videoName, mp4Name)
+                                    if (updatedPj != pjStr) {
+                                        entries[pjIndex] = "project.json" to updatedPj.toByteArray(Charsets.UTF_8)
+                                        WepWawetLogger.proxy("MpkgPacker.packFromPkg: updated project.json file field",
+                                            "old" to videoName, "new" to mp4Name)
+                                    }
+                                }
+                            } else {
+                                WepWawetLogger.proxyWarn("MpkgPacker.packFromPkg: transcode FAILED — keeping original as-is",
+                                    "source_name" to videoName,
+                                    "note" to "the entry keeps its original container; the phone " +
+                                        "may not be able to play it (see transcoder logs above)")
+                            }
                         }
                     } finally {
-                        tempWebm.delete()
+                        tempSource.delete()
                         tempMp4.delete()
                     }
                 }
             }
+
+            // v0.7.4: expose the dropped VFS paths (streaming mode) to the
+            // pack step so the original .webm/.avi entry is not also copied.
+            inPkgDroppedVfsPaths = droppedVfsPaths
         }
 
         // Step 3e: Rewrite project.json + scene.json for the .mpkg's MPKG_VFS://
@@ -751,18 +960,39 @@ object MpkgPacker {
         }
 
         // Step 4: Pack the entries into a .mpkg
+        //
+        // v0.7.4 (parity G1): the .mpkg magic is selected per transfer —
+        // PKGM0014 for video wallpapers, min(deviceVersion, 20) for scenes —
+        // exactly like the PC packer (see [negotiateMagic]). The container
+        // layout is identical for every version; only the 8-char magic
+        // string differs (FUN_14020a660 writes it verbatim).
+        val magic = negotiateMagic(type)
+        WepWawetLogger.proxy("MpkgPacker.packFromPkg: mpkg magic negotiated",
+            "magic" to magic,
+            "wallpaper_type" to type,
+            "device_mpkg_version" to WePairingServer.negotiatedMpkgVersion)
         val totalSize: Long
         if (vfsData != null) {
             // Streaming pack — writes modified entries from memory, streams
             // unmodified entries directly from .pkg to .mpkg (no OOM)
             val (vfsEntries, dataSectionStart) = vfsData!!
+            // v0.7.4 (G2): drop in-pkg video entries that were replaced by
+            // a transcoded .mp4 — the .mp4 was added as a standalone entry.
+            val effectiveVfsEntries = if (inPkgDroppedVfsPaths.isEmpty()) vfsEntries
+                else vfsEntries.filter { it.path !in inPkgDroppedVfsPaths }
+            if (effectiveVfsEntries.size != vfsEntries.size) {
+                WepWawetLogger.proxy("MpkgPacker.packFromPkg: filtered replaced VFS video entries",
+                    "before" to vfsEntries.size,
+                    "after" to effectiveVfsEntries.size,
+                    "dropped" to inPkgDroppedVfsPaths)
+            }
             val modifiedMap = entries.associate { it.first to it.second }
-            totalSize = streamPack(pkgFile, dataSectionStart, vfsEntries, modifiedMap, outputFile)
+            totalSize = streamPack(pkgFile, dataSectionStart, effectiveVfsEntries, modifiedMap, outputFile, magic)
             // Skip verifyMpkg for large files (it loads entire .mpkg into memory)
         } else {
             // Standard pack — all entries in memory
-            totalSize = pack(entries, outputFile)
-            verifyMpkg(outputFile, entries)
+            totalSize = pack(entries, outputFile, magic)
+            verifyMpkg(outputFile, entries, magic)
         }
 
         WepWawetLogger.proxy("MpkgPacker.packFromPkg COMPLETE",
@@ -770,6 +1000,7 @@ object MpkgPacker {
             "mpkg_size" to totalSize,
             "entry_count" to entries.size,
             "type" to type,
+            "magic" to magic,
             "streaming" to (vfsData != null))
         return totalSize
     }
@@ -930,15 +1161,20 @@ object MpkgPacker {
         WepWawetLogger.proxy("MpkgPacker.packSceneWallpaper packing entries",
             "entry_count" to entries.size,
             "total_bytes" to entries.sumOf { it.second.size })
-        val totalSize = pack(entries, outputFile)
+        // v0.7.4 (parity G1): scene wallpapers get min(deviceVersion, 20) —
+        // identical to PKGM0020 until a phone that reports an older .mpkg
+        // version pairs with us.
+        val sceneMagic = negotiateMagic("scene")
+        val totalSize = pack(entries, outputFile, sceneMagic)
 
         WepWawetLogger.proxy("MpkgPacker.packSceneWallpaper COMPLETE",
             "output" to outputFile.name,
             "mpkg_size" to totalSize,
             "tex_dims" to "${texW}x${texH}",
-            "schemecolor" to avgColorStr)
+            "schemecolor" to avgColorStr,
+            "magic" to sceneMagic)
 
-        verifyMpkg(outputFile, entries)
+        verifyMpkg(outputFile, entries, sceneMagic)
         return totalSize
     }
 
@@ -1048,6 +1284,49 @@ object MpkgPacker {
             "output" to outputFile.name)
 
         require(videoFile.exists()) { "videoFile not found: ${videoFile.absolutePath}" }
+
+        // === v0.7.4 (parity G2): EXOTIC CONTAINERS — transcode to MP4 first ===
+        // The PC pipeline re-encodes every non-MP4 video wallpaper before it
+        // ever reaches the packer (`ffmpeg_gif` / `ffmpeg_avi_*` /
+        // `ffmpeg_mp4_h264` identifiers in FUN_1400e21d0 of wallpaperui.exe
+        // 2.8.0.42). The phone's VideoDrawable plays MP4/H.264 — a bare
+        // .webm/.wmv/.avi/.gif packed as "wallpaper.mp4" renders black.
+        // We therefore sniff the container and run the matching on-device
+        // converter before packing; the pack below then streams a real MP4.
+        val container = VideoContainerSniffer.sniff(videoFile)
+        val effectiveVideoFile: File = when {
+            !VideoContainerSniffer.needsTranscode(container) -> videoFile
+            else -> {
+                WepWawetLogger.proxy("MpkgPacker.packVideoWallpaper: source is ${VideoContainerSniffer.label(container)} — transcoding to MP4 first",
+                    "container" to VideoContainerSniffer.label(container),
+                    "size" to videoFile.length())
+                val transcoded = File.createTempFile("wepwawet_video_", ".mp4",
+                    videoFile.parentFile)
+                val ok = when (container) {
+                    VideoContainerSniffer.Kind.GIF ->
+                        GifToMp4Transcoder.transcode(videoFile, transcoded)
+                    VideoContainerSniffer.Kind.AVI ->
+                        AviToMp4Transcoder.transcode(videoFile, transcoded)
+                    else -> VideoTranscoder.transcodeToMp4H264(videoFile, transcoded)
+                }
+                if (!ok || !transcoded.exists() || transcoded.length() == 0L) {
+                    runCatching { transcoded.delete() }
+                    WepWawetLogger.proxyError("MpkgPacker.packVideoWallpaper: transcode FAILED",
+                        "container" to VideoContainerSniffer.label(container),
+                        "video_file" to videoFile.name,
+                        "note" to "see transcoder logs above for the per-codec reason")
+                    throw IllegalArgumentException(
+                        "Cannot convert ${VideoContainerSniffer.label(container)} video to MP4 " +
+                            "on this device — see logs (the wallpaper was NOT packed)")
+                }
+                WepWawetLogger.proxy("MpkgPacker.packVideoWallpaper: transcode OK",
+                    "container" to VideoContainerSniffer.label(container),
+                    "original_size" to videoFile.length(),
+                    "mp4_size" to transcoded.length())
+                transcoded
+            }
+        }
+
         // === v0.4.10: DO NOT load the entire video into memory!
         // Previously: `val videoBytes = videoFile.readBytes()` — this tries
         // to allocate 710MB for a 710MB video, but Android's heap limit is
@@ -1057,26 +1336,34 @@ object MpkgPacker {
         // Fix: Stream the video file in 1MB chunks to the output .mpkg,
         // keeping only the small entries (project.json, preview.jpg) in
         // memory. This reduces peak memory from ~710MB to ~2MB. ===
-        val videoSize = videoFile.length()
+        val videoSize = effectiveVideoFile.length()
         WepWawetLogger.proxy("MpkgPacker.packVideoWallpaper video size (streamed, not loaded)",
             "video_size" to videoSize,
-            "video_file_path" to videoFile.absolutePath,
+            "video_file_path" to effectiveVideoFile.absolutePath,
+            "container" to VideoContainerSniffer.label(container),
             "streaming_mode" to true)
 
         // Build preview.jpg
+        // v0.7.4 (parity G6): the PC generates a 360 px preview thumbnail from
+        // the video (FUN_140018a50 — the preview thumbnailer, 360 px) and
+        // falls back to its bundled nopreview.jpg placeholder when nothing
+        // can be extracted. We now do the same: MediaMetadataRetriever frame
+        // at t=1 s scaled to a 360 px long edge, then the placeholder.
         val previewBytes: ByteArray = if (previewFile != null && previewFile.exists()) {
             WepWawetLogger.proxyDebug("MpkgPacker.packVideoWallpaper using provided preview",
                 "preview_file" to previewFile.name,
                 "preview_size" to previewFile.length())
             previewFile.readBytes()
         } else {
-            WepWawetLogger.proxyDebug("MpkgPacker.packVideoWallpaper generating black preview placeholder")
-            val bitmap = Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888)
-            bitmap.eraseColor(android.graphics.Color.BLACK)
-            val baos = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, baos)
-            bitmap.recycle()
-            baos.toByteArray()
+            val generated = generateVideoPreviewJpeg(effectiveVideoFile)
+            if (generated != null) {
+                WepWawetLogger.proxy("MpkgPacker.packVideoWallpaper generated 360px preview from video",
+                    "preview_size" to generated.size)
+                generated
+            } else {
+                WepWawetLogger.proxy("MpkgPacker.packVideoWallpaper no preview extractable — using nopreview placeholder")
+                buildNoPreviewJpeg()
+            }
         }
 
         val projectJson = buildVideoProjectJson(item)
@@ -1088,7 +1375,14 @@ object MpkgPacker {
         // and sizes), write the header + VFS table, then stream the
         // video file in 1MB chunks.
         val HEADER_MARKER = 8
-        val MAGIC = "PKGM0020"  // match latest wallpaperui.exe (was PKGM0014)
+        // v0.7.4 (parity G1): the PC packer forces version 14 for EVERY
+        // video wallpaper (FUN_14003d0e0: `if (isVideo) version = 0xe;`),
+        // regardless of the phone's negotiated version — the VideoDrawable
+        // container format that every phone generation parses.
+        val MAGIC = negotiateMagic("video")
+        WepWawetLogger.proxy("MpkgPacker.packVideoWallpaper mpkg magic",
+            "magic" to MAGIC,
+            "device_mpkg_version" to WePairingServer.negotiatedMpkgVersion)
 
         // Small entries (project.json + preview.jpg) — keep in memory
         val smallEntries = listOf(
@@ -1156,12 +1450,12 @@ object MpkgPacker {
 
             // === Stream the video file in 1MB chunks ===
             WepWawetLogger.proxy("MpkgPacker.packVideoWallpaper: streaming video file",
-                "video_file" to videoFile.name,
+                "video_file" to effectiveVideoFile.name,
                 "video_size" to videoSize,
                 "chunk_size" to (1024 * 1024))
             val chunkSize = 1024 * 1024  // 1 MB
             var bytesWritten = 0L
-            java.io.FileInputStream(videoFile).use { fis ->
+            java.io.FileInputStream(effectiveVideoFile).use { fis ->
                 val buffer = ByteArray(chunkSize)
                 while (true) {
                     val read = fis.read(buffer)
@@ -1182,12 +1476,18 @@ object MpkgPacker {
             out.flush()
         } finally {
             out.close()
+            // v0.7.4 (G2): if the source was transcoded to a temp MP4, remove
+            // it now — the .mpkg is complete and the original is left intact.
+            if (effectiveVideoFile !== videoFile) {
+                runCatching { effectiveVideoFile.delete() }
+            }
         }
 
         WepWawetLogger.proxy("MpkgPacker.packVideoWallpaper COMPLETE (streamed)",
             "output" to outputFile.name,
             "mpkg_size" to outputFile.length(),
-            "video_size" to videoSize)
+            "video_size" to videoSize,
+            "source_container" to VideoContainerSniffer.label(container))
         return outputFile.length()
     }
 
@@ -1208,6 +1508,7 @@ object MpkgPacker {
         vfsEntries: List<PkgReader.VfsEntry>,
         modifiedEntries: Map<String, ByteArray>,
         outputFile: File,
+        magic: String = MAGIC,  // v0.7.4 (G1): per-transfer negotiated magic
     ): Long {
         // Build final entry list: modified entries + unmodified (from VFS) + standalone
         // CRITICAL: Standalone files (project.json, preview.gif) that were added from
@@ -1252,7 +1553,8 @@ object MpkgPacker {
         val out = outputFile.outputStream().buffered()
         try {
             writeLeInt(out, HEADER_MARKER)
-            out.write(MAGIC.toByteArray(Charsets.US_ASCII))
+            out.write(magic.toByteArray(Charsets.US_ASCII))
+            if (magic.length != 8) error("magic must be 8 bytes: '$magic'")
             writeLeInt(out, finalEntries.size)
 
             var cursor = 0
@@ -1460,13 +1762,21 @@ object MpkgPacker {
 
     /**
      * Build project.json for a Video wallpaper.
+     *
+     * v0.7.4 (parity G9): the PC transcoder always writes an
+     * `alignmentposition` field for video wallpapers — "{\"value\": <int>}" —
+     * with the int coming from the device/export configuration
+     * (FUN_14003d0e0, disasm 14003f27b). WepWawet surfaces the same value
+     * as a settings slider ([videoAlignmentPosition], default 0 = centered).
      */
     private fun buildVideoProjectJson(item: WorkshopItemTyped): ByteArray {
         val title = escapeJsonString(item.title)
         val description = escapeJsonString(item.description.ifBlank { "Sent from WepWawet" })
         val tags = item.tags.joinToString(", ") { "\"${escapeJsonString(it)}\"" }
+        val alignment = videoAlignmentPosition.coerceIn(0, 100)
         return buildString {
             append("{\r\n")
+            append("\t\"alignmentposition\" : \"{\\\"value\\\": $alignment}\",\r\n")
             append("\t\"contentrating\" : \"Everyone\",\r\n")
             append("\t\"description\" : \"$description\",\r\n")
             append("\t\"file\" : \"wallpaper.mp4\",\r\n")
@@ -2092,11 +2402,18 @@ object MpkgPacker {
             }
 
             // Pick the largest mipmap (level 0) — texture dimensions MUST match scene.json
-            val largest = decoded.maxByOrNull { it.width.toLong() * it.height.toLong() }!!
+            val largestRaw = decoded.maxByOrNull { it.width.toLong() * it.height.toLong() }!!
+            // v0.7.4 (parity G5): apply the optional texture shrink (PC
+            // "texturereduction") — both the ETC2 data and the .tex header
+            // dims written below then reflect the reduced resolution.
+            val largest = maybeShrinkRgba(largestRaw.rgba, largestRaw.width, largestRaw.height, name)
+                ?.let { DecodedRgba(largestRaw.imgIndex, it.second, it.third, it.first) }
+                ?: largestRaw
             WepWawetLogger.proxy("MpkgPacker.convertTexPngToEtc2: selected mipmap (largest, must match scene.json)",
                 "name" to name, "selected_index" to largest.imgIndex,
                 "width" to largest.width, "height" to largest.height,
-                "rgba_bytes" to largest.rgba.size)
+                "rgba_bytes" to largest.rgba.size,
+                "shrunk" to (largest !== largestRaw))
 
             // ---- Step 3: Encode RGBA8888 → ETC2 RGBA8 (via native library) ----
             // v0.6.0 (parity §6 6-7): Detect opacity for RGBX error metric
@@ -2578,18 +2895,26 @@ object MpkgPacker {
                 i += sampleStep
             }
 
+            // v0.7.4 (parity G5): apply the optional texture shrink BEFORE the
+            // encode — the ETC2 data AND every .tex header dimension below
+            // then reflect the reduced resolution (PC "texturereduction").
+            val shrunkDxt = maybeShrinkRgba(rgbaBytesFinal, texWidth, texHeight, name)
+            val encodeW = shrunkDxt?.second ?: texWidth
+            val encodeH = shrunkDxt?.third ?: texHeight
+            val encodeRgba = shrunkDxt?.first ?: rgbaBytesFinal
+
             val etc2EncodeStartMs = System.currentTimeMillis()
             val etc2Bytes = try {
-                Etc2Encoder.encodeRgba8888(rgbaBytesFinal, texWidth, texHeight, isOpaque)
+                Etc2Encoder.encodeRgba8888(encodeRgba, encodeW, encodeH, isOpaque)
             } catch (e: Exception) {
                 WepWawetLogger.proxyError("MpkgPacker.convertTexDxtToEtc2: ETC2 encoding failed",
                     "name" to name, "exception" to e.javaClass.name, "message" to (e.message ?: ""))
                 return null
             }
             val etc2ElapsedMs = System.currentTimeMillis() - etc2EncodeStartMs
-            logEtc2Timing(name, texWidth, texHeight, etc2ElapsedMs)
-            val blocksX = (texWidth + 3) / 4
-            val blocksY = (texHeight + 3) / 4
+            logEtc2Timing(name, encodeW, encodeH, etc2ElapsedMs)
+            val blocksX = (encodeW + 3) / 4
+            val blocksY = (encodeH + 3) / 4
             val expectedEtc2Size = blocksX * blocksY * 16
             WepWawetLogger.proxy("MpkgPacker.convertTexDxtToEtc2: ETC2 encoded",
                 "name" to name,
@@ -2614,10 +2939,10 @@ object MpkgPacker {
             // 7b: TEXI Header (28 bytes = 7 × int32 LE)
             writeLeIntToStream(out, 5)              // format = 5 (ETC2 RGBA8)
             writeLeIntToStream(out, origFlags)      // flags (preserved)
-            writeLeIntToStream(out, texWidth)       // texture_width
-            writeLeIntToStream(out, texHeight)      // texture_height
-            writeLeIntToStream(out, texWidth)       // image_width (same as tex_w)
-            writeLeIntToStream(out, texHeight)      // image_height
+            writeLeIntToStream(out, encodeW)        // texture_width (v0.7.4 G5: post-shrink)
+            writeLeIntToStream(out, encodeH)        // texture_height
+            writeLeIntToStream(out, encodeW)        // image_width (same as tex_w)
+            writeLeIntToStream(out, encodeH)        // image_height
             writeLeIntToStream(out, origUnkInt0)    // color (preserved)
             // 7c: TEXB Container header (9 bytes)
             out.write(byteArrayOf(
@@ -2632,8 +2957,8 @@ object MpkgPacker {
             // 7e: Mipmap count (4 bytes)
             writeLeIntToStream(out, 1)              // mipmap_count = 1
             // 7f: Mipmap 0 with ETC2 RGBA8 + LZ4 compression (16 bytes + data)
-            writeLeIntToStream(out, texWidth)       // width
-            writeLeIntToStream(out, texHeight)       // height
+            writeLeIntToStream(out, encodeW)        // width (v0.7.4 G5: post-shrink)
+            writeLeIntToStream(out, encodeH)        // height
             writeLeIntToStream(out, 1)              // compression = 1 (LZ4)
             writeLeIntToStream(out, etc2Bytes.size) // uncompressed_size
             writeLeIntToStream(out, lz4Compressed.size) // compressed_size
@@ -2836,9 +3161,15 @@ object MpkgPacker {
             }
 
             // Encode RGBA → ETC2 RGBA8 + LZ4 (same as convertTexDxtToEtc2)
+            // v0.7.4 (parity G5): optional texture shrink before the encode —
+            // the .tex header dims below reflect it.
+            val shrunkRg88 = maybeShrinkRgba(rgbaBytes, texWidth, texHeight, name)
+            val rg88EncodeW = shrunkRg88?.second ?: texWidth
+            val rg88EncodeH = shrunkRg88?.third ?: texHeight
+            val rg88EncodeRgba = shrunkRg88?.first ?: rgbaBytes
             val isOpaque = true  // We just set A=255 everywhere
             val etc2Bytes = try {
-                Etc2Encoder.encodeRgba8888(rgbaBytes, texWidth, texHeight, isOpaque)
+                Etc2Encoder.encodeRgba8888(rg88EncodeRgba, rg88EncodeW, rg88EncodeH, isOpaque)
             } catch (e: Exception) {
                 WepWawetLogger.proxyError("MpkgPacker.convertTexRg88ToEtc2: ETC2 encoding failed",
                     "name" to name, "exception" to e.javaClass.name)
@@ -2851,18 +3182,18 @@ object MpkgPacker {
             out.write(texData, 0, 18)
             writeLeIntToStream(out, 5)
             writeLeIntToStream(out, origFlags)
-            writeLeIntToStream(out, texWidth)
-            writeLeIntToStream(out, texHeight)
-            writeLeIntToStream(out, texWidth)
-            writeLeIntToStream(out, texHeight)
+            writeLeIntToStream(out, rg88EncodeW)
+            writeLeIntToStream(out, rg88EncodeH)
+            writeLeIntToStream(out, rg88EncodeW)
+            writeLeIntToStream(out, rg88EncodeH)
             writeLeIntToStream(out, origUnkInt0)
             out.write(byteArrayOf(0x54, 0x45, 0x58, 0x42, 0x30, 0x30, 0x30, 0x34, 0x00))
             writeLeIntToStream(out, 1)
             writeLeIntToStream(out, -1)
             writeLeIntToStream(out, 0)
             writeLeIntToStream(out, 1)
-            writeLeIntToStream(out, texWidth)
-            writeLeIntToStream(out, texHeight)
+            writeLeIntToStream(out, rg88EncodeW)
+            writeLeIntToStream(out, rg88EncodeH)
             writeLeIntToStream(out, 1)
             writeLeIntToStream(out, etc2Bytes.size)
             writeLeIntToStream(out, lz4Compressed.size)
@@ -2952,9 +3283,15 @@ object MpkgPacker {
                 rgbaBytes[i * 4 + 3] = 255.toByte()  // A
             }
 
+            // v0.7.4 (parity G5): optional texture shrink before the encode —
+            // the .tex header dims below reflect it.
+            val shrunkR8 = maybeShrinkRgba(rgbaBytes, texWidth, texHeight, name)
+            val r8EncodeW = shrunkR8?.second ?: texWidth
+            val r8EncodeH = shrunkR8?.third ?: texHeight
+            val r8EncodeRgba = shrunkR8?.first ?: rgbaBytes
             val isOpaque = true
             val etc2Bytes = try {
-                Etc2Encoder.encodeRgba8888(rgbaBytes, texWidth, texHeight, isOpaque)
+                Etc2Encoder.encodeRgba8888(r8EncodeRgba, r8EncodeW, r8EncodeH, isOpaque)
             } catch (e: Exception) { return null }
             val lz4Compressed = net.jpountz.lz4.LZ4Factory.safeInstance().fastCompressor().compress(etc2Bytes)
 
@@ -2962,18 +3299,18 @@ object MpkgPacker {
             out.write(texData, 0, 18)
             writeLeIntToStream(out, 5)
             writeLeIntToStream(out, origFlags)
-            writeLeIntToStream(out, texWidth)
-            writeLeIntToStream(out, texHeight)
-            writeLeIntToStream(out, texWidth)
-            writeLeIntToStream(out, texHeight)
+            writeLeIntToStream(out, r8EncodeW)
+            writeLeIntToStream(out, r8EncodeH)
+            writeLeIntToStream(out, r8EncodeW)
+            writeLeIntToStream(out, r8EncodeH)
             writeLeIntToStream(out, origUnkInt0)
             out.write(byteArrayOf(0x54, 0x45, 0x58, 0x42, 0x30, 0x30, 0x30, 0x34, 0x00))
             writeLeIntToStream(out, 1)
             writeLeIntToStream(out, -1)
             writeLeIntToStream(out, 0)
             writeLeIntToStream(out, 1)
-            writeLeIntToStream(out, texWidth)
-            writeLeIntToStream(out, texHeight)
+            writeLeIntToStream(out, r8EncodeW)
+            writeLeIntToStream(out, r8EncodeH)
             writeLeIntToStream(out, 1)
             writeLeIntToStream(out, etc2Bytes.size)
             writeLeIntToStream(out, lz4Compressed.size)
@@ -3067,8 +3404,14 @@ object MpkgPacker {
                 i += sampleStep
             }
 
+            // v0.7.4 (parity G5): optional texture shrink before the encode —
+            // the .tex header dims below reflect it.
+            val shrunkRgba8888 = maybeShrinkRgba(rgbaBytes, texWidth, texHeight, name)
+            val rgba8888EncodeW = shrunkRgba8888?.second ?: texWidth
+            val rgba8888EncodeH = shrunkRgba8888?.third ?: texHeight
+            val rgba8888EncodeRgba = shrunkRgba8888?.first ?: rgbaBytes
             val etc2Bytes = try {
-                Etc2Encoder.encodeRgba8888(rgbaBytes, texWidth, texHeight, isOpaque)
+                Etc2Encoder.encodeRgba8888(rgba8888EncodeRgba, rgba8888EncodeW, rgba8888EncodeH, isOpaque)
             } catch (e: Exception) {
                 WepWawetLogger.proxyError("MpkgPacker.convertTexRgba8888ToEtc2: ETC2 encoding failed",
                     "name" to name, "exception" to e.javaClass.name)
@@ -3080,18 +3423,18 @@ object MpkgPacker {
             out.write(texData, 0, 18)
             writeLeIntToStream(out, 5)
             writeLeIntToStream(out, origFlags)
-            writeLeIntToStream(out, texWidth)
-            writeLeIntToStream(out, texHeight)
-            writeLeIntToStream(out, texWidth)
-            writeLeIntToStream(out, texHeight)
+            writeLeIntToStream(out, rgba8888EncodeW)
+            writeLeIntToStream(out, rgba8888EncodeH)
+            writeLeIntToStream(out, rgba8888EncodeW)
+            writeLeIntToStream(out, rgba8888EncodeH)
             writeLeIntToStream(out, origUnkInt0)
             out.write(byteArrayOf(0x54, 0x45, 0x58, 0x42, 0x30, 0x30, 0x30, 0x34, 0x00))
             writeLeIntToStream(out, 1)
             writeLeIntToStream(out, -1)
             writeLeIntToStream(out, 0)
             writeLeIntToStream(out, 1)
-            writeLeIntToStream(out, texWidth)
-            writeLeIntToStream(out, texHeight)
+            writeLeIntToStream(out, rgba8888EncodeW)
+            writeLeIntToStream(out, rgba8888EncodeH)
             writeLeIntToStream(out, 1)
             writeLeIntToStream(out, etc2Bytes.size)
             writeLeIntToStream(out, lz4Compressed.size)
@@ -3223,13 +3566,16 @@ object MpkgPacker {
             val currentType = root.get("type")?.asString?.lowercase() ?: "unknown"
             if (currentType == "video") {
                 if (!root.has("alignmentposition")) {
-                    // Default: 0 (centered) — matches what the transcoder sets
-                    // when the source doesn't specify a custom alignment.
-                    root.addProperty("alignmentposition", "{\"value\": 0}")
+                    // v0.7.4 (parity G9): the value is the configured video
+                    // alignment position (0 = centered default — byte-identical
+                    // to the previous hardcoded behavior; the PC writes the
+                    // device/export configuration's int here, disasm 14003f27b).
+                    val alignment = videoAlignmentPosition.coerceIn(0, 100)
+                    root.addProperty("alignmentposition", "{\"value\": $alignment}")
                     modified = true
                     WepWawetLogger.proxy("MpkgPacker.rewriteProjectJsonForMobile: set alignmentposition",
-                        "value" to "{\"value\": 0}",
-                        "note" to "default centered (video wallpaper)")
+                        "value" to "{\"value\": $alignment}",
+                        "note" to "video wallpaper alignment position (G9 setting)")
                 }
             }
 
@@ -4877,6 +5223,272 @@ vec3 ApplyChromaticAberration(sampler2D tex, vec2 uv, float intensity) {
         }
     }
 
+    // ==================== v0.7.4 PARITY HELPERS (G5/G6/G7) ====================
+
+    /**
+     * v0.7.4 (parity G7): remove scenetexture references whose file is absent
+     * from the package — the PC's missing-texture removal rule.
+     *
+     * The PC's transcoder iterates the scene's texture/material map and
+     * ERASES every entry whose referenced file does not exist in the output
+     * package (FUN_1401403d0e0's map-erasure loop around the "scenetexture"
+     * string comparison — the erase pattern writes puVar21[2]=0/[3]=7/[0]=0,
+     * the std::map node-removal dance). Keeping the dangling reference on
+     * Android produces phantom-texture artifacts (yellow/black checkerboard
+     * quads where the missing texture is sampled).
+     *
+     * WepWawet implements the removal conservatively:
+     *  - A reference qualifies as "missing" only when it has a known texture
+     *    file extension, is not in the VFS, AND its top-level directory
+     *    (e.g. "materials/") exists in this package — WE built-in assets
+     *    ("particle/halo_6", "util/blur.png", …) live inside the phone app
+     *    and must never be touched.
+     *  - The slot is set to JSON null (not removed from the array) so the
+     *    subsequent [fixSceneJsonTextureBindings] pass can fill it with the
+     *    shader's declared default — the same end state the PC arrives at
+     *    for these materials.
+     *  - scene.json's top-level "files" manifest array additionally drops
+     *    entries whose "file" is missing from the VFS (the PC's literal
+     *    manifest cleanup at the "files" lookup).
+     */
+    private fun removeMissingSceneTextures(
+        entries: MutableList<Pair<String, ByteArray>>,
+        vfsNames: Set<String>,
+    ) {
+        try {
+            val sceneIdx = entries.indexOfFirst { it.first == "scene.json" }
+            if (sceneIdx < 0) return
+            val root = JsonParser.parseString(
+                String(entries[sceneIdx].second, Charsets.UTF_8)).asJsonObject
+
+            // Top-level directories that exist in this package (e.g.
+            // "materials", "textures") — references under them are ours to
+            // validate. Built-ins under other roots are never touched.
+            val vfsDirs = vfsNames.mapNotNull { path ->
+                path.substringBefore('/', "").ifEmpty { null }
+            }.toSet()
+
+            val textureExtensions = listOf(
+                ".tex", ".png", ".jpg", ".jpeg", ".tga", ".webp", ".dds", ".bmp",
+            )
+
+            fun isMissingFileRef(value: String): Boolean {
+                if (value.isBlank()) return false
+                val lower = value.lowercase()
+                if (textureExtensions.none { lower.endsWith(it) }) return false
+                if (value in vfsNames) return false
+                val topDir = value.substringBefore('/', "")
+                return topDir.isNotEmpty() && topDir in vfsDirs
+            }
+
+            var nulledSlots = 0
+
+            // 1. objects → effects → passes → textures[] — null the missing refs
+            val objects = root.getAsJsonArray("objects")
+            if (objects != null) {
+                for (obj in objects) {
+                    val objJson = obj.asJsonObject
+                    val effects = objJson.get("effects")?.asJsonArray ?: continue
+                    for (effect in effects) {
+                        val effectObj = effect.asJsonObject
+                        val passes = effectObj.get("passes")?.asJsonArray ?: continue
+                        for (pass in passes) {
+                            val passObj = pass.asJsonObject
+                            val textures = passObj.get("textures")?.asJsonArray ?: continue
+                            for (i in 0 until textures.size()) {
+                                val el = textures[i]
+                                if (el.isJsonPrimitive && el.asString.let(::isMissingFileRef)) {
+                                    textures[i] = com.google.gson.JsonNull.INSTANCE
+                                    nulledSlots++
+                                    WepWawetLogger.proxy(
+                                        "MpkgPacker.removeMissingSceneTextures: nulled missing texture ref",
+                                        "slot" to i,
+                                        "value" to el.asString,
+                                        "reason" to "file not present in .pkg VFS (PC G7 rule)")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. top-level "files" manifest — drop entries whose file is missing
+            //    (entries may be objects {"file": …} or plain strings — handle both)
+            var droppedManifest = 0
+            val filesArray = root.get("files")?.takeIf { it.isJsonArray }?.asJsonArray
+            if (filesArray != null) {
+                val kept = com.google.gson.JsonArray()
+                for (fe in filesArray) {
+                    val fileRef = when {
+                        fe.isJsonObject -> fe.asJsonObject.get("file")
+                            ?.takeIf { it.isJsonPrimitive }?.asString
+                        fe.isJsonPrimitive -> fe.asString
+                        else -> null
+                    }
+                    if (fileRef != null && isMissingFileRef(fileRef)) {
+                        droppedManifest++
+                        WepWawetLogger.proxy(
+                            "MpkgPacker.removeMissingSceneTextures: dropped files-manifest entry",
+                            "file" to fileRef,
+                            "reason" to "file not present in .pkg VFS (PC G7 rule)")
+                    } else {
+                        kept.add(fe)
+                    }
+                }
+                if (droppedManifest > 0) root.add("files", kept)
+            }
+
+            if (nulledSlots > 0 || droppedManifest > 0) {
+                entries[sceneIdx] = "scene.json" to
+                    com.google.gson.GsonBuilder().setPrettyPrinting().create()
+                        .toJson(root).toByteArray(Charsets.UTF_8)
+                WepWawetLogger.proxy("MpkgPacker.removeMissingSceneTextures: scene.json updated",
+                    "nulled_texture_slots" to nulledSlots,
+                    "dropped_manifest_entries" to droppedManifest)
+            } else {
+                WepWawetLogger.proxyDebug(
+                    "MpkgPacker.removeMissingSceneTextures: no missing texture references found")
+            }
+        } catch (e: Exception) {
+            WepWawetLogger.proxyWarn("MpkgPacker.removeMissingSceneTextures: failed",
+                "exception" to e.javaClass.name,
+                "message" to (e.message ?: ""))
+        }
+    }
+
+    /**
+     * v0.7.4 (parity G6): generate a 360 px preview JPEG from a video file,
+     * like the PC's preview thumbnailer (FUN_140018a50 — 360 px generation).
+     * Grabs the frame at t = 1 s (falls back to t = 0 for shorter clips)
+     * and scales the long edge to 360 px.
+     *
+     * @return JPEG bytes, or null when no frame could be extracted (the
+     *         caller then falls back to the nopreview placeholder).
+     */
+    private fun generateVideoPreviewJpeg(videoFile: File): ByteArray? {
+        val retriever = android.media.MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(videoFile.absolutePath)
+            val durationMs = runCatching {
+                retriever.extractMetadata(
+                    android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+            }.getOrNull() ?: 0L
+
+            val candidates = if (durationMs > 1200) {
+                listOf(1_000_000L, 500_000L, 0L)  // µs positions to try
+            } else {
+                listOf(100_000L, 0L)
+            }
+            var bitmap: Bitmap? = null
+            for (timeUs in candidates) {
+                bitmap = runCatching { retriever.getFrameAtTime(timeUs) }.getOrNull()
+                if (bitmap != null) break
+            }
+            if (bitmap == null) {
+                WepWawetLogger.proxyWarn(
+                    "MpkgPacker.generateVideoPreviewJpeg: no frame extracted",
+                    "duration_ms" to durationMs)
+                return null
+            }
+
+            // Scale long edge to 360 px (PC's preview thumbnail size).
+            val longEdge = maxOf(bitmap.width, bitmap.height)
+            val scaled = if (longEdge > 360) {
+                val scale = 360f / longEdge
+                val w = (bitmap.width * scale).toInt().coerceAtLeast(1)
+                val h = (bitmap.height * scale).toInt().coerceAtLeast(1)
+                Bitmap.createScaledBitmap(bitmap, w, h, true).also {
+                    if (it !== bitmap) bitmap.recycle()
+                }
+            } else {
+                bitmap
+            }
+
+            val baos = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.JPEG, 85, baos)
+            if (scaled !== bitmap) scaled.recycle()
+            return baos.toByteArray()
+        } catch (e: Exception) {
+            WepWawetLogger.proxyWarn("MpkgPacker.generateVideoPreviewJpeg: exception",
+                "exception" to e.javaClass.name,
+                "message" to (e.message ?: ""))
+            return null
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }
+
+    /**
+     * v0.7.4 (parity G6): the "nopreview.jpg" placeholder — the PC bundles
+     * this exact asset name in wallpaperui.exe and uses it whenever a
+     * project ships without any preview (string verified in the binary).
+     * WepWawet generates the equivalent placeholder programmatically (a
+     * 360×202 dark-gray slate) so no binary asset has to live in git.
+     */
+    private fun buildNoPreviewJpeg(): ByteArray {
+        val bitmap = Bitmap.createBitmap(360, 202, Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(android.graphics.Color.rgb(24, 24, 28))
+        val baos = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 85, baos)
+        bitmap.recycle()
+        return baos.toByteArray()
+    }
+
+    /**
+     * v0.7.4 (parity G5): optional texture shrink — the PC's
+     * "texturereduction" / -shrink lever. Box-filters an RGBA buffer down
+     * by [textureShrinkFactor] (2 = half, 4 = quarter), snapping the output
+     * to 4-px multiples so ETC2 4×4 blocks stay aligned.
+     *
+     * @return null when shrinking is disabled or the texture is too small;
+     *         otherwise the shrunken (bytes, width, height).
+     */
+    private fun maybeShrinkRgba(
+        rgba: ByteArray, width: Int, height: Int, name: String,
+    ): Triple<ByteArray, Int, Int>? {
+        val factor = textureShrinkFactor
+        if (factor <= 1) return null
+        if (width < factor * 4 || height < factor * 4) return null
+
+        val newW = (width / factor / 4) * 4
+        val newH = (height / factor / 4) * 4
+        if (newW < 4 || newH < 4) return null
+
+        val out = ByteArray(newW * newH * 4)
+        val xRatio = width.toDouble() / newW
+        val yRatio = height.toDouble() / newH
+        for (y in 0 until newH) {
+            val sy0 = (y * yRatio).toInt()
+            val sy1 = (((y + 1) * yRatio).toInt() + 1).coerceAtMost(height)
+            for (x in 0 until newW) {
+                val sx0 = (x * xRatio).toInt()
+                val sx1 = (((x + 1) * xRatio).toInt() + 1).coerceAtMost(width)
+                var r = 0L; var g = 0L; var b = 0L; var a = 0L; var n = 0L
+                for (sy in sy0 until sy1) {
+                    var idx = (sy * width + sx0) * 4
+                    for (sx in sx0 until sx1) {
+                        r += rgba[idx]; g += rgba[idx + 1]
+                        b += rgba[idx + 2]; a += rgba[idx + 3]
+                        n++; idx += 4
+                    }
+                }
+                val o = (y * newW + x) * 4
+                out[o] = (r / n).toByte()
+                out[o + 1] = (g / n).toByte()
+                out[o + 2] = (b / n).toByte()
+                out[o + 3] = (a / n).toByte()
+            }
+        }
+        WepWawetLogger.proxy("MpkgPacker: texture shrink applied (G5 texturereduction)",
+            "name" to name,
+            "factor" to factor,
+            "from" to "${width}x${height}",
+            "to" to "${newW}x$newH",
+            "bytes_before" to rgba.size,
+            "bytes_after" to out.size)
+        return Triple(out, newW, newH)
+    }
+
     private fun fixSceneJsonTextureBindings(entries: MutableList<Pair<String, ByteArray>>) {
         try {
             // Find scene.json entry
@@ -5111,12 +5723,21 @@ vec3 ApplyChromaticAberration(sampler2D tex, vec2 uv, float intensity) {
 
     /**
      * Pack a list of (name, bytes) entries into a .mpkg file.
+     *
+     * v0.7.4 (parity G1): the magic is a parameter now — callers pass the
+     * per-transfer negotiated version (see [negotiateMagic]). Defaults to
+     * PKGM0020 for direct callers that don't negotiate.
      */
-    private fun pack(entries: List<Pair<String, ByteArray>>, outputFile: File): Long {
+    private fun pack(
+        entries: List<Pair<String, ByteArray>>,
+        outputFile: File,
+        magic: String = MAGIC,
+    ): Long {
         WepWawetLogger.proxyDebug("MpkgPacker.pack layout",
             "entry_count" to entries.size,
             "header_size" to (4 + 8 + 4),
-            "vfs_table_size_estimate" to entries.sumOf { 4 + it.first.toByteArray(Charsets.UTF_8).size + 8 })
+            "vfs_table_size_estimate" to entries.sumOf { 4 + it.first.toByteArray(Charsets.UTF_8).size + 8 },
+            "magic" to magic)
 
         val headerSize = 4 + 8 + 4
         val vfsTableSize = entries.sumOf { 4 + it.first.toByteArray(Charsets.UTF_8).size + 4 + 4 }
@@ -5135,13 +5756,14 @@ vec3 ApplyChromaticAberration(sampler2D tex, vec2 uv, float intensity) {
             "vfs_table_size" to vfsTableSize,
             "data_section_start" to dataSectionStart,
             "total_size" to (dataSectionStart + cursor),
-            "entry_count" to entries.size)
+            "entry_count" to entries.size,
+            "magic" to magic)
 
         val out = outputFile.outputStream().buffered()
         try {
             writeLeInt(out, HEADER_MARKER)
-            out.write(MAGIC.toByteArray(Charsets.US_ASCII))
-            if (MAGIC.length != 8) error("magic must be 8 bytes: '$MAGIC'")
+            out.write(magic.toByteArray(Charsets.US_ASCII))
+            if (magic.length != 8) error("magic must be 8 bytes: '$magic'")
             writeLeInt(out, entries.size)
 
             for (entry in vfsEntries) {
@@ -5178,8 +5800,17 @@ vec3 ApplyChromaticAberration(sampler2D tex, vec2 uv, float intensity) {
 
     /**
      * Verify the .mpkg file we just wrote by reading the header back.
+     *
+     * v0.7.4 (parity G1): the magic is now per-transfer (PKGM0014 for video,
+     * min(device, 20) for scene), so the check accepts any structurally valid
+     * "PKGMdddd" string and additionally compares it against the magic the
+     * caller asked [pack] to write.
      */
-    private fun verifyMpkg(file: File, expectedEntries: List<Pair<String, ByteArray>>) {
+    private fun verifyMpkg(
+        file: File,
+        expectedEntries: List<Pair<String, ByteArray>>,
+        expectedMagic: String = MAGIC,
+    ) {
         try {
             val data = file.readBytes()
             if (data.size < 16) {
@@ -5193,6 +5824,9 @@ vec3 ApplyChromaticAberration(sampler2D tex, vec2 uv, float intensity) {
             buf.get(magicBytes)
             val magic = String(magicBytes, Charsets.US_ASCII)
             val entryCount = buf.int
+
+            val magicStructurallyValid = magic.length == 8 && magic.startsWith("PKGM") &&
+                magic.substring(4).all { it.isDigit() }
 
             if (entryCount !in 1..4096) {
                 WepWawetLogger.proxyWarn("MpkgPacker verify: implausible entry count",
@@ -5209,8 +5843,10 @@ vec3 ApplyChromaticAberration(sampler2D tex, vec2 uv, float intensity) {
                 "file_size" to data.size,
                 "header_marker" to headerMarker,
                 "magic" to magic,
+                "expected_magic" to expectedMagic,
                 "entry_count" to entryCount,
-                "matches_expected" to (headerMarker == HEADER_MARKER && magic == MAGIC && entryCount == expectedEntries.size))
+                "matches_expected" to (headerMarker == HEADER_MARKER &&
+                    magic == expectedMagic && entryCount == expectedEntries.size))
 
             for (i in 0 until entryCount) {
                 if (buf.remaining() < 4) {

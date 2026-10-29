@@ -302,11 +302,16 @@ object WorkshopDownloadJob {
             //   - MP4 files have "ftyp" at offset 4
             //   - PKGV (.pkg) files have "PKGV" at offset 4
             val isVideo = detectVideoByMagicBytes(downloadedPkg)
+            // v0.7.4 (parity G2): image-type downloads (JPEG/PNG/WebP/BMP/GIF)
+            // pack as a Scene via packSceneWallpaper instead of failing the
+            // .pkg parse.
+            val isImage = !isVideo && detectImageByMagicBytes(downloadedPkg)
             WepWawetLogger.workshop("WorkshopDownloadJob: packing content → .mpkg",
                 "input_file" to downloadedPkg.absolutePath,
                 "input_size" to downloadedPkg.length(),
                 "mpkg_output" to cacheMpkg.absolutePath,
-                "is_video" to isVideo)
+                "is_video" to isVideo,
+                "is_image" to isImage)
             // Acquire a PARTIAL_WAKE_LOCK during packing to prevent CPU from
             // sleeping. ETC2 encoding is CPU-intensive and can take minutes
             // for large textures — without a wake lock, the device may throttle
@@ -332,6 +337,17 @@ object WorkshopDownloadJob {
                             videoFile = downloadedPkg,
                             outputFile = cacheMpkg,
                             previewFile = previewFile,
+                        )
+                    } else if (isImage) {
+                        // v0.7.4 (parity G2): image-type Workshop downloads pack
+                        // as a Scene (single fullscreen quad).
+                        WepWawetLogger.workshop("WorkshopDownloadJob: calling packSceneWallpaper (image item)",
+                            "image_file" to downloadedPkg.name,
+                            "image_size" to downloadedPkg.length())
+                        com.wepwawet.pairing.MpkgPacker.packSceneWallpaper(
+                            item = item,
+                            imageFile = downloadedPkg,
+                            outputFile = cacheMpkg,
                         )
                     } else {
                         WepWawetLogger.workshop("WorkshopDownloadJob: calling packFromPkg",
@@ -660,13 +676,19 @@ object WorkshopDownloadJob {
                 val cacheMpkg = File(appContext.cacheDir, "${item.id}_${sendId}_send.mpkg")
                 val installDir = File(appContext.cacheDir, "workshop_downloads/${item.id}")
                 val isVideo = detectVideoByMagicBytes(downloadedPkg)
+                // v0.7.4 (parity G2): Image-type wallpapers (JPEG/PNG/WebP/BMP/GIF
+                // without animation intent from the download) arrive as raw image
+                // files — they pack as a Scene via packSceneWallpaper instead of
+                // failing the .pkg parse. Only checked when NOT a video.
+                val isImage = !isVideo && detectImageByMagicBytes(downloadedPkg)
                 WepWawetLogger.workshop("WorkshopDownloadJob.send: packing content → .mpkg",
                     "input_file" to downloadedPkg.absolutePath,
                     "input_size" to downloadedPkg.length(),
                     "mpkg_output" to cacheMpkg.absolutePath,
                     "install_dir" to installDir.absolutePath,
                     "install_dir_exists" to installDir.exists(),
-                    "is_video" to isVideo)
+                    "is_video" to isVideo,
+                    "is_image" to isImage)
 
                 // v0.7.1 (round 10): If the downloaded file is a video, pause
                 // BEFORE packing and set pendingVideoFile so the UI can show
@@ -723,6 +745,19 @@ object WorkshopDownloadJob {
                                 videoFile = downloadedPkg,
                                 outputFile = cacheMpkg,
                                 previewFile = previewFile,
+                            )
+                        } else if (isImage) {
+                            // v0.7.4 (parity G2): Image wallpapers pack as a
+                            // minimal Scene (single fullscreen quad + the image
+                            // as an RGBA8888 .tex) — the same representation the
+                            // phone renders for image-type content.
+                            WepWawetLogger.workshop("WorkshopDownloadJob.send: calling packSceneWallpaper (image item)",
+                                "image_file" to downloadedPkg.name,
+                                "image_size" to downloadedPkg.length())
+                            com.wepwawet.pairing.MpkgPacker.packSceneWallpaper(
+                                item = item,
+                                imageFile = downloadedPkg,
+                                outputFile = cacheMpkg,
                             )
                         } else {
                             WepWawetLogger.workshop("WorkshopDownloadJob.send: calling packFromPkg",
@@ -1073,31 +1108,52 @@ object WorkshopDownloadJob {
  *
  * @return true if the file is a video, false if it's a scene .pkg
  */
+/**
+ * v0.7.4 (parity G2): Detect whether the downloaded Workshop file is a VIDEO
+ * by sniffing its container magic — NOT just "ftyp at offset 4" anymore.
+ *
+ * The previous MP4-only check mis-routed every WebM/MKV/AVI/WMV/GIF video
+ * wallpaper into the .pkg path, where PkgReader failed with "no entries"
+ * (WorkshopDownloader names every download *.pkg regardless of content, so
+ * extensions are meaningless). A video wallpaper in ANY container the WE PC
+ * pipeline knows how to deliver (MP4 family, WebM/MKV, AVI, WMV/ASF, GIF,
+ * FLV, MPEG-TS) now routes to [MpkgPacker.packVideoWallpaper], which runs
+ * the matching on-device transcoder before packing.
+ *
+ * Still images (JPEG/PNG/WebP/BMP) are NOT videos — see
+ * [detectImageByMagicBytes] for the Image-wallpaper path.
+ */
 private fun detectVideoByMagicBytes(file: File): Boolean {
     if (!file.exists() || file.length() < 12) return false
-    return try {
-        val raf = java.io.RandomAccessFile(file, "r")
-        val header = ByteArray(12)
-        raf.readFully(header)
-        raf.close()
-        // MP4: bytes 4-7 are ASCII "ftyp"
-        val isMp4 = header[4] == 'f'.code.toByte() && header[5] == 't'.code.toByte() &&
-            header[6] == 'y'.code.toByte() && header[7] == 'p'.code.toByte()
-        // PKGV: bytes 4-7 are ASCII "PKGV"
-        val isPkgv = header[4] == 'P'.code.toByte() && header[5] == 'K'.code.toByte() &&
-            header[6] == 'G'.code.toByte() && header[7] == 'V'.code.toByte()
-        WepWawetLogger.workshop("detectVideoByMagicBytes",
-            "file" to file.name,
-            "header_hex" to header.joinToString("") { "%02x".format(it) },
-            "is_mp4" to isMp4,
-            "is_pkgv" to isPkgv)
-        isMp4
-    } catch (e: Exception) {
-        WepWawetLogger.workshopWarn("detectVideoByMagicBytes: exception",
-            "exception" to e.javaClass.name,
-            "message" to (e.message ?: ""))
-        false
-    }
+    val kind = VideoContainerSniffer.sniff(file)
+    val isVideo = VideoContainerSniffer.isVideoKind(kind)
+    WepWawetLogger.workshop("detectVideoByMagicBytes",
+        "file" to file.name,
+        "sniffed" to VideoContainerSniffer.label(kind),
+        "is_video" to isVideo)
+    return isVideo
+}
+
+/**
+ * v0.7.4 (parity G2): Detect whether the downloaded Workshop file is a still
+ * IMAGE (JPEG/PNG/WebP/BMP — including GIF, which BitmapFactory decodes to
+ * its first frame for packing as a Scene wallpaper via
+ * [MpkgPacker.packSceneWallpaper]).
+ *
+ * Image-type Workshop wallpapers download as project.json + the raw image
+ * file (no .pkg at all). Before this fix they fell into the .pkg path and
+ * failed with "no entries in .pkg" — now they pack as a Scene whose single
+ * quad is the image, which is what the WE Android renderer displays.
+ */
+private fun detectImageByMagicBytes(file: File): Boolean {
+    if (!file.exists() || file.length() < 12) return false
+    val kind = VideoContainerSniffer.sniff(file)
+    val isImage = VideoContainerSniffer.isImageKind(kind)
+    WepWawetLogger.workshop("detectImageByMagicBytes",
+        "file" to file.name,
+        "sniffed" to VideoContainerSniffer.label(kind),
+        "is_image" to isImage)
+    return isImage
 }
 
 /**

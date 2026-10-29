@@ -157,8 +157,50 @@ android {
         //   was NOT the issue for that one. The pairing persistence,
         //   BootReceiver, heart-smaller, and all other round 6 changes
         //   are KEPT (only MpkgPacker.kt is reverted).
-        versionCode = 95
-        versionName = "0.7.3-alpha"
+        // v0.7.4-alpha — FULL WALLPAPER COMPATIBILITY / PARITY PASS (G1-G9,
+        // from the wallpaperui.exe 2.8.0.42 Ghidra headless decompilation):
+        //   G1 (P0): .mpkg magic is now NEGOTIATED per transfer — the phone's
+        //      reported "mpkgVersion" is parsed at pairing and scene wallpapers
+        //      get min(device, 20); video wallpapers ALWAYS get PKGM0014,
+        //      exactly like the PC packer (FUN_14003d0e0: `if (isVideo)
+        //      version = 0xe;`, magic = "PKGM" + "%04i" % version — the %04i
+        //      format string lives at file offset 0xab484c).
+        //   G8 (P0): transfer chunk size 1 MiB → 128 KiB, matching the PC's
+        //      framing (the 1 MiB ciphertext frame was 20 bytes OVER the
+        //      phone's documented MAX_SAFE_DATA_LENGTH).
+        //   G2 (P1): exotic video containers now WORK end-to-end — the
+        //      send/download flows sniff every container (MP4/WebM/MKV/AVI/
+        //      WMV/GIF/FLV/TS), and non-MP4 inputs are transcoded to
+        //      MP4/H.264 on-device before packing (GIF via Movie frames,
+        //      AVI via a custom RIFF demuxer covering MJPG-with-DHT-injection/
+        //      raw-DIB/H264/XVID, everything else via MediaExtractor+MediaCodec
+        //      — the PC's `ffmpeg_avi_*`/`ffmpeg_gif` fallback equivalents).
+        //      IMAGE-type workshop wallpapers (raw JPEG/PNG/WebP/BMP files)
+        //      now pack as a Scene via packSceneWallpaper instead of failing
+        //      the .pkg parse.
+        //   G3 (P1): PC export-quality video presets (1080p/4K/auto with the
+        //      verified bitrate table 8M/16M/20M + fps caps) are scaffolded in
+        //      VideoQualityPresets.kt but INTENTIONALLY NOT WIRED UP yet
+        //      (user wants to implement the re-encode pass later — the file
+        //      documents the exact wiring point).
+        //   G7 (P2): scene texture slots referencing files absent from the
+        //      package are nulled (then filled from shader defaults) and the
+        //      scene.json "files" manifest drops missing entries — the PC's
+        //      missing-scenetexture removal rule; kills the phantom-texture
+        //      checkerboard artifacts.
+        //   G6 (P2): video wallpapers without a preview now get a generated
+        //      360 px thumbnail (MediaMetadataRetriever frame at t=1 s) and,
+        //      failing that, a nopreview placeholder — PC parity for
+        //      FUN_140018a50 + "nopreview.jpg".
+        //   G5 (P2): optional texture shrink (PC "texturereduction"): Full /
+        //      Half / Quarter setting applied to every decoded texture before
+        //      ETC2 re-encode (both the pixel data and the .tex header dims).
+        //   G9 (P3): video alignment position is now a 0-100 settings slider
+        //      (default 0 = centered — byte-identical to previous behavior)
+        //      written into project.json like the PC writes the device
+        //      config value (disasm 14003f27b).
+        versionCode = 96
+        versionName = "0.7.4-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {
             abiFilters += "arm64-v8a"

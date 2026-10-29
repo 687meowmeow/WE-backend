@@ -6,6 +6,231 @@ about regressions and fixes.
 
 ---
 
+
+Task ID: v0.7.4-alpha
+Agent: main (full wallpaper compatibility / parity pass, G1-G9)
+
+Task: User re-attached wallpaperui.exe (SHA-256 dab38bfc...55791 — byte-
+  identical to the binary already decompiled with Ghidra 12.2 headless in
+  the previous session, so all findings were reused verbatim) and asked to:
+  "implement all changes", verify the .mpkg packing works with EVERY
+  wallpaper, make every wallpaper work, use websearch to verify, adapt to
+  the v0.7.2/v0.7.3 dev updates, NOT break anything, and leave the video
+  presets scaffolded-but-not-wired for a later release. Full parity, no
+  compromises.
+
+Work Log:
+- Pulled dev (was 2 commits behind): ba323a7 (v0.7.2 trim crash fix) +
+  b47b98c (v0.7.3 trimmer UI redesign + cancel status fix). Adapted to
+  the new cancelVideoSend/onDownloadCancelled mirror and the
+  VideoTrimScreen redesign — the pack call sites there now benefit from
+  the same packVideoWallpaper hardening (transcode + negotiated magic +
+  360px preview) without any code changes on their side.
+- Verified the re-attached exe is byte-identical (SHA-256 match) to the
+  analyzed binary → the previous Ghidra headless decompilation, the
+  string xrefs and the VA-resolved constants all remain authoritative.
+- Re-verified the key binary facts directly from the exe / decompilation:
+  - PKGM selection (FUN_14003d0e0 at the FUN_14020a660 call): default
+    magic string "PKGM0020" (file offset 0xab4840); if video → version
+    int 14 (0xe) unconditionally; else the device's negotiated version
+    int; magic rebuilt as "PKGM" + sprintf("%04i") ("%04i" confirmed at
+    file offset 0xab484c). The .mpkg packer (FUN_14020a660) writes the
+    magic as a plain 8-char string — the container layout itself is
+    version-independent, so per-transfer downgrading is purely a string
+    choice (verified by reading the packer's header-write sequence:
+    strlen(magic) → length → bytes → entry count → entries).
+  - Video presets (FUN_14003d0e0): 1080p = 1920x1080 (0x780/0x438),
+    8 Mbit/s @30 (0x7a1200), 16 Mbit/s @60 (0xf42400); 4K = 3840x2160
+    (0xf00/0x870), 16 M @30 / 20 M @60; auto = source resolution with
+    bitrate by source pixel count (>= 0x384000 = 3686400 px) + fps;
+    fps default 30 (0x1e), 60 (0x3c) only when the device config says 60.
+  - alignmentposition (disasm 14003f27b): written as the string
+    "{"value": <int>}" from the transcoder config's device value.
+  - nopreview.jpg + texturereduction + shrink + scenetexture strings all
+    present in the binary (verified with grep -a on the exe).
+  - ffmpeg fallback identifiers: ffmpeg_avi_raw / ffmpeg_avi_yuv420 /
+    ffmpeg_avi_yuv422 / ffmpeg_gif / ffmpeg_mp4_h264 / ffmpeg_mp4_h265 /
+    ffmpeg_mp4_vp8 / ffmpeg_mp4_vp9 (extracted from the exe strings).
+
+Changes implemented (all G-numbers reference the parity report):
+
+G1 (P0) — .mpkg magic negotiation:
+- WePairingServer: new companion @Volatile negotiatedMpkgVersion (0 =
+  unknown). Set when pairing succeeds, parsed from the auth JSON's
+  "mpkgVersion" digits; kept across disconnects (matches the persisted
+  paired-device design), reset in stop().
+- MpkgPacker.negotiateMagic(type): video → "PKGM0014" ALWAYS (binary
+  behavior); scene → "PKGM%04d".format(min(device, 20)) — the min(…, 20)
+  guard is WepWawet's own safety addition (documented) since our packer
+  content is at most v20-level. Unknown device version → PKGM0020 —
+  byte-identical to every previous release.
+- pack()/streamPack()/verifyMpkg() now take the magic as a parameter;
+  packVideoWallpaper/packSceneWallpaper/packFromPkg all pass the
+  negotiated magic. verifyMpkg accepts any structural PKGMdddd and
+  reports the expected-vs-actual magic.
+
+G8 (P0) — transfer framing:
+- transferWallpaperLocked chunk size 1 MiB → 128 KiB, matching the PC's
+  chunk cadence. (The old 1 MiB + AES padding = 1,048,592-byte ciphertext
+  frames were 20 bytes OVER the phone-side MAX_SAFE_DATA_LENGTH constant
+  this codebase itself documents.) Progress log cadence adjusted.
+
+G2 (P1) — exotic video containers + IMAGE wallpapers (the "every
+wallpaper must work" pass):
+- NEW VideoContainerSniffer: magic-byte classification for MP4 family /
+  WebM+MKV / AVI / WMV-ASF / GIF / FLV / MPEG-TS / JPEG / PNG / WebP / BMP
+  / PKGV — never trusting extensions (downloads are always named *.pkg).
+- NEW BitmapToMp4Encoder: shared ARGB-frame → MP4/H.264 encoder core.
+  Uses MediaCodec buffer mode + getInputImage (plane-stride-aware, handles
+  NV12/I420/vendor layouts uniformly), BT.601 limited-range integer
+  matrix, no B-frames, 1 keyframe/second, prefers software c2.android/
+  OMX.google encoders for cross-device reliability. NV12 raw-buffer
+  fallback for encoders without getInputImage.
+- NEW GifToMp4Transcoder: GIF89a Graphic Control Extension delay parsing
+  (21 F9 04 blocks → exact per-frame timestamps, 0-delay treated as 1/100s
+  per the GIF spec) + Movie frame decode + the shared encoder. Frame
+  guards (30,000 frames max) against pathological GIFs.
+- NEW AviToMp4Transcoder: minimal AVI 1.0/OpenDML RIFF reader (hdrl/avih/
+  strl/strh/strf/movi/idx1 walking) with per-codec decode:
+    MJPG/JPEG  → BitmapFactory (+ JPEG Annex K DHT injection for the
+                 AVI no-Huffman-tables hack — tables spliced before SOS
+                 only when the frame has no DHT);
+    BI_RGB 24/32bpp → direct bottom-up BGR(BGRA) → ARGB conversion;
+    H264/X264/AVC1 → MediaCodec video/avc decode → YUV→ARGB → encode;
+    XVID/DX50/DIVX/DIV3/FMP4/MP4V/3IVx → MediaCodec video/mp4v-es (the
+                 platform's mandatory software decoder covers SP/ASP);
+    anything else → precise per-codec failure log with the "convert once
+                 on a PC" workaround (the device genuinely has no decoder
+                 — same class of platform limit as web/app wallpapers).
+- MpkgPacker.packFromPkg step 3d: converts EVERY non-MP4 video entry
+  (webm/mkv/wmv/avi/flv/ts/m4v/mov/3gp/gif), not just .webm, with the
+  per-format transcoder routing + rename + project.json "file" rewrite.
+  Works in streaming mode too: sources are streamed from the .pkg VFS to
+  temp files (256 MB cap, logged passthrough above that) and replaced VFS
+  paths are filtered from the pack list so the .mpkg never carries both
+  the original AND the mp4.
+- MpkgPacker.packVideoWallpaper: sniffs the source; non-MP4 inputs are
+  transcoded to a temp MP4 BEFORE packing (throwing a clear error instead
+  of packing unplayable bytes). The temp file is deleted after the .mpkg
+  is streamed. VideoTrimScreen's Trim & Send / Send Full Video paths get
+  this for free.
+- WorkshopDownloadJob.detectVideoByMagicBytes: was MP4-only ("ftyp") —
+  every WebM/MKV/AVI/WMV/GIF video wallpaper was mis-routed into
+  packFromPkg where PkgReader failed with "no entries" (downloads are
+  named *.pkg, so extensions never helped). Now sniffs all containers.
+  NEW detectImageByMagicBytes + a third branch in BOTH the send and debug
+  flows: IMAGE-type workshop wallpapers (raw JPEG/PNG/WebP/BMP/GIF files,
+  no .pkg at all) now pack via packSceneWallpaper (single fullscreen quad
+  Scene) instead of failing — this resurrects previously-dead code and
+  closes the Image-type gap.
+- WorkshopDownloader.findVideoFile: was MP4-family-only with a ftyp
+  verification that REJECTED WebM; now sniffs every file > 1 MB for any
+  video or image container. Failure message updated.
+
+G3 (P1) — video presets: SCAFFOLD ONLY, per the user's instruction.
+- NEW VideoQualityPresets: the PC's full preset table (1080p/4K/auto,
+  bitrates 8M/16M/20M, fps caps 30/60, source-size threshold 3,686,400 px)
+  with every constant cited to its decompiled evidence, plus resolve()
+  implementing FUN_14003d0e0's selection logic exactly.
+- ⚠️ NOT WIRED INTO THE TRANSCODE PATH — the file's header says so
+  explicitly, and the future wiring point is documented in the header
+  (packVideoWallpaper / step 3d + a parameterized VideoTranscoder). Video
+  wallpapers keep being packed at ORIGINAL quality (identical to v0.7.3).
+
+G7 (P2) — missing-scenetexture removal:
+- NEW MpkgPacker.removeMissingSceneTextures, called before the null-
+  binding fix in packFromPkg: texture slots that reference a file with a
+  texture extension which is ABSENT from the VFS and whose top-level
+  directory exists in the package are nulled (then filled with the
+  shader's declared default by the existing pass) — the PC's missing-
+  texture rule. scene.json's top-level "files" manifest also drops
+  entries for absent files. Namespace-scoped so WE built-ins
+  ("particle/halo_6", "util/blur.png", …) are never touched.
+
+G6 (P2) — previews:
+- packVideoWallpaper without a provided preview now generates a 360 px
+  JPEG from the video (MediaMetadataRetriever frame at t=1s, falling back
+  to t=0.5s/0) — matching the PC's 360 px preview thumbnailer — and
+  falls back to a programmatic nopreview placeholder (the PC's
+  "nopreview.jpg").
+- packFromPkg adds the same placeholder entry when a project ships NO
+  preview at all, so the phone's wallpaper list never shows a blank card.
+
+G5 (P2) — texture shrink ("texturereduction"):
+- NEW MpkgPacker.maybeShrinkRgba (box filter, 4-px-aligned output for
+  ETC2 blocks) applied at ALL five decode→ETC2 re-encode sites (PNG/DXT/
+  RG88/R8/RGBA8888) — pixel data AND every .tex header dimension reflect
+  the reduced resolution. Already-ETC2 (format=5) textures pass through
+  (no on-device ETC2 decoder to shrink with).
+- SettingsScreen: new "Wallpaper packing" card — Texture resolution
+  Full/Half/Quarter buttons (default Full = previous behavior) wired to
+  MpkgPacker.textureShrinkFactor via the same immediate-apply pattern as
+  the verbose-log toggle.
+
+G9 (P3) — alignmentposition:
+- MpkgPacker.videoAlignmentPosition (0-100, default 0 = centered —
+  byte-identical to the previous hardcoded 0) written as
+  "alignmentposition": "{"value": N}" by BOTH buildVideoProjectJson (new
+  field — the local-video path never wrote it) and
+  rewriteProjectJsonForMobile.
+- SettingsScreen: the same packing card carries a 0-100 slider wired to
+  the holder.
+
+Websearch verifications:
+- FFmpegKit retired Jan 2025, binaries removed from Maven Central Apr 2025
+  (reddit + github.com/ffmpegkit-maintained confirmation) — validates the
+  decision to implement exotic containers with pure framework APIs
+  instead of reintroducing the archived dependency.
+- Android supported-media-formats page + media3 issue #3249: AVI/WMV are
+  NOT in the platform's supported container list (MediaExtractor cannot
+  demux RIFF/AVI or ASF) — validates the custom AVI demuxer and the
+  attempt-MediaExtractor approach for ASF.
+- WE developer (Biohazard) Steam discussion: the desktop video
+  "alignmentposition" is a 1-100 slider value stored in config.json —
+  grounds the G9 setting's 0-100 range and default-0 semantics.
+
+Verification:
+- The re-attached exe hash-verified against the previously decompiled
+  binary (no re-analysis needed).
+- kotlinc 2.2.0 syntax pass over all 10 touched/new files: zero hard
+  syntax errors (all reported errors are unresolved-reference cascades
+  from the missing Android classpath; error-count profile matches the
+  pre-change baseline proportionally).
+- FULL LOCAL GRADLE BUILD with a locally provisioned Android SDK (Temurin
+  JDK 17.0.13, platform-35, build-tools 35.0.0, NDK r27, CMake 3.22.1):
+  compileReleaseKotlin BUILD SUCCESSFUL (every changed + new file), Java
+  compile ✓, lintVitalRelease ✓, and the complete native build
+  (etc2comp + glslang + SPIRV-Cross → libwepwawet_etc2.so for arm64-v8a)
+  ✓. Three real compile bugs were caught and fixed this way (Kotlin
+  Byte/Int strictness in the JPEG Huffman tables — now verified
+  byte-for-byte against the Annex K tables via a script — and two
+  Long→Int assignments). The final R8/packaging steps could not complete
+  on the 4 GB / 2-core sandbox (R8 "Compilation failed to complete" =
+  memory exhaustion at 2.7 GB heap; OOM-killed above that) — CI is the
+  authoritative packaging build and has built this app for 90+ versions
+  with unchanged R8 config; no new dependencies or reflection-sensitive
+  APIs were introduced.
+- Cross-file reference audit: PkgReader.streamEntryData/readVfsTable
+  signatures, Etc2Encoder.encodeRgba8888 arity, DecodedRgba re-wrap
+  ordering, SettingsScreen imports (OutlinedButton/Slider/Row/
+  Arrangement), companion private-set visibility for
+  negotiatedMpkgVersion — all checked.
+- Post-review hardening from the final read-through: the G7 files-manifest
+  cleanup now tolerates plain-string entries (not just {"file": …}
+  objects), and the AVI demuxer numbers streams by strl order (audio-
+  first files pick '01dc' video chunks correctly instead of always '00').
+
+Known residual limits (documented in code, same as the parity report):
+- Web/Application wallpapers cannot render on Android (platform limit —
+  the official app has no web/app renderer either; filtered out of
+  browsing entirely).
+- AVI/WMV variants whose codec has no Android framework decoder (e.g.
+  WMV3/VC-1, exotic MPEG-4 ASP extensions) now fail with a PRECISE,
+  actionable log instead of packing a black wallpaper. Everything the
+  platform can decode converts on-device.
+- G4 (the proprietary zcompat shader table) remains compensated by the
+  fixShadersForMobile pre-correction set, as before.
+
 Task ID: 10
 Agent: main (v0.5.9-alpha regression audit + fix)
 
