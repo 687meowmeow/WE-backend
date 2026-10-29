@@ -4106,16 +4106,30 @@ object MpkgPacker {
 
     /**
      * v0.7.6-alpha (parity FIX 3 — .tex body LZ4 decompression helper):
+     * v0.7.7-alpha (CRITICAL FIX: don't use bogus byteCount at offset 87):
      *
      * For .tex files where the TEXI format=0 (FIF_UNKNOWN — auto-detect via
      * magic bytes) AND IsLZ4=1, the PNG/JPEG magic search at offset 87+
      * fails because the bytes there are LZ4-compressed, not raw PNG/JPEG.
      * This causes the dispatcher to fall through to passthrough — meaning
      * the raw LZ4-compressed RGBA8888/PNG .tex is shipped as-is to the
-     * .mpkg, and the WE Android renderer can't load it (it doesn't
-     * decompress LZ4 + parse PNG inside TEXV — it expects the .tex to
-     * either be already in a renderable format like ETC2_RGBA8 or contain
-     * an uncompressed PNG it can decode).
+     * .mpkg, and the WE Android renderer can't load it.
+     *
+     * v0.7.7 FIX: The v0.7.6 implementation read byteCount from offset 87
+     * and used it to slice the body. But for format=0 .tex files, the
+     * byteCount field at offset 87 is BOGUS (e.g., 1208090609 for a
+     * 355849-byte file). The LZ4 safe decompressor's
+     * `decompress(src, destLen)` stops when it's produced destLen bytes,
+     * so we don't need to know the exact compressed size — we can pass
+     * the ENTIRE remaining .tex from offset 91 (or 87) to end-of-file
+     * as src, and the decompressor will stop at the right place. Extra
+     * bytes at the end (e.g., TEXS animation sections) are ignored.
+     *
+     * We try offset 91 first (standard layout with byteCount field),
+     * then offset 87 (layout without byteCount field, where the body
+     * starts immediately after the 4-u32 mipmap header). Whichever
+     * produces a valid LZ4 decompression to `decompressedSize` bytes
+     * wins.
      *
      * This helper returns a NEW .tex with the body bytes decompressed and
      * the IsLZ4 field reset to 0, so subsequent magic-byte search and the
@@ -4138,63 +4152,68 @@ object MpkgPacker {
         // Read the mipmap-0 header fields needed for decompression.
         // Layout (per parseTexHeader's documented offsets):
         //   71..74: width, 75..78: height, 79..82: IsLZ4, 83..86: DecompressedSize
-        //   87..90: byteCount, 91+: body data
+        //   87..90: byteCount (BOGUS for format=0 .tex files — see v0.7.7 fix note)
+        //   91+: body data (LZ4-compressed if IsLZ4=1)
         val decompressedSize = readU32Le(texData, 83).toInt()
-        val byteCount = readU32Le(texData, 87).toInt()
-        if (decompressedSize <= 0 || byteCount <= 0 || 91 + byteCount > texData.size) {
-            WepWawetLogger.proxyWarn("MpkgPacker.decompressTexBodyIfLz4: invalid mipmap-0 fields",
+        if (decompressedSize <= 0) {
+            WepWawetLogger.proxyWarn("MpkgPacker.decompressTexBodyIfLz4: invalid decompressedSize",
                 "name" to name,
                 "decompressed_size" to decompressedSize,
-                "byte_count" to byteCount,
                 "tex_size" to texData.size)
             return null
         }
-        val bodyBytes = texData.copyOfRange(91, 91 + byteCount)
-        val decompressed = try {
-            val lz4Factory = net.jpountz.lz4.LZ4Factory.safeInstance()
-            lz4Factory.safeDecompressor().decompress(bodyBytes, decompressedSize)
-        } catch (e: Exception) {
-            WepWawetLogger.proxyWarn("MpkgPacker.decompressTexBodyIfLz4: LZ4 decompression failed",
+
+        // v0.7.7: Don't use byteCount at offset 87 — it's bogus for format=0
+        // .tex files. Instead, try decompressing from offset 91 and offset 87
+        // using the ENTIRE remaining .tex as the compressed body. The LZ4 safe
+        // decompressor stops when it's produced `decompressedSize` bytes.
+        val lz4Factory = net.jpountz.lz4.LZ4Factory.safeInstance()
+        val decompressor = lz4Factory.safeDecompressor()
+
+        // Try offset 91 first (standard layout: 87-byte header + 4-byte byteCount + body).
+        // Then try offset 87 (layout without byteCount field: 87-byte header + body).
+        val offsetsToTry = listOf(91, 87)
+        for (bodyStart in offsetsToTry) {
+            if (bodyStart >= texData.size) continue
+            val bodyBytes = texData.copyOfRange(bodyStart, texData.size)
+            val decompressed = try {
+                decompressor.decompress(bodyBytes, decompressedSize)
+            } catch (e: Exception) {
+                // Try next offset
+                continue
+            }
+            if (decompressed.size != decompressedSize) {
+                // Size mismatch — try next offset
+                continue
+            }
+            // SUCCESS! Build a new .tex with the same header (0..78 inclusive)
+            // but with IsLZ4=0, DecompressedSize=decompressedSize, byteCount=decompressedSize,
+            // and the decompressed body starting at offset 91.
+            val out = java.io.ByteArrayOutputStream()
+            // Copy header bytes 0..78 (79 bytes: TEXV + TEXI + TEXI fields + TEXB + TEXB fields + mipmap_count + mipmap w/h)
+            out.write(texData, 0, 79)
+            writeLeIntToStream(out, 0)  // IsLZ4 = 0 (uncompressed now)
+            writeLeIntToStream(out, decompressedSize)  // DecompressedSize (unchanged)
+            writeLeIntToStream(out, decompressedSize)  // byteCount = decompressedSize
+            out.write(decompressed)
+            val result = out.toByteArray()
+            WepWawetLogger.proxy("MpkgPacker.decompressTexBodyIfLz4: decompressed body",
                 "name" to name,
-                "exception" to e.javaClass.name,
-                "compressed_size" to bodyBytes.size,
-                "expected_decompressed_size" to decompressedSize)
-            return null
-        }
-        if (decompressed.size != decompressedSize) {
-            WepWawetLogger.proxyWarn("MpkgPacker.decompressTexBodyIfLz4: decompressed size mismatch",
-                "name" to name,
-                "actual" to decompressed.size,
-                "expected" to decompressedSize)
-            return null
+                "body_start_offset" to bodyStart,
+                "compressed_body_size" to bodyBytes.size,
+                "decompressed_body_size" to decompressedSize,
+                "new_tex_size" to result.size,
+                "original_tex_size" to texData.size)
+            return result
         }
 
-        // Build a new .tex with the same header (0..90 inclusive) but with
-        // IsLZ4=0 and the decompressed body. byteCount field is set to the
-        // decompressed size. The TEXI format field is preserved (caller
-        // will decide whether to treat this as PNG-containing or raw
-        // RGBA8888 based on magic-byte search).
-        //
-        // Header layout (offsets that we need to patch):
-        //   79..82: IsLZ4 → 0
-        //   83..86: DecompressedSize → unchanged (== new byteCount)
-        //   87..90: byteCount → decompressedSize
-        //   91+: body → decompressed bytes
-        val out = java.io.ByteArrayOutputStream()
-        // Copy header bytes 0..90 (91 bytes total) but patch offsets 79, 87.
-        out.write(texData, 0, 79)
-        writeLeIntToStream(out, 0)  // IsLZ4 = 0 (uncompressed now)
-        writeLeIntToStream(out, decompressedSize)  // DecompressedSize (unchanged but write explicitly)
-        writeLeIntToStream(out, decompressedSize)  // byteCount = decompressedSize
-        out.write(decompressed)
-        val result = out.toByteArray()
-        WepWawetLogger.proxy("MpkgPacker.decompressTexBodyIfLz4: decompressed body",
+        // Both offsets failed — return null (caller falls back to passthrough).
+        WepWawetLogger.proxyWarn("MpkgPacker.decompressTexBodyIfLz4: LZ4 decompression failed for both offsets",
             "name" to name,
-            "compressed_body_size" to byteCount,
-            "decompressed_body_size" to decompressedSize,
-            "new_tex_size" to result.size,
-            "original_tex_size" to texData.size)
-        return result
+            "decompressed_size" to decompressedSize,
+            "tex_size" to texData.size,
+            "tried_offsets" to offsetsToTry.joinToString(","))
+        return null
     }
 
     private fun fixShadersForMobile(entries: MutableList<Pair<String, ByteArray>>) {
@@ -4292,145 +4311,88 @@ object MpkgPacker {
             // =========================================================================
             // PHASE 0.5: HLSL→GLSL syntax conversion (unconditional regex pass).
             // =========================================================================
-            // v0.7.6-alpha (parity FIX 1): UNCONDITIONAL lerp→mix + saturate→clamp.
-            // Previously this block was gated on `!ShaderTranscoder.isAvailable()
-            // || contains(cbuffer) || contains(SamplerState) || contains(Texture2D)`,
-            // meaning that when ShaderTranscoder's native lib failed to load
-            // (UnsatisfiedLinkError) — which is the COMMON case in the field —
-            // AND the shader didn't contain HLSL-specific syntax like cbuffer,
-            // PHASE 0.5 silently did NOTHING. The result: shaders that used
-            // `lerp(a, b, t)` (HLSL function call, not a #define macro) kept
-            // their `lerp()` call and failed to compile on GLSL ES 3.00 with
-            // "no matching overloaded function found for lerp". This was the
-            // ROOT CAUSE of the Simple_Audio_Bars shader failure (workshop
-            // id 3655958892, 4 lerp() calls at lines 269, 271, 275, 317).
+            // v0.7.7-alpha (CRITICAL REGRESSION FIX): The v0.7.6 unconditional
+            // pass BROKE every .vert shader by running the mul() conversion
+            // unconditionally. The mul() regex `\bmul\s*\(([^,]+),\s*([^)]+)\)`
+            // stops at the FIRST comma inside nested function calls like
+            // `mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix)` —
+            // it matched `mul(vec4(a_Position, 1.0)` (stopping at the comma
+            // inside vec4), replaced with `(vec4(a_Position * 1.0)`, and left
+            // the rest `, g_ModelViewProjectionMatrix)` as-is. The result was
+            // the broken comma-operator form
+            // `(vec4(a_Position * 1.0), g_ModelViewProjectionMatrix)` which
+            // evaluates to the mat4 (last element of comma operator), causing
+            // "cannot convert from '4X4 matrix of float' to 'Position
+            // 4-component vector of float'" — ALL .vert shaders failed, the
+            // scene couldn't render ANY geometry, hence "absolutely no
+            // movement".
             //
-            // The new behavior: run the lerp→mix conversion on EVERY .frag/.vert
-            // unconditionally. WE semantics: lerp(a,b,t) ≡ mix(a,b,t), identical
-            // arg order, so a TEXTUAL swap is safe — we don't need to re-parse
-            // the args (the old `([^,]+),\s*([^,]+),\s*([^)]+)` regex was BUGGY:
-            // it failed on nested parens like `saturate(lerp(...))` because
-            // `[^)]+` for the third arg stopped at the inner `)`, producing
-            // `mix(arg1, arg2, smoothstep(...,frac(frequency))` with unbalanced
-            // parens. The new simple `lerp(` → `mix(` textual swap leaves the
-            // args untouched, so any nested parens are preserved).
+            // ROOT CAUSE: The WE Android preprocessor ALREADY provides
+            //   #define mul(x, y) ((y) * (x))
+            //   #define frac fract
+            //   #define saturate(x) clamp(x, 0.0, 1.0)
+            //   #define ddx dFdx
+            //   #define ddy(x) dFdy(-(x))
+            // (visible at lines 2-16 of every compiled shader in the applog).
+            // These #define macros are PREPENDED to the shader source before
+            // the GLSL compiler runs. The preprocessor's macro expander
+            // correctly handles nested parens (it has a real parser, not a
+            // regex), so `mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix)`
+            // is correctly expanded to
+            // `((g_ModelViewProjectionMatrix) * (vec4(a_Position, 1.0)))` —
+            // which is the correct column-major matrix-vector multiplication
+            // (HLSL `mul(vec, mat)` ≡ GLSL `mat * vec`, confirmed via
+            // websearch: HLSL treats the first arg as a row vector, GLSL
+            // uses column-vector convention; the preprocessor's arg reversal
+            // `((y) * (x))` correctly translates between the two).
             //
-            // saturate(x) → clamp(x, 0.0, 1.0) is run ONLY when the shader
-            // doesn't already define `saturate` as a macro (i.e., no
-            // `#define saturate` line exists). WE Android's preprocessor
-            // already provides `#define saturate(x) clamp(x, 0.0, 1.0)` as
-            // part of its HLSL compat layer, so most shaders already have
-            // `saturate()` handled by the preprocessor. Converting `saturate(`
-            // calls in those shaders would DOUBLE-convert (the existing
-            // `#define saturate` line would be re-mangled by the regex,
-            // producing `#define clamp(x, 0.0, 1.0)(x) clamp(x, 0.0, 1.0)` —
-            // invalid #define).
+            // The packer should NOT touch mul(), frac(), saturate(), ddx(),
+            // or ddy() — the preprocessor handles all of them. The packer's
+            // regex-based conversions were:
+            //   1. REDUNDANT (preprocessor would expand them anyway)
+            //   2. BUGGY (regex can't handle nested parens in mul/saturate)
+            //   3. WRONG for ddy (preprocessor adds `-(x)` negation; packer
+            //      doesn't)
             //
-            // cbuffer/SamplerState/Texture2D/mul/frac/ddx/ddy conversions
-            // remain gated on their respective `contains()` checks (these
-            // are pure HLSL syntax that only appears in HLSL-source files).
+            // The ONLY conversion the packer MUST do is lerp→mix, because
+            // there is NO `#define lerp` in the WE Android preprocessor's
+            // defines. `lerp` is a pure HLSL function that the preprocessor
+            // does NOT expand — the packer must convert it to GLSL `mix`.
+            //
+            // cbuffer/SamplerState/Texture2D are HLSL declarations (not
+            // function calls), not in the preprocessor's #defines. The
+            // packer must convert them to GLSL equivalents. These are gated
+            // on `contains()` since only HLSL-source files have them.
+            //
+            // v0.7.6 FIX 1 was correct in making lerp→mix unconditional, but
+            // WRONG in also making mul/saturate/frac/ddx/ddy unconditional.
+            // v0.7.7 reverts mul/saturate/frac/ddx/ddy to NOT being converted
+            // at all (the preprocessor handles them), and keeps ONLY lerp→mix
+            // unconditional.
             val beforeHlsl = modified.length
 
-            // --- cbuffer → uniform (HLSL cbuffer declaration) ---
+            // --- cbuffer → uniform (HLSL cbuffer declaration, NOT in preprocessor #defines) ---
             if (modified.contains("cbuffer ")) {
                 modified = modified.replace(
                     Regex("""cbuffer\s+(\w+)\s*\{([^}]+)\}""", RegexOption.DOT_MATCHES_ALL)
                 ) { mr ->
                     "uniform ${mr.groupValues[1]} {\n${mr.groupValues[2]}\n};"
                 }
+                fixesApplied.add("cbuffer→uniform")
             }
-            // --- SamplerState → sampler2D (HLSL sampler declaration) ---
+            // --- SamplerState → sampler2D (HLSL sampler declaration, NOT in preprocessor #defines) ---
             if (modified.contains("SamplerState ")) {
                 modified = modified.replace(Regex("""\bSamplerState\s+(\w+)\s*;"""), "sampler2D $1;")
+                fixesApplied.add("SamplerState→sampler2D")
             }
-            // --- Texture2D → sampler2D (HLSL texture declaration) ---
+            // --- Texture2D → sampler2D (HLSL texture declaration, NOT in preprocessor #defines) ---
             if (modified.contains("Texture2D ")) {
                 modified = modified.replace(Regex("""\bTexture2D\s+(\w+)\s*;"""), "sampler2D $1;")
+                fixesApplied.add("Texture2D→sampler2D")
             }
-            // --- mul(a, b) → (a * b) (HLSL matrix multiply) ---
-            // NOTE: WE Android's preprocessor already provides
-            //   #define mul(x, y) ((y) * (x))
-            // so this conversion is only needed when the shader uses `mul()`
-            // without the preprocessor's #define (i.e., raw HLSL files that
-            // bypass the preprocessor). For .frag/.vert files that go through
-            // the preprocessor, this is a no-op (mul( is preserved and the
-            // preprocessor expands it at compile time).
-            // We keep this conversion gated on `contains("mul(")` for safety —
-            // if the shader doesn't use mul() at all, skip the regex.
-            if (modified.contains("mul(")) {
-                // Only convert `mul(` calls NOT already inside a #define macro.
-                // The WE Android preprocessor's `#define mul(x, y) ((y) * (x))`
-                // line would be corrupted if we blindly rewrote `mul(` inside
-                // the #define. To avoid this, we skip lines starting with
-                // `#define mul` (after trim).
-                val mulRegex = Regex("""\bmul\s*\(([^,]+),\s*([^)]+)\)""")
-                modified = modified.replace(mulRegex) { mr ->
-                    // Find the start of the line containing this match.
-                    val matchStart = mr.range.first
-                    val lineStart = modified.lastIndexOf('\n', matchStart - 1).coerceAtLeast(0)
-                    val linePrefix = modified.substring(lineStart, matchStart)
-                    val trimmedPrefix = linePrefix.trimStart()
-                    if (trimmedPrefix.startsWith("#")) {
-                        // Inside a preprocessor directive — skip (don't break #define mul)
-                        return@replace mr.value
-                    }
-                    "(${mr.groupValues[1]} * ${mr.groupValues[2]})"
-                }
-            }
-            // --- saturate(x) → clamp(x, 0.0, 1.0) (HLSL saturate) ---
-            // v0.7.6 (FIX 1): only convert if the shader does NOT already
-            // define `saturate` as a macro. If `#define saturate` exists,
-            // the WE Android preprocessor will expand `saturate(x)` to
-            // `clamp(x, 0.0, 1.0)` at compile time — converting it here
-            // would double-convert and break the #define.
-            val hasSaturateDefine = modified.contains("#define saturate")
-            val hasSaturateCall = modified.contains("saturate(") && !hasSaturateDefine
-            if (hasSaturateCall) {
-                // Use a paren-balanced scan: find `saturate(` and walk to the
-                // matching close paren, then replace with `clamp(arg, 0.0, 1.0)`.
-                // The old `[^)]+` regex broke on nested parens (e.g.,
-                // `saturate(lerp(0.0, 1.0, x))` captured `lerp(0.0, 1.0, x`
-                // — missing the inner `)`, producing
-                // `clamp(lerp(0.0, 1.0, x, 0.0, 1.0)` with broken paren balance).
-                val sb = StringBuilder()
-                var i = 0
-                var convertedCount = 0
-                while (i < modified.length) {
-                    // Check for `saturate(` at this position (case-sensitive,
-                    // word-boundary on the left).
-                    if (modified.regionMatches(i, "saturate(", 0, 9, ignoreCase = false) &&
-                        (i == 0 || !modified[i - 1].isLetterOrDigit() && modified[i - 1] != '_')) {
-                        // Find the matching close paren.
-                        var depth = 1
-                        var j = i + 9
-                        while (j < modified.length && depth > 0) {
-                            when (modified[j]) {
-                                '(' -> depth++
-                                ')' -> depth--
-                            }
-                            if (depth > 0) j++
-                        }
-                        if (depth == 0) {
-                            // `modified[i+9 .. j-1]` is the inner expression.
-                            val inner = modified.substring(i + 9, j)
-                            sb.append("clamp(")
-                            sb.append(inner)
-                            sb.append(", 0.0, 1.0)")
-                            i = j + 1
-                            convertedCount++
-                            continue
-                        }
-                    }
-                    sb.append(modified[i])
-                    i++
-                }
-                if (convertedCount > 0) {
-                    modified = sb.toString()
-                    fixesApplied.add("saturate→clamp ($convertedCount calls, paren-balanced)")
-                }
-            }
-            // --- lerp(a, b, t) → mix(a, b, t) (HLSL lerp ≡ GLSL mix) ---
-            // v0.7.6 (FIX 1): UNCONDITIONAL textual swap on ALL .frag/.vert.
+
+            // --- lerp(a, b, t) → mix(a, b, t) (HLSL lerp ≡ GLSL mix, NO preprocessor #define) ---
+            // v0.7.6 (FIX 1) / v0.7.7 (kept): UNCONDITIONAL textual swap on ALL .frag/.vert.
             // lerp(a,b,t) ≡ mix(a,b,t) — identical arg order, identical
             // semantics, so a textual `lerp(` → `mix(` swap is safe regardless
             // of the arg structure. The old `([^,]+),\s*([^,]+),\s*([^)]+)`
@@ -4457,38 +4419,32 @@ object MpkgPacker {
             // Word boundary on the left: `blerp(` (e.g., as part of a longer
             // identifier like `MyBlerpFunc(`) is NOT matched because the
             // preceding char is a letter (not a word boundary).
+            //
+            // IMPORTANT: mul(), frac(), saturate(), ddx(), ddy() are NOT
+            // converted here — the WE Android preprocessor provides #define
+            // macros for all of them (see lines 2-16 of every compiled
+            // shader). Converting them in the packer was REDUNDANT and BUGGY
+            // (the mul regex broke on nested function calls, producing
+            // `(vec4(a_Position * 1.0), g_ModelViewProjectionMatrix)` — the
+            // broken comma-operator form that made ALL .vert shaders fail
+            // in v0.7.6). The preprocessor's macro expander correctly handles
+            // nested parens (it has a real parser).
             val lerpCount = Regex("""\blerp\(""").findAll(modified).count()
             if (lerpCount > 0) {
                 modified = modified.replace(Regex("""\blerp\("""), "mix(")
                 fixesApplied.add("lerp→mix ($lerpCount calls, unconditional textual swap)")
             }
-            // --- frac(x) → fract(x) (HLSL frac ≡ GLSL fract) ---
-            // Gated on contains("frac(") to skip if not used. Word-boundary
-            // ensures we don't match `fract(` (which contains `frac` as a
-            // prefix but is followed by `t`, not `(`).
-            if (modified.contains("frac(") && !modified.contains("#define frac")) {
-                // Only swap if not already `fract(`. The regex `\bfrac\(`
-                // matches `frac(` (word boundary before `frac`), so `fract(`
-                // (which is `frac` followed by `t`) is NOT matched because
-                // `fract` has the word boundary AFTER the `t`, not after `c`.
-                // Actually, `\bfrac\(` matches `frac(` because `\b` is between
-                // non-word and word chars. `fract(` has `frac` followed by `t`,
-                // so the `(` is preceded by `t` (a word char), not by `c`.
-                // Wait — `\bfrac\(` requires a word boundary BEFORE `frac`,
-                // then `frac`, then `(`. `fract(` has `frac` followed by `t`,
-                // not `(` — so `\bfrac\(` does NOT match `fract(`. Good.
-                modified = modified.replace(Regex("""\bfrac\("""), "fract(")
-            }
-            // --- ddx(x) → dFdx(x), ddy(x) → dFdy(x) ---
-            if (modified.contains("ddx(")) {
-                modified = modified.replace(Regex("""\bddx\("""), "dFdx(")
-            }
-            if (modified.contains("ddy(")) {
-                modified = modified.replace(Regex("""\bddy\("""), "dFdy(")
-            }
-            if (modified.length != beforeHlsl) {
-                fixesApplied.add("HLSL→GLSL syntax conversion (unconditional pass)")
-            }
+
+            // NOTE: mul(), frac(), saturate(), ddx(), ddy() are intentionally
+            // NOT converted. The WE Android preprocessor handles them via:
+            //   #define mul(x, y) ((y) * (x))
+            //   #define frac fract
+            //   #define saturate(x) clamp(x, 0.0, 1.0)
+            //   #define ddx dFdx
+            //   #define ddy(x) dFdy(-(x))
+            // The packer's regex-based conversions were buggy (mul broke on
+            // nested parens) and redundant (preprocessor handles them).
+            // See v0.7.7-alpha regression fix notes above for details.
 
             // =========================================================================
             // PHASE 1: Comprehensive GLSL ES 3.00 compatibility fixes.

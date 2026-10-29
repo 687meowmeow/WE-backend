@@ -6,6 +6,152 @@ about regressions and fixes.
 
 ---
 
+Task ID: v0.7.7-alpha
+Agent: main (CRITICAL regression fix — v0.7.6's unconditional mul()
+  conversion broke ALL .vert shaders → "absolutely no movement")
+
+Task: User reported that after v0.7.6-alpha, the wallpaper had
+  ABSOLUTELY NO MOVEMENT (worse than the v0.7.5 "snapping back"
+  symptom). The user provided new applog.txt and wepwawet-logs
+  showing 7 .vert shaders failing with:
+    ERROR: 'constructor' : not enough data provided for construction
+    ERROR: 'assign' : cannot convert from '4X4 matrix of float' to
+          'Position 4-component vector of float'
+  All failing at the same line:
+    gl_Position = (vec4(a_Position * 1.0), g_ModelViewProjectionMatrix);
+
+Root cause (verified line-by-line from applog.txt + wepwawet-logs):
+  v0.7.6-alpha's PHASE 0.5 unconditional pass included the mul()
+  conversion, which was previously gated on `!ShaderTranscoder.isAvailable()
+  || contains(cbuffer) || ...`. In v0.7.5, the gate was FALSE for most
+  shaders (ShaderTranscoder loaded, no cbuffer), so the mul() conversion
+  NEVER ran — the WE Android preprocessor's `#define mul(x, y) ((y) * (x))`
+  handled mul() at compile time. In v0.7.6, my unconditional pass removed
+  the gate, so the mul() regex ran on EVERY shader that uses mul().
+
+  The mul() regex `\bmul\s*\(([^,]+),\s*([^)]+)\)` is BUGGY on nested
+  function calls. For `mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix)`:
+    - `([^,]+)` matches `vec4(a_Position` (stops at the FIRST comma,
+      which is INSIDE the vec4() call)
+    - `,` matches the comma inside vec4
+    - `\s*` matches the space
+    - `([^)]+)` matches `1.0` (stops at the FIRST close paren, which
+      closes vec4)
+    - `)` matches the close paren of vec4
+  So the regex matched `mul(vec4(a_Position, 1.0)` (only PART of the mul
+  call), and replaced with `(vec4(a_Position * 1.0)`. The rest of the
+  original `, g_ModelViewProjectionMatrix)` was left as-is. The result:
+    `(vec4(a_Position * 1.0), g_ModelViewProjectionMatrix)`
+  This is the COMMA OPERATOR form (vec4, mat4) which evaluates to the
+  mat4 (last element), hence the error "cannot convert from '4X4 matrix
+  of float' to 'Position 4-component vector of float'".
+
+  This affected ALL .vert shaders that use the standard vertex transform
+  pattern `mul(vec4(position, 1.0), g_ModelViewProjectionMatrix)` —
+  which is EVERY .vert shader in WE. Hence "absolutely no movement":
+  the scene couldn't render ANY geometry because all vertex shaders
+  failed to compile.
+
+Fix implemented (v0.7.7-alpha):
+  1. REMOVED mul(), frac(), saturate(), ddx(), ddy() conversions from
+     PHASE 0.5 entirely. The WE Android preprocessor ALREADY provides
+     #define macros for ALL of them (visible at lines 2-16 of every
+     compiled shader in the applog):
+       #define mul(x, y) ((y) * (x))
+       #define frac fract
+       #define saturate(x) clamp(x, 0.0, 1.0)
+       #define ddx dFdx
+       #define ddy(x) dFdy(-(x))
+     The preprocessor's macro expander correctly handles nested parens
+     (it has a real parser, not a regex). The packer's regex conversions
+     were:
+       a. REDUNDANT (preprocessor would expand them anyway)
+       b. BUGGY (mul broke on nested function calls — the v0.7.7 regression)
+       c. WRONG for ddy (preprocessor adds -(x) negation; packer didn't)
+     Verified via websearch: HLSL `mul(vector, matrix)` treats the vector
+     as a row vector; GLSL `matrix * vector` uses column-vector convention.
+     The preprocessor's arg reversal `((y) * (x))` correctly translates
+     between the two.
+
+  2. The ONLY conversion kept in PHASE 0.5 is lerp→mix (unconditional).
+     There is NO `#define lerp` in the WE Android preprocessor's defines
+     (verified from the applog — lerp is NOT in the list). So the packer
+     MUST convert lerp() to mix() — the preprocessor won't do it.
+
+  3. cbuffer/SamplerState/Texture2D conversions are kept (gated on
+     contains()) — these are HLSL declarations (not function calls),
+     not in the preprocessor's #defines. Only HLSL-source files have them.
+
+  4. Fixed decompressTexBodyIfLz4: The v0.7.6 implementation read byteCount
+     from offset 87 and used it to slice the body. But for format=0 .tex
+     files, the byteCount field at offset 87 is BOGUS (e.g.,
+     1208090609 for a 355849-byte file). The v0.7.7 fix: don't use byteCount
+     at all. Instead, try LZ4-decompressing from offset 91 and offset 87
+     using the ENTIRE remaining .tex as the compressed body, with
+     decompressedSize from offset 83 as the target. The LZ4 safe
+     decompressor's `decompress(src, destLen)` stops when it's produced
+     destLen bytes, so extra bytes at the end (e.g., TEXS animation
+     sections) are safely ignored. This handles both .tex layouts
+     (with and without a byteCount field).
+
+  5. 7 new regression tests added (ShaderFixesTest.kt) verifying that
+     mul/frac/saturate/ddx/ddy are NOT converted, and lerp IS converted
+     to mix. The critical test: `v0_7_7 - mul calls are NOT converted
+     by the packer` — uses the EXACT pattern from the failing .vert
+     shaders and asserts that mul() is preserved and the broken
+     comma-operator form does NOT appear.
+
+  6. Version bumped to 0.7.7-alpha (versionCode 99).
+
+Websearch verification (3 queries):
+  - HLSL mul(vector, matrix) vs GLSL matrix * vector: confirmed that
+    HLSL treats the first arg as a row vector, GLSL uses column-vector
+    convention. The preprocessor's `#define mul(x, y) ((y) * (x))`
+    correctly reverses args for the column-major GLSL convention.
+    (Source: StackOverflow on HLSL mul, mecheye.net matrix multiplication
+    guide, XShaderCompiler GitHub issue on HLSL↔GLSL mapping).
+  - lz4-java safe decompressor: confirmed that
+    `LZ4SafeDecompressor.decompress(byte[] src, int destLen)` reads
+    from src until it's produced destLen bytes. Extra bytes at the end
+    of src are safely ignored. (Source: lz4-java GitHub README).
+
+Stage Summary:
+  - The v0.7.6 regression (mul breaking ALL .vert shaders) is FIXED.
+  - The v0.7.6 FIX 1 (lerp→mix unconditional) is PRESERVED.
+  - The v0.7.6 FIX 2 (type-aware int→float) is PRESERVED.
+  - The v0.7.6 FIX 3 (.tex LZ4 decompression) is IMPROVED (no longer
+    uses bogus byteCount).
+  - The v0.7.6 FIX 4 (zcompat substitution) is PRESERVED.
+  - All 26 v0.7.6 unit tests still pass (FIX 2 tests + FIX 4 tests +
+    lerp→mix tests). 7 new v0.7.7 regression tests added (mul/frac/
+    saturate/ddx/ddy non-conversion + lerp still converted).
+  - Build verified: compileDebugKotlin + testDebugUnitTest PASSED.
+
+Reminders for future agents:
+48. The WE Android preprocessor provides #define macros for mul, frac,
+    saturate, ddx, ddy, atan2, fmod, texSample2D, texSample2DLod,
+    texSample3D, attribute, varying, and all the CAST* helpers. These
+    are PREPENDED to the shader source before the GLSL compiler runs
+    (visible at lines 2-25 of every compiled shader in the applog). The
+    packer should NEVER convert these — the preprocessor handles them
+    with a real parser. The packer should ONLY convert functions that
+    are NOT in the preprocessor's #define list (currently just lerp).
+49. The mul() regex `\bmul\s*\(([^,]+),\s*([^)]+)\)` is INHERENTLY BUGGY
+    because `[^,]+` and `[^)]+` stop at the FIRST comma/paren, which can
+    be inside nested function calls. A correct mul() conversion would
+    require a paren-balanced scan (like the saturate→clamp scan in
+    v0.7.6). But since the preprocessor handles mul(), the packer should
+    NOT attempt the conversion at all. DO NOT re-add the mul() conversion
+    to PHASE 0.5 — it WILL break nested function calls.
+50. The .tex byteCount field at offset 87 is BOGUS for format=0 .tex
+    files. The decompressTexBodyIfLz4 helper now tries both offset 91 and
+    offset 87 for the body start, using the entire remaining .tex as the
+    compressed body. The LZ4 safe decompressor stops at the right place.
+    DO NOT re-add the byteCount-based slicing — it WILL fail for format=0
+    .tex files.
+
+---
+
 Task ID: v0.7.6-alpha
 Agent: main (scene shader "snapping back to original position" fix; 4 FIXes
   implemented + unit tests + version bump; pushed to dev branch)

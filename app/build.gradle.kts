@@ -311,8 +311,43 @@ android {
         //     at app/src/main/assets/zcompat/scene/shaders/<id>/ (verified
         //     byte-identical to WE 2.8.42 install via the
         //     github.com/yakisoba0728/Waple mirror).
-        versionCode = 98
-        versionName = "0.7.6-alpha"
+        // v0.7.7-alpha: CRITICAL REGRESSION FIX — v0.7.6's unconditional mul()
+        //   conversion broke ALL .vert shaders. The mul() regex
+        //   `\bmul\s*\(([^,]+),\s*([^)]+)\)` stops at the FIRST comma inside
+        //   nested function calls like `mul(vec4(a_Position, 1.0),
+        //   g_ModelViewProjectionMatrix)`, producing the broken comma-operator
+        //   form `(vec4(a_Position * 1.0), g_ModelViewProjectionMatrix)` which
+        //   evaluates to the mat4 (last element of comma operator), causing
+        //   "cannot convert from '4X4 matrix of float' to 'Position 4-component
+        //   vector of float'" — ALL .vert shaders failed, the scene couldn't
+        //   render ANY geometry, hence "absolutely no movement".
+        //   FIX: REMOVED mul/frac/saturate/ddx/ddy conversions from PHASE 0.5.
+        //   The WE Android preprocessor ALREADY provides #define macros for
+        //   all of them (lines 2-16 of every compiled shader):
+        //     #define mul(x, y) ((y) * (x))
+        //     #define frac fract
+        //     #define saturate(x) clamp(x, 0.0, 1.0)
+        //     #define ddx dFdx
+        //     #define ddy(x) dFdy(-(x))
+        //   The preprocessor's macro expander correctly handles nested parens
+        //   (it has a real parser, not a regex). The packer's regex conversions
+        //   were REDUNDANT (preprocessor would expand them anyway) and BUGGY
+        //   (mul broke on nested parens) and WRONG for ddy (preprocessor adds
+        //   -(x) negation; packer didn't).
+        //   The ONLY conversion kept is lerp→mix (no #define lerp in the
+        //   preprocessor's defines — lerp is a pure HLSL function the
+        //   preprocessor does NOT expand; the packer must convert it to mix).
+        //   Also fixed: decompressTexBodyIfLz4 no longer uses the BOGUS byteCount
+        //   field at offset 87 (which had values like 1208090609 for a 355849-byte
+        //   file). Instead, it tries LZ4-decompressing from offset 91 and offset 87
+        //   using the entire remaining .tex as the compressed body, with the
+        //   decompressedSize from offset 83 as the target. The LZ4 safe decompressor
+        //   stops when it's produced the target size, so extra bytes at the end are
+        //   safely ignored.
+        //   7 new regression tests added for the mul/frac/saturate/ddx/ddy
+        //   non-conversion (all passing).
+        versionCode = 99
+        versionName = "0.7.7-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {
             abiFilters += "arm64-v8a"

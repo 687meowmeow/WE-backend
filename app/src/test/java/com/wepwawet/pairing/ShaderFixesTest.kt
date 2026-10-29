@@ -116,102 +116,126 @@ class ShaderFixesTest {
     }
 
     // =========================================================================
-    // FIX 1 — saturate→clamp (paren-balanced, only when no #define saturate)
+    // v0.7.7-alpha REGRESSION TEST — mul() must NOT be converted by the packer
     // =========================================================================
+    //
+    // The WE Android preprocessor provides `#define mul(x, y) ((y) * (x))`
+    // (line 2 of every compiled shader). The preprocessor's macro expander
+    // correctly handles nested parens, so `mul(vec4(a_Position, 1.0),
+    // g_ModelViewProjectionMatrix)` is correctly expanded to
+    // `((g_ModelViewProjectionMatrix) * (vec4(a_Position, 1.0)))`.
+    //
+    // The v0.7.6 unconditional pass ran a buggy mul() regex that broke
+    // nested function calls, producing
+    // `(vec4(a_Position * 1.0), g_ModelViewProjectionMatrix)` (comma operator
+    // form) which evaluates to the mat4 (last element), causing
+    // "cannot convert from '4X4 matrix of float' to 'Position 4-component
+    // vector of float'" — ALL .vert shaders failed, the scene couldn't
+    // render ANY geometry.
+    //
+    // v0.7.7 REMOVES the mul() conversion entirely. The preprocessor
+    // handles it. These tests verify that mul() is NOT touched.
 
-    /** Mirrors the saturate→clamp logic in MpkgPacker.fixShadersForMobile PHASE 0.5. */
-    private fun applySaturateToClamp(shader: String): String {
-        val hasSaturateDefine = shader.contains("#define saturate")
-        if (shader.contains("saturate(") && !hasSaturateDefine) {
-            val sb = StringBuilder()
-            var i = 0
-            while (i < shader.length) {
-                if (shader.regionMatches(i, "saturate(", 0, 9, ignoreCase = false) &&
-                    (i == 0 || (!shader[i - 1].isLetterOrDigit() && shader[i - 1] != '_'))) {
-                    var depth = 1
-                    var j = i + 9
-                    while (j < shader.length && depth > 0) {
-                        when (shader[j]) {
-                            '(' -> depth++
-                            ')' -> depth--
-                        }
-                        if (depth > 0) j++
-                    }
-                    if (depth == 0) {
-                        val inner = shader.substring(i + 9, j)
-                        sb.append("clamp(")
-                        sb.append(inner)
-                        sb.append(", 0.0, 1.0)")
-                        i = j + 1
-                        continue
-                    }
-                }
-                sb.append(shader[i])
-                i++
+    /** Mirrors the v0.7.7 PHASE 0.5 — does NOT convert mul/frac/saturate/ddx/ddy. */
+    private fun applyPhase05_v077(shader: String): String {
+        // Only lerp→mix is converted. mul/frac/saturate/ddx/ddy are left alone
+        // (preprocessor handles them via #define).
+        val lerpCount = Regex("""\blerp\(""").findAll(shader).count()
+        return if (lerpCount > 0) shader.replace(Regex("""\blerp\("""), "mix(") else shader
+    }
+
+    @Test
+    fun `v0_7_7 - mul calls are NOT converted by the packer (preprocessor handles them)`() {
+        // The EXACT pattern from the failing .vert shaders in the v0.7.6 regression.
+        // The packer must NOT touch `mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix)`.
+        val input = """
+            uniform mat4 g_ModelViewProjectionMatrix;
+            attribute vec3 a_Position;
+            void main() {
+                gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
             }
-            return sb.toString()
-        }
-        return shader
-    }
-
-    @Test
-    fun `FIX 1 - saturate_to_clamp converts basic saturate call`() {
-        val input = "float x = saturate(y);"
-        val expected = "float x = clamp(y, 0.0, 1.0);"
-        assertEquals(expected, applySaturateToClamp(input))
-    }
-
-    @Test
-    fun `FIX 1 - saturate_to_clamp preserves nested parens`() {
-        // The bug we're fixing: the old `[^)]+` regex stopped at the FIRST `)`,
-        // producing `clamp(lerp(0.0, 1.0, x, 0.0, 1.0)` — broken paren balance.
-        // The new paren-balanced scan finds the MATCHING `)` and preserves the
-        // inner expression intact.
-        val input = "verticalSmoothing *= saturate(lerp(0.0, 1.0, barVolume * 100.0));"
-        val expected = "verticalSmoothing *= clamp(lerp(0.0, 1.0, barVolume * 100.0), 0.0, 1.0);"
-        assertEquals(expected, applySaturateToClamp(input))
-    }
-
-    @Test
-    fun `FIX 1 - saturate_to_clamp does NOT double-convert when define saturate exists`() {
-        // WE Android's preprocessor already provides
-        //   #define saturate(x) clamp(x, 0.0, 1.0)
-        // as part of its HLSL compat layer. If we convert `saturate(x)` calls
-        // in the shader body, the existing #define becomes
-        //   #define clamp(x, 0.0, 1.0)(x) clamp(x, 0.0, 1.0)
-        // which is invalid #define. We skip the conversion when #define saturate
-        // already exists.
-        val input = """
-            #define saturate(x) clamp(x, 0.0, 1.0)
-            float y = saturate(z);
         """.trimIndent()
-        val result = applySaturateToClamp(input)
-        // The #define line and the saturate(z) call should BOTH be untouched.
+        val result = applyPhase05_v077(input)
+        // mul( must be PRESERVED — the WE Android preprocessor's
+        // #define mul(x, y) ((y) * (x)) will expand it at compile time.
+        assertTrue(
+            "mul() must NOT be converted by the packer (preprocessor handles it). " +
+                "v0.7.6 regression: mul() was rewritten to broken comma-operator form.",
+            result.contains("mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix)")
+        )
+        // The broken comma-operator form must NOT appear.
+        assertFalse(
+            "The broken comma-operator form must NOT appear: " +
+                "(vec4(a_Position * 1.0), g_ModelViewProjectionMatrix)",
+            result.contains("(vec4(a_Position * 1.0), g_ModelViewProjectionMatrix)")
+        )
+    }
+
+    @Test
+    fun `v0_7_7 - frac calls are NOT converted by the packer (preprocessor handles them)`() {
+        val input = "float x = frac(y);"
+        val result = applyPhase05_v077(input)
         assertEquals(input, result)
-        assertTrue(result.contains("#define saturate(x) clamp(x, 0.0, 1.0)"))
-        assertTrue(result.contains("float y = saturate(z);"))
+        assertTrue(result.contains("frac(y)"))
+        assertFalse(result.contains("fract(y)"))
     }
 
     @Test
-    fun `FIX 1 - saturate_to_clamp converts when no define exists`() {
-        val input = "float x = saturate(y * 0.5 + 0.3);"
-        val expected = "float x = clamp(y * 0.5 + 0.3, 0.0, 1.0);"
-        assertEquals(expected, applySaturateToClamp(input))
+    fun `v0_7_7 - saturate calls are NOT converted by the packer (preprocessor handles them)`() {
+        val input = "float x = saturate(y * 2.0);"
+        val result = applyPhase05_v077(input)
+        assertEquals(input, result)
+        assertTrue(result.contains("saturate(y * 2.0)"))
     }
 
     @Test
-    fun `FIX 1 - saturate_to_clamp handles multiple saturate calls in one shader`() {
+    fun `v0_7_7 - ddx calls are NOT converted by the packer (preprocessor handles them)`() {
+        val input = "float x = ddx(y);"
+        val result = applyPhase05_v077(input)
+        assertEquals(input, result)
+    }
+
+    @Test
+    fun `v0_7_7 - ddy calls are NOT converted by the packer (preprocessor handles them with negation)`() {
+        // The preprocessor's #define ddy(x) dFdy(-(x)) adds a negation that
+        // the packer's old ddy→dFdy conversion DIDN'T add. So the packer must
+        // NOT touch ddy().
+        val input = "float x = ddy(y);"
+        val result = applyPhase05_v077(input)
+        assertEquals(input, result)
+        assertFalse(result.contains("dFdy(y)"))  // packer must NOT add this (missing negation)
+    }
+
+    @Test
+    fun `v0_7_7 - lerp calls ARE still converted to mix (no preprocessor define for lerp)`() {
+        // lerp→mix is the ONLY conversion kept in v0.7.7 (no #define lerp in preprocessor).
+        val input = "float x = lerp(a, b, t);"
+        val result = applyPhase05_v077(input)
+        assertEquals("float x = mix(a, b, t);", result)
+    }
+
+    @Test
+    fun `v0_7_7 - full waterflow vert shader pattern - mul preserved, lerp converted`() {
+        // The waterflow.vert pattern from the regression:
+        //   gl_Position = mul(vec4(a_Position * 1.0), g_ModelViewProjectionMatrix);
+        // (after int→float converted `1` to `1.0`)
+        // The packer must preserve mul() and NOT break it into comma form.
         val input = """
-            float a = saturate(x);
-            float b = saturate(y);
-            float c = saturate(z * 2.0);
+            #define mul(x, y) ((y) * (x))
+            uniform mat4 g_ModelViewProjectionMatrix;
+            attribute vec3 a_Position;
+            void main() {
+                gl_Position = mul(vec4(a_Position * 1.0), g_ModelViewProjectionMatrix);
+                float v = lerp(0.0, 1.0, 0.5);
+            }
         """.trimIndent()
-        val result = applySaturateToClamp(input)
-        assertEquals(3, Regex("""clamp\(""").findAll(result).count())
-        assertEquals(0, Regex("""saturate\(""").findAll(result).count())
-        assertTrue(result.contains("float a = clamp(x, 0.0, 1.0);"))
-        assertTrue(result.contains("float b = clamp(y, 0.0, 1.0);"))
-        assertTrue(result.contains("float c = clamp(z * 2.0, 0.0, 1.0);"))
+        val result = applyPhase05_v077(input)
+        // mul() preserved (preprocessor will expand via #define)
+        assertTrue(result.contains("mul(vec4(a_Position * 1.0), g_ModelViewProjectionMatrix)"))
+        // lerp converted to mix
+        assertTrue(result.contains("mix(0.0, 1.0, 0.5)"))
+        // #define mul line preserved
+        assertTrue(result.contains("#define mul(x, y) ((y) * (x))"))
     }
 
     // =========================================================================
