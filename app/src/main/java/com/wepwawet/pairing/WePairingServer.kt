@@ -973,7 +973,7 @@ class WePairingServer {
                 "bytes_sent" to bytesSent,
                 "chunks" to chunkNum,
                 "ms" to transferMs)
-            bytesSent
+            return bytesSent
 
         } catch (e: Exception) {
             WepWawetLogger.proxyError("transferWallpaperLocked FAILED",

@@ -3,6 +3,7 @@ package com.wepwawet.pairing
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -46,6 +47,17 @@ class PairingService : Service() {
         const val CHANNEL_ID = "wepwawet_pairing"
         const val NOTIFICATION_ID = 1001
         const val EXTRA_PIN = "pin"
+
+        /**
+         * Notification action: the user tapped "Stop" on the foreground
+         * notification. Handled in [onStartCommand] — we tear down the
+         * servers and stop the service. The intent is delivered to the
+         * already-running service via `PendingIntent.getService`, so it
+         * doesn't count as a fresh background service start (the user's
+         * tap on the notification is treated as a user-initiated event
+         * by the platform, not a background start).
+         */
+        const val ACTION_KILL = "com.wepwawet.pairing.ACTION_KILL"
 
         // ====== PIN persistence (v0.7.0) ======
         // The user can now set a custom PIN in Settings. It's persisted in
@@ -266,8 +278,36 @@ class PairingService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        WepWawetLogger.proxy("PairingService.onStartCommand", "flags" to flags)
+        WepWawetLogger.proxy("PairingService.onStartCommand",
+            "flags" to flags,
+            "action" to (intent?.action ?: "null"))
         appContext = applicationContext
+
+        // v0.7.5: Handle the "Stop" notification action — the user tapped
+        // the Stop button on the foreground notification. Tear down the
+        // servers, remove the notification, and stop the service. We
+        // return START_NOT_STICKY so the system doesn't auto-restart the
+        // service after we've been explicitly killed (BootReceiver /
+        // MainActivity will start it again on next boot / app open, which
+        // is the right UX — explicit kill should stick until the user
+        // re-engages with the app).
+        //
+        // Note: this Intent is delivered via PendingIntent.getService to
+        // the already-running service instance (the notification exists
+        // because the service is in the foreground state). The user's
+        // tap on the notification action button is treated as a
+        // user-initiated event, so it is NOT subject to the Android 12+
+        // background-service-start restriction.
+        if (intent?.action == ACTION_KILL) {
+            WepWawetLogger.proxy("PairingService: ACTION_KILL — explicit stop from notification",
+                "had_server" to (pairingServerLocal != null),
+                "had_broadcaster" to (discoveryBroadcaster != null),
+                "was_paired" to (pairedDeviceName != null))
+            stopServers()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         // Get PIN from intent (default "1234" matches the auto-start PIN
         // used by MainActivity.onCreate and the PairingScreen default).
@@ -496,11 +536,40 @@ class PairingService : Service() {
     }
 
     private fun createNotification(text: String): Notification {
+        // v0.7.5: "Stop" action — lets the user kill the proxy from the
+        // notification shade without having to open the app. Tapping the
+        // action fires a PendingIntent that re-enters onStartCommand
+        // with [ACTION_KILL], which tears down the servers and stops
+        // the service.
+        //
+        // PendingIntent flags:
+        //   FLAG_UPDATE_CURRENT — if a prior PendingIntent exists, update
+        //     its extras rather than creating a new one (avoids stale
+        //     intent caching).
+        //   FLAG_IMMUTABLE — required on Android 12+ (API 31+) when the
+        //     PendingIntent doesn't need to be mutated by the receiver.
+        //     Our kill intent is fully self-contained (just an action
+        //     string), so immutable is the correct and most secure choice.
+        val killIntent = Intent(this, PairingService::class.java).apply {
+            action = ACTION_KILL
+        }
+        val killPendingIntent = PendingIntent.getService(
+            this,
+            0,
+            killIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("WepWawet")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setOngoing(true)
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                "Stop proxy",
+                killPendingIntent,
+            )
             .build()
     }
 

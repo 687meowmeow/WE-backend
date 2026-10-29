@@ -495,7 +495,7 @@ object VideoTranscoder {
                             muxerVideoTrack = mux.addTrack(vEnc.outputFormat)
                             WepWawetLogger.proxy("$TAG: video track added to muxer (with CSD)",
                                 "track_index" to muxerVideoTrack,
-                                "format_keys" to vEnc.outputFormat.keys().sorted().joinToString(","))
+                                "format_keys" to vEnc.outputFormat.keys.sorted().joinToString(","))
                         }
                         maybeStartMuxer()
                     }

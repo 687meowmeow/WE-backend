@@ -752,7 +752,7 @@ fun WorkshopBrowserScreen(
                                 "ime search action — startSearch",
                                 "query" to query.take(80),
                             )
-                            if (query.isBlank()) repo.clearSearch()
+                            if (query.isBlank()) scope.launch { repo.clearSearch() }
                             else scope.launch { repo.startSearch(query) }
                         },
                     ),
