@@ -199,8 +199,78 @@ android {
         //      (default 0 = centered — byte-identical to previous behavior)
         //      written into project.json like the PC writes the device
         //      config value (disasm 14003f27b).
-        versionCode = 96
-        versionName = "0.7.4-alpha"
+        // v0.7.5-alpha: COMPREHENSIVE BUG-FIX PASS (all 56 audit findings,
+        // rebased on top of the v0.7.4 compatibility pass).
+        //   VideoTranscoder: muxer.addTrack now uses the encoder's OUTPUT
+        //   format (CSD/SPS-PPS) via INFO_OUTPUT_FORMAT_CHANGED — the old
+        //   input-format tracks produced structurally broken MP4s (no
+        //   codec-specific data; CSD written as fake samples); full
+        //   try/finally cleanup for all codecs/muxers/extractors; decoded
+        //   frames are no longer dropped when the encoder queue is full
+        //   (pending-buffer retry pattern); YUV padding zeroed.
+        //   VideoTrimmer: keyframe-accurate start (was starting mid-GOP →
+        //   black/garbage intro), PTS re-based to ~0 (was keeping original
+        //   timestamps → black gap at start on many players), muxer released
+        //   in finally, zero-sample outputs fail cleanly.
+        //   WorkshopDownloader: awaitCompletion no longer overwrites the real
+        //   downloadError with a misleading timeout message; Activity context
+        //   leak fixed (applicationContext); TryAnotherCM retry moved off the
+        //   callback thread; onLoggedOff clears `authenticated`; auth polling
+        //   thread is tracked + interrupted in cleanup() with bounded waits;
+        //   RandomAccessFile handles closed via .use{}; stale install dir
+        //   wiped before re-download; cmRetries reset on login; Steam Guard
+        //   CODE plumbing removed (unused — auth uses device confirmation).
+        //   WorkshopDownloadJob: install dir cleaned after send-to-phone;
+        //   pendingVideo state cleared on new downloads + after trim-screen
+        //   consumption (fixes the reappearing trim dialog / deleted-file
+        //   navigation loop); cancel() resets progress.
+        //   MpkgPacker: PASS F float-assignment regex fixed (was matching ANY
+        //   `= N;` when no float vars, and unanchored alternation for
+        //   multi-char names); extractTextureDefaults regex no longer crosses
+        //   into the next g_Texture declaration (wrong-slot defaults);
+        //   findShaderName resolves the CORRECT pass's shader (multi-pass
+        //   effects); VFS offsets/sizes tracked as Long with a u32 overflow
+        //   guard (≥2GiB videos corrupted the table); PNG end detection walks
+        //   the chunk structure (was matching "IEND" text inside metadata
+        //   chunks); mipmapCount validated in the RG88/R8/RGBA8888
+        //   converters; computeMaxObjectId iterative (deep JSON no longer
+        //   overflows the stack); computeAverageColor bounds-checked.
+        //   SteamApiService: CancellationException re-thrown at all 8 catch
+        //   sites (structured concurrency); &days= gated on the effective
+        //   query type; response.close() on all HTTP error paths; page size
+        //   is now runtime-configurable (Settings slider finally works);
+        //   non-numeric numeric-field strings no longer drop whole items.
+        //   WorkshopRepository: loadPage(search) resets searchHasMore;
+        //   clearSearch takes the browse lock; atomic StateFlow updates;
+        //   creator-name resolution moved off the lock; trend sorts with
+        //   days > 7 skip the HTTP API (which clamps to 7) and use the HTML
+        //   endpoint; loadPage validates pageNum; dead loadJob removed.
+        //   DownloadManager: completeDownload is atomic (no clobber races
+        //   with failDownload); TypeToken replaced with the Array form
+        //   (R8-safe).
+        //   Settings wiring: BOTH the "Page size" slider and "Cache .pkg
+        //   files" toggle now actually do something (were persisted but
+        //   never read).
+        //   WorkshopBrowserScreen: first debounced keystroke no longer
+        //   swallowed; pagination bar shows the page being loaded; no stale
+        //   creator-grid flash when popping back to the global browse.
+        //   TagPickerSheet: draft resets on every open (wraps content in
+        //   if(visible) instead of early-return).
+        //   Logger: clear() resets the persistence watermark (file logging
+        //   resumed working after a clear); per-entry commit in the worker
+        //   (no duplicated lines after a crash mid-batch); minLevel
+        //   @Volatile. CrashHandler: snapshot is built on a helper thread
+        //   with a 2s bound (deadlock-proof); all Log.e wrapped.
+        //   SteamLoginActivity: WebView destroyed in onDestroy (Activity
+        //   leak); cookie merge dedupes by NAME.
+        //   Pairing: bytes-sent-so-far logged correctly on transfer failure;
+        //   discovery ping restored to a true ~1.3s cadence (was ~2.3s);
+        //   notification channel id unified; isPaired() dead branch removed.
+        //   Verified-intended (NO change, documented): .tex PNG search
+        //   offset 87 (header is exactly 87 bytes — round-8 fix), JPEG
+        //   whole-file pass-through (EXIF thumbnail fix), AuthOK generic ack.
+        versionCode = 97
+        versionName = "0.7.5-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {
             abiFilters += "arm64-v8a"

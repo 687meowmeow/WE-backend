@@ -1246,3 +1246,202 @@ Follow-up tasks (NOT done in this changeset):
 - Wire the KEY_PKG_CACHE_ENABLED setting into WorkshopDownloader so the
   toggle actually controls .pkg file retention.
 - Implement the full Favorites screen (saved-creators grid + tap-to-browse).
+
+---
+Task ID: v0.7.5-alpha
+Agent: main (comprehensive bug-fix pass — all 56 audit findings,
+  rebased on top of the remote v0.7.4-alpha G1-G9 compatibility pass)
+
+Task: User requested every bug from the full audit report be fixed (all tiers),
+with explicit instructions: "you could be wrong so you must double check
+everything. dont change anything that is intended. read the report line by
+line. fix everything perfectly. do not stop until 100% addressed." Also:
+remove the Steam Guard CODE plumbing (auth uses device confirmation), keep
+version 0.7.x, commit to dev only.
+
+Work Log:
+- VERIFIED-INTENDED (NO code change; report was wrong on these):
+  - .tex PNG search offset 87 (report #32): git history (5ead9da, round 8)
+    proves the header is EXACTLY 87 bytes — the old offset 91 MISSED PNG
+    magic at 87 and caused the gray xray wallpaper. Keeping 87.
+  - MOST_RELEVANT browseParam (report #21): the enum already has
+    "mostrelevant" — the report's claim it was "mostrecent" was false.
+  - JPEG first-image break (report #39): deliberate — the whole-remaining-
+    file pass-through is the EXIF-thumbnail fix (v0.5.22); searching for the
+    JPEG EOI finds the embedded thumbnail's EOI and truncates. BitmapFactory
+    ignores trailing data.
+  - AuthOK generic ack in the command loop (report #46): kept + documented —
+    changing the wire behavior risks breaking pairing sessions.
+- VideoTranscoder.kt: MAJOR restructure of transcodeWithMediaCodec —
+  muxer.addTrack now uses the encoder OUTPUT format obtained via
+  INFO_OUTPUT_FORMAT_CHANGED (the configure-input format has no CSD → the
+  old output MP4s had no SPS/PPS in moov and CSD bytes written as samples =
+  structurally broken video); BUFFER_FLAG_CODEC_CONFIG buffers skipped;
+  interleaved video+audio loop with deferred muxer.start (buffers samples
+  until both track formats arrive); decoded frames held in a
+  pendingVideoDecoded/pendingAudioDecoded slot and retried instead of
+  dropped; raw-byte fallback no longer nested inside the Image!=null branch;
+  full try/finally cleanup for every codec/muxer/extractor; failed outputs
+  deleted; YUV plane padding zeroed (zeroPlanePadding).
+- VideoTrimmer.kt: keyframe-accurate start (scan for last sync sample before
+  startMs, seekTo it — was starting mid-GOP = black/garbage intro); PTS
+  re-based by the snap point (timeline starts at ~0; was keeping original
+  timestamps = black gap on many players); muxer released in finally; failed
+  output deleted; zero-sample results return false instead of writing an
+  invalid MP4.
+- WorkshopDownloader.kt: awaitCompletion wait loop no longer falls through
+  into the timeout branch when a REAL error is set (abort callback /
+  watchdog / stuck detector messages survived instead of being replaced by
+  "Steam CDN may be slow"); interrupted waits restore the interrupt flag;
+  connectAndAuthenticate captures applicationContext (was leaking an Activity
+  via the singleton browse session's subscriptions); TryAnotherCM retry
+  spawns a thread (was calling connect() on the callback thread — the code's
+  own comment warned this deadlocks JavaSteam); onLoggedOff clears
+  `authenticated` (was leaving half-alive sessions); modern-auth polling
+  thread stored + interrupted in cleanup(), both .get() calls bounded
+  (60s session / 5min approval); cleanup() interrupts + joins the callback
+  thread; findPkgFile/findVideoFile RandomAccessFiles in .use{}; stale
+  installDir wiped before each download; cmRetries reset on successful
+  login; abortCallback registration is owner-checked (a finished download's
+  cleanup can't clear a newer download's callback); Steam Guard CODE
+  constructor param + GuardAuthenticator.getDeviceCode plumbing removed
+  (saveGuardCode had ZERO call sites — auth is device-confirmation only;
+  getDeviceCode now fails fast with a clear message if Steam ever asks).
+- SteamCredentialsStore.kt: guard-code storage removed (dead).
+- WorkshopBrowseSession.kt: guardCode plumbing removed.
+- WorkshopDownloadJob.kt: install dir deleted after send-to-phone AND after
+  continueVideoSend (was leaking megabytes per send); pendingVideo state
+  cleared when a new download starts AND via new
+  onVideoConsumedByTrimScreen() after the trim screen queues (fixes the
+  reappearing "Video Downloaded" dialog and the deleted-file navigation
+  loop); cancel() resets progress; .pkg cache setting WIRED UP (cache hit
+  skips the Steam download; fresh scene .pkg copied to
+  cacheDir/pkg_cache/<id>.pkg when enabled; cache never deleted on failure
+  paths or by the video flow); detectVideoByMagicBytes in .use{}.
+- MpkgPacker.kt: PASS F regex fixed (\b(?:…)\b + Regex.escape, skipped when
+  empty — was matching ANY `= N;` with no float vars and matching suffixes
+  like notmyVar); extractTextureDefaultsFromShader regex tempered with
+  (?:(?!g_Texture\d).)*? (a default can no longer be attributed to the
+  wrong slot); findShaderName takes the pass INDEX and resolves the calling
+  pass's shader (multi-pass effects got pass-0's shader for every pass);
+  packVideoWallpaper + streamPack VFS arithmetic in Long with a u32
+  overflow guard (≥2GiB videos wrapped to negative Ints and corrupted the
+  table); FinalEntry.size Long; PNG end found by walking the chunk
+  structure (findPngEnd — raw "IEND" byte search matched text inside tEXt
+  metadata chunks); mipmapCount validated in RG88/R8/RGBA8888 converters
+  (garbage header reads on mipmapCount=0); computeMaxObjectId iterative
+  (StackOverflowError on deep JSON escaped the catch — it's an Error);
+  computeAverageColor bounds-checked; dead texbFormat read removed;
+  threshold-based streaming progress log; shadowed HEADER_MARKER/MAGIC
+  locals removed (use class constants).
+- SteamApiService.kt: CancellationException re-thrown at 8 catch sites
+  (getPublishedFileDetails, queryFiles, resolveCreatorName,
+  getPlayerSummaries, fetchWorkshopIds, fetchCreatorWorkshopIds,
+  fetchIdsFromUrl, persistCreatorName); &days= gated on effectiveQueryType
+  (not sort.queryType) so text searches don't send trend days; OkHttp
+  responses closed on the getPublishedFileDetails / resolveCreatorName /
+  fetchIdsFromUrl error paths; PAGE_SIZE is now a @Volatile runtime setting
+  (initPageSize/setPageSize + DEFAULT_PAGE_SIZE) — the Settings slider
+  finally controls numperpage on ALL backends; getPlayerSummaries throttle
+  delay only BETWEEN chunks; non-numeric strings in numeric fields are
+  stripped (items no longer silently dropped by JsonSyntaxException);
+  persistCreatorName runs on the shared appScope (was leaking a
+  CoroutineScope per call).
+- WorkshopRepository.kt: loadPage(search branch) resets searchHasMore (a
+  previous end-of-results permanently froze manual search pagination);
+  loadPage clamps pageNum ≥ 1; clearSearch is suspend + takes browseLock
+  (in-flight loads used to clobber the freshly-cleared state and resurrect
+  old results); subscribe/unsubscribe + creatorNames merges use atomic
+  .update{}; search-path creator resolution launched on appScope (was
+  holding browseLock across network I/O); trend sorts with days > 7 skip
+  the HTTP API entirely (it clamps to 7 — Year/Month returned week results)
+  and use the HTML endpoint as the code comments always claimed; dead
+  loadJob field removed; currentSearchQuery @Volatile.
+- DownloadManager.kt: completeDownload atomically captures+removes the
+  active entry in one update (a concurrent failDownload could produce a
+  Completed entry clobbering the FAILED one); TypeToken replaced with the
+  R8-safe Array<CompletedDownload> form.
+- WepWawetLogger.kt: clear() also resets the LogPersistenceWorker's
+  last_seq watermark (file logging resumed working after "Clear logs" —
+  new seq-1..N entries were all filtered out by the stale watermark);
+  minLevel @Volatile; init() check-then-act synchronized.
+- LogPersistenceWorker.kt: last_seq committed SYNCHRONOUSLY after EACH
+  entry (a kill between the batch write and the single async apply()
+  re-appended already-written entries = duplicated log lines after a crash).
+- CrashHandler.kt: both unwrapped Log.e calls wrapped in runCatching (a
+  throwing Log.e recursed into the crash handler infinitely); the ring-
+  buffer snapshot is built on a helper thread with a 2s join bound (a hung
+  logger thread no longer prevents the crash report from being written).
+- SteamLoginActivity.kt: WebView destroyed in onDestroy (Activity leak —
+  guarded with ::webView.isInitialized for the early-return path); cookie
+  merge dedupes by NAME (first occurrence wins) instead of by full k=v
+  string (duplicate sessionid names with different per-domain values made
+  the header ambiguous).
+- WePairingServer.kt: transferWallpaper reports the REAL bytes-sent-so-far
+  on failure (was logging the total file size via `mpkgFile.length() - 0`);
+  transferWallpaperLocked returns Long and rethrows (cancel sent by the
+  outer catch, outside the outputLock transaction).
+- WeDiscoveryBroadcaster.kt: true ~1.3s ping cadence (was ~2.3s — the 1s
+  receive timeout + fixed 1.3s sleep; now sleeps only the interval
+  remainder).
+- PairingService.kt: isPaired() dead first branch removed (subsumed by the
+  return below; truth table unchanged).
+- WepWawetApplication.kt: creates the "wepwawet_pairing" channel id the
+  service actually uses (was creating an unused "wepwawet.proxy" channel);
+  CHANNEL_PROXY removed; SteamApiService.initPageSize(this) called at
+  startup.
+- SettingsScreen.kt: page-size slider calls SteamApiService.setPageSize
+  (live effect) — combined with the SteamApiService runtime var + init,
+  the setting now actually works.
+- WorkshopBrowserScreen.kt: first debounced search emission only skips
+  when the repo really is showing THAT query (typing within 500ms of
+  entering the screen used to be silently swallowed); pagination bar shows
+  the page being LOADED (was flashing "Page 1" during Loading(N)); grid
+  gated on filterLoaded (no stale creator-grid flash when popping back to
+  the global browse).
+- VideoTrimScreen.kt: MediaMetadataRetriever released in finally;
+  CancellationException re-thrown (3 sites); pending state cleared via
+  onVideoConsumedByTrimScreen() after queueing; RangeSlider end clamp uses
+  the NEW start; install dir cleaned after send.
+- WallpaperDetailScreen.kt: load-failure catch re-throws
+  CancellationException.
+- TagPickerSheet.kt: content wrapped in if(visible) → separate private
+  composable (working draft now resets from the CURRENT filter on every
+  open instead of persisting a discarded draft).
+- ShaderTranscoder.kt: failure log maps all six stages (was
+  vertex-or-"fragment").
+- WorkshopTags.kt: unused `tags` parameter removed from isMobileCompatible
+  (WallpaperCard caller updated).
+- app/build.gradle.kts: versionCode 95→96, versionName 0.7.4-alpha (kept
+  0.7.x per user instruction).
+
+Build Status: NOT verified locally (no Android SDK in this environment —
+same as the v0.7.1 cleanup pass). All 26 modified files passed a
+state-machine brace/paren/raw-string balance check (MpkgPacker matches the
+pre-edit file's signature exactly). CI (.github/workflows/build.yml) builds
+on push to dev — check the Actions run.
+
+Rebase notes (v0.7.5):
+- This pass was originally written against b47b98c; origin/dev had moved to
+  5a039e6 (v0.7.4-alpha compatibility pass) mid-flight. Conflicts resolved:
+  build.gradle.kts (kept BOTH comment blocks; version 97 / 0.7.5-alpha since
+  96 / 0.7.4 was taken), MpkgPacker (kept the remote's negotiateMagic +
+  effectiveVideoFile in packVideoWallpaper; my Long-VFS guard, threshold
+  progress log and all other fixes layered on top), WePairingServer (kept
+  the remote's 128KiB G8 chunk size; removed the duplicate inner
+  bytesSent declaration since the rebased code hoists it for the catch),
+  WorkshopDownloader + WorkshopDownloadJob (took the remote's
+  VideoContainerSniffer-based findVideoFile / detectVideoByMagicBytes /
+  detectImageByMagicBytes wholesale — they supersede the old MP4-only
+  ftyp checks my .use{} FD fix applied to; VideoContainerSniffer already
+  uses RandomAccessFile.use{} internally).
+
+Follow-up notes for future agents:
+- The VideoTranscoder muxer-track restructure is the highest-risk change —
+  test a WebM video wallpaper send-to-phone first.
+- The VideoTrimmer keyframe snap means trimmed videos can include up to
+  one keyframe interval BEFORE the requested start (that's what
+  keyframe-accurate means; matches the docstring).
+- pkg_cache_enabled stores scene .pkg files in cacheDir/pkg_cache/<id>.pkg;
+  the "Clear cache" button in Settings clears cacheDir so it cleans these
+  too.

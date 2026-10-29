@@ -471,19 +471,29 @@ fun WorkshopBrowserScreen(
                         //   - If q is blank AND search items exist → DON'T clear
                         //     (the user just navigated back to a previous search)
                         //   - If q is blank AND no search items → no-op
-                        //   - If q has text → it's a restored query, search is already
-                        //     loaded, no need to re-trigger
+                        //   - If q has text AND it matches the repo's CURRENT query
+                        //     text with results already loaded → restored query,
+                        //     no need to re-trigger.
+                        // v0.7.4: the old `if (q.isNotBlank()) return@collect` guard
+                        // couldn't tell a RESTORED query from the user's FIRST
+                        // KEYSTROKE — typing within 500ms of entering the screen
+                        // was silently swallowed and the user had to type an extra
+                        // character to make the search fire. Now the skip only
+                        // happens when the repo really is showing THIS query.
                         if (q.isBlank() && repo.searchItems.value.isNotEmpty()) {
                             WepWawetLogger.workshop("first emission: preserving restored search",
                                 "search_items_count" to repo.searchItems.value.size)
                             return@collect
                         }
-                        if (q.isNotBlank()) {
+                        if (q.isNotBlank() && repo.searchItems.value.isNotEmpty() &&
+                            repo.searchQueryText.value == q) {
                             WepWawetLogger.workshop("first emission: restored query, no re-trigger",
                                 "query" to q.take(80))
                             return@collect
                         }
-                        // First emission with empty query and no search items — fall through
+                        // First emission with fresh user input (or empty query
+                        // and no search items) — fall through to the normal
+                        // handling below.
                     }
                     if (q.isBlank()) {
                         if (repo.searchItems.value.isNotEmpty()) {
@@ -791,7 +801,16 @@ fun WorkshopBrowserScreen(
                     onRefresh = onRefresh,
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    when (displayState) {
+                    // v0.7.4: while the saved filter is still loading from prefs
+                    // (filterLoaded=false), the repository's browseItems may hold
+                    // the OTHER mode's items (e.g. popping back from
+                    // creator/{id} to the global workshop screen). Rendering them
+                    // here caused a brief flash of the wrong wallpapers before
+                    // the fresh page-1 load replaced them — show a spinner until
+                    // the filter is loaded and the correct session has started.
+                    if (!filterLoaded) {
+                        LoadingState()
+                    } else when (displayState) {
                         WorkshopRepository.BrowseState.Idle -> EmptyState(
                             text = if (isCreatorMode)
                                 "Loading creator's workshop…"
@@ -893,7 +912,12 @@ fun WorkshopBrowserScreen(
                 // for "the arrows to go to next page dont work" — the
                 // arrows were using stale browse state in search mode.
                 val loadedState = displayState as? WorkshopRepository.BrowseState.Loaded
-                val currentPage = loadedState?.page ?: 1
+                // v0.7.4: also show the page being LOADED, not just loaded pages.
+                // The old `loadedState?.page ?: 1` made the bar briefly read
+                // "Page 1" whenever the user tapped Next from page 5 (during
+                // Loading(6) the cast to Loaded fails and the fallback kicks in).
+                val loadingState = displayState as? WorkshopRepository.BrowseState.Loading
+                val currentPage = loadedState?.page ?: loadingState?.page ?: 1
                 val hasMore = loadedState?.hasMore ?: false
                 val isLoading = displayState is WorkshopRepository.BrowseState.Loading
                 var jumpPageText by remember { mutableStateOf("") }

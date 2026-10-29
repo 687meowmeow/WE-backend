@@ -93,7 +93,18 @@ object ShaderTranscoder {
                     "output_size" to result.size)
                 String(result, Charsets.UTF_8)
             } else {
-                val stageName = if (shaderStage == STAGE_VERTEX) "vertex" else "fragment"
+                // v0.7.4: same full stage mapping as the success branch — the old
+                // `if (vertex) "vertex" else "fragment"` mislabeled
+                // geometry/hull/domain/compute failures as "fragment".
+                val stageName = when (shaderStage) {
+                    STAGE_VERTEX -> "vertex"
+                    STAGE_FRAGMENT -> "fragment"
+                    STAGE_GEOMETRY -> "geometry"
+                    STAGE_HULL -> "hull"
+                    STAGE_DOMAIN -> "domain"
+                    STAGE_COMPUTE -> "compute"
+                    else -> "unknown"
+                }
                 WepWawetLogger.proxyWarn("$TAG.transcodeShader FAILED — native call returned null (glslang may not be compiled in)",
                     "stage" to stageName,
                     "is_hlsl" to isHlsl)

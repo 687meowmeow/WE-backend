@@ -238,7 +238,7 @@ object MpkgPacker {
             pos += 9
 
             // 3x u32 LE (12 bytes): imageCount, format, isVideoMp4
-            val texbFormat = readU32Le(texData, pos + 4) // format field
+            // v0.7.4: the unused `texbFormat` read was removed (dead code).
             pos += 12
 
             // 1x u32 LE (4 bytes): mipmap_count
@@ -1228,7 +1228,10 @@ object MpkgPacker {
         var count = 0
         val step = (rgbaBytes.size / 4 / 4096).coerceAtLeast(1) * 4
         var i = 0
-        while (i < rgbaBytes.size) {
+        // v0.7.4: bound check — if the buffer size isn't a multiple of 4 (corrupt
+        // RGBA input), the last iteration read i+1..i+3 past the array end and
+        // threw ArrayIndexOutOfBoundsException.
+        while (i + 3 < rgbaBytes.size) {
             val r = rgbaBytes[i].toInt() and 0xFF
             val g = rgbaBytes[i+1].toInt() and 0xFF
             val b = rgbaBytes[i+2].toInt() and 0xFF
@@ -1398,15 +1401,25 @@ object MpkgPacker {
             4 + nameBytes("wallpaper.mp4").size + 8
         val dataSectionStart = headerSize + vfsTableSize
 
-        // Compute offsets
-        var cursor = 0
-        val vfsEntries = mutableListOf<Triple<String, Int, Int>>()
+        // v0.7.4 fix: compute offsets/sizes as LONG. The old code called
+        // videoSize.toInt() — for a video ≥ 2 GiB that's a NEGATIVE Int, so
+        // the VFS entry size and the running cursor wrapped and the table was
+        // silently corrupted. The wire format is u32, so anything ≥ 4 GiB is
+        // unrepresentable and now fails loudly instead of corrupting.
+        var cursor = 0L
+        val vfsEntries = mutableListOf<Triple<String, Long, Long>>()
         for ((name, blob) in smallEntries) {
-            vfsEntries.add(Triple(name, cursor, blob.size))
+            vfsEntries.add(Triple(name, cursor, blob.size.toLong()))
             cursor += blob.size
         }
-        vfsEntries.add(Triple("wallpaper.mp4", cursor, videoSize.toInt()))
-        cursor += videoSize.toInt()
+        vfsEntries.add(Triple("wallpaper.mp4", cursor, videoSize))
+        cursor += videoSize
+        if (cursor > 0xFFFFFFFFL) {
+            WepWawetLogger.proxyError("MpkgPacker.packVideoWallpaper ABORT — data section exceeds the u32 VFS limit",
+                "total_data_bytes" to cursor,
+                "limit_bytes" to 0xFFFFFFFFL)
+            throw IllegalStateException("Video wallpaper too large for .mpkg u32 VFS ($cursor bytes)")
+        }
 
         val totalSize = dataSectionStart + cursor
         WepWawetLogger.proxy("MpkgPacker.packVideoWallpaper layout computed",
@@ -1436,10 +1449,12 @@ object MpkgPacker {
                 out.write(buf.array())
                 out.write(nameBytesArr)
                 buf.clear()
-                buf.putInt(offset)
+                // v0.7.4: offsets/sizes are tracked as Long; toInt() keeps the
+                // correct u32 bit pattern for anything < 4 GiB (guarded above).
+                buf.putInt(offset.toInt())
                 out.write(buf.array())
                 buf.clear()
-                buf.putInt(size)
+                buf.putInt(size.toInt())
                 out.write(buf.array())
             }
 
@@ -1455,6 +1470,10 @@ object MpkgPacker {
                 "chunk_size" to (1024 * 1024))
             val chunkSize = 1024 * 1024  // 1 MB
             var bytesWritten = 0L
+            // v0.7.5: threshold-based progress log. The old `bytesWritten %
+            // (10MiB) == 0` fired at most once (reads are never exactly 10MiB
+            // multiples), so streaming progress was effectively invisible.
+            var lastProgressLogAt = 0L
             java.io.FileInputStream(effectiveVideoFile).use { fis ->
                 val buffer = ByteArray(chunkSize)
                 while (true) {
@@ -1462,7 +1481,8 @@ object MpkgPacker {
                     if (read <= 0) break
                     out.write(buffer, 0, read)
                     bytesWritten += read
-                    if (bytesWritten % (10 * 1024 * 1024) == 0L) {
+                    if (bytesWritten - lastProgressLogAt >= 10L * 1024 * 1024) {
+                        lastProgressLogAt = bytesWritten
                         WepWawetLogger.proxy("MpkgPacker.packVideoWallpaper: video streaming progress",
                             "bytes_written" to bytesWritten,
                             "total" to videoSize,
@@ -1515,7 +1535,10 @@ object MpkgPacker {
         // the install directory but are NOT in the .pkg's VFS table MUST be included
         // in the .mpkg. Without project.json, the Android app can't load the wallpaper
         // → BLACK SCREEN.
-        data class FinalEntry(val name: String, val size: Int, val data: ByteArray?, val vfsOffset: Long)
+        // v0.7.4: size is a Long now — vfs.size is a u32 that exceeds Int.MAX_VALUE
+        // for entries ≥ 2 GiB, and the old `.toInt()` produced negative sizes that
+        // corrupted the VFS table (and negative stream lengths).
+        data class FinalEntry(val name: String, val size: Long, val data: ByteArray?, val vfsOffset: Long)
         val finalEntries = mutableListOf<FinalEntry>()
         val modifiedNames = modifiedEntries.keys
         val vfsPaths = vfsEntries.map { it.path }.toHashSet()
@@ -1523,10 +1546,10 @@ object MpkgPacker {
         for (vfs in vfsEntries) {
             if (vfs.path in modifiedNames) {
                 val data = modifiedEntries[vfs.path]!!
-                finalEntries.add(FinalEntry(vfs.path, data.size, data, 0))
+                finalEntries.add(FinalEntry(vfs.path, data.size.toLong(), data, 0))
             } else {
                 // Unmodified — stream from .pkg
-                finalEntries.add(FinalEntry(vfs.path, vfs.size.toInt(), null, vfs.offset))
+                finalEntries.add(FinalEntry(vfs.path, vfs.size, null, vfs.offset))
             }
         }
 
@@ -1536,7 +1559,7 @@ object MpkgPacker {
         // is incomplete and the Android app can't load the wallpaper.
         for ((name, data) in modifiedEntries) {
             if (name !in vfsPaths) {
-                finalEntries.add(FinalEntry(name, data.size, data, 0))
+                finalEntries.add(FinalEntry(name, data.size.toLong(), data, 0))
                 WepWawetLogger.proxy("MpkgPacker.streamPack: added standalone entry (not in .pkg VFS)",
                     "name" to name,
                     "size" to data.size)
@@ -1550,6 +1573,16 @@ object MpkgPacker {
             "data_section_start" to dataSectionStart)
 
         // Write .mpkg header + VFS table
+        // v0.7.4: u32 overflow guard — the VFS offsets/sizes are u32 on the wire;
+        // a data section ≥ 4 GiB cannot be represented and would silently corrupt
+        // the table. Fail loudly instead.
+        val totalDataSize = finalEntries.sumOf { it.size }
+        if (totalDataSize > 0xFFFFFFFFL) {
+            WepWawetLogger.proxyError("MpkgPacker.streamPack ABORT — data section exceeds the u32 VFS limit",
+                "total_data_bytes" to totalDataSize,
+                "entry_count" to finalEntries.size)
+            throw IllegalStateException(".mpkg data section too large for u32 VFS ($totalDataSize bytes)")
+        }
         val out = outputFile.outputStream().buffered()
         try {
             writeLeInt(out, HEADER_MARKER)
@@ -1557,13 +1590,13 @@ object MpkgPacker {
             if (magic.length != 8) error("magic must be 8 bytes: '$magic'")
             writeLeInt(out, finalEntries.size)
 
-            var cursor = 0
+            var cursor = 0L
             for (entry in finalEntries) {
                 val nameBytes = entry.name.toByteArray(Charsets.UTF_8)
                 writeLeInt(out, nameBytes.size)
                 out.write(nameBytes)
-                writeLeInt(out, cursor)
-                writeLeInt(out, entry.size)
+                writeLeInt(out, cursor.toInt())
+                writeLeInt(out, entry.size.toInt())
                 cursor += entry.size
             }
 
@@ -1579,7 +1612,7 @@ object MpkgPacker {
                 if (entry.data != null) {
                     out.write(entry.data)
                 } else {
-                    PkgReader.streamEntryData(pkgFile, dataSectionStart, entry.vfsOffset, entry.size.toLong(), out)
+                    PkgReader.streamEntryData(pkgFile, dataSectionStart, entry.vfsOffset, entry.size, out)
                 }
                 if (index % 50 == 0 || index == finalEntries.lastIndex) {
                     WepWawetLogger.proxyDebug("MpkgPacker.streamPack progress",
@@ -1907,17 +1940,19 @@ object MpkgPacker {
             data class PngEntry(val offset: Int, val end: Int, val bytes: ByteArray)
             val pngImages = mutableListOf<PngEntry>()
             var searchPos = 0
-            val iendMarker = byteArrayOf(0x49, 0x45, 0x4e, 0x44) // "IEND"
             while (true) {
                 val pngStart = findBytes(texData, PNG_MAGIC, searchPos)
                 if (pngStart < 0) break
-                val iendStart = findBytes(texData, iendMarker, pngStart)
-                if (iendStart < 0) {
+                // v0.7.4: locate the TRUE PNG end by walking the chunk structure
+                // (4-byte BE length + 4-byte type + data + 4-byte CRC until IEND).
+                // The old raw search for the bytes "IEND" could match the literal
+                // text inside a tEXt/zTXt/iTXt chunk, truncating the PNG mid-file.
+                val pngEnd = findPngEnd(texData, pngStart)
+                if (pngEnd < 0) {
                     WepWawetLogger.proxyWarn("MpkgPacker.convertTexPngToRgba: PNG without IEND",
                         "name" to name, "png_start" to pngStart)
                     break
                 }
-                val pngEnd = iendStart + 8 // IEND marker (4 bytes) + CRC (4 bytes)
                 val pngBytes = texData.copyOfRange(pngStart, pngEnd)
                 pngImages.add(PngEntry(pngStart, pngEnd, pngBytes))
                 searchPos = pngEnd
@@ -2206,14 +2241,15 @@ object MpkgPacker {
             data class ImageEntry(val offset: Int, val end: Int, val bytes: ByteArray, val format: String)
             val embeddedImages = mutableListOf<ImageEntry>()
             var searchPos = 0
-            val iendMarker = byteArrayOf(0x49, 0x45, 0x4e, 0x44) // "IEND" (PNG end)
             // Search for PNG images first
             while (true) {
                 val pngStart = findBytes(texData, PNG_MAGIC, searchPos)
                 if (pngStart < 0) break
-                val iendStart = findBytes(texData, iendMarker, pngStart)
-                if (iendStart < 0) break
-                val pngEnd = iendStart + 8 // IEND marker (4 bytes) + CRC (4 bytes)
+                // v0.7.4: chunk-structure walk to find the TRUE PNG end (see
+                // findPngEnd) — a raw "IEND" byte search could match the literal
+                // text inside a tEXt chunk and truncate the image.
+                val pngEnd = findPngEnd(texData, pngStart)
+                if (pngEnd < 0) break
                 val pngBytes = texData.copyOfRange(pngStart, pngEnd)
                 embeddedImages.add(ImageEntry(pngStart, pngEnd, pngBytes, "PNG"))
                 searchPos = pngEnd
@@ -3120,6 +3156,18 @@ object MpkgPacker {
                 return null
             }
 
+            // v0.7.4: validate the mipmap count BEFORE reading the mipmap-0
+            // header fields (offsets 79-91). With mipmapCount == 0 those bytes
+            // aren't a mipmap header at all — the old code read garbage values
+            // for isLz4/decompressedSize/byteCount and decoded bogus data.
+            // Mirrors the guard convertTexDxtToEtc2 already had.
+            val mipCountCheck = readU32Le(texData, 67).toInt()
+            if (mipCountCheck < 1) {
+                WepWawetLogger.proxyWarn("MpkgPacker.convertTexRg88ToEtc2: no mipmaps (mipmapCount=$mipCountCheck)",
+                    "name" to name)
+                return null
+            }
+
             val texWidth = readU32Le(texData, 26).toInt()
             val texHeight = readU32Le(texData, 30).toInt()
             val origFlags = readLeInt(texData, 22)
@@ -3245,6 +3293,9 @@ object MpkgPacker {
             }
 
             if (texData.size < 91) return null
+            // v0.7.4: validate the mipmap count before reading the mipmap-0 header
+            // fields (see convertTexRg88ToEtc2 for the rationale).
+            if (readU32Le(texData, 67).toInt() < 1) return null
 
             val texWidth = readU32Le(texData, 26).toInt()
             val texHeight = readU32Le(texData, 30).toInt()
@@ -3361,6 +3412,9 @@ object MpkgPacker {
             }
 
             if (texData.size < 91) return null
+            // v0.7.4: validate the mipmap count before reading the mipmap-0 header
+            // fields (see convertTexRg88ToEtc2 for the rationale).
+            if (readU32Le(texData, 67).toInt() < 1) return null
 
             val texWidth = readU32Le(texData, 26).toInt()
             val texHeight = readU32Le(texData, 30).toInt()
@@ -3631,9 +3685,20 @@ object MpkgPacker {
             val root = JsonParser.parseString(String(sceneJsonBytes, Charsets.UTF_8)).asJsonObject
             var maxId = -1
             /**
-             * Recursively walk the JSON tree and find all "id" fields.
+             * v0.7.4: ITERATIVE walk over the JSON tree. The previous recursive
+             * walkIdFields() had no depth limit — a pathologically nested
+             * scene.json (malicious or machine-generated) blew the stack with
+             * StackOverflowError, which is an Error (NOT an Exception) and
+             * therefore escaped the outer catch, crashing the pack. The
+             * explicit-stack version below computes the identical result
+             * (maximum over ALL "id" fields — a safe over-approximation for
+             * the Android side's object-slot pre-allocation) with bounded
+             * heap usage instead of unbounded stack usage.
              */
-            fun walkIdFields(value: com.google.gson.JsonElement) {
+            val stack = ArrayDeque<com.google.gson.JsonElement>()
+            stack.addLast(root)
+            while (stack.isNotEmpty()) {
+                val value = stack.removeLast()
                 if (value.isJsonObject) {
                     val obj = value.asJsonObject
                     val idField = obj.get("id")
@@ -3644,17 +3709,15 @@ object MpkgPacker {
                         } catch (_: Exception) { /* not a number, skip */ }
                     }
                     for (key in obj.keySet()) {
-                        walkIdFields(obj.get(key))
+                        stack.addLast(obj.get(key))
                     }
                 } else if (value.isJsonArray) {
                     val arr = value.asJsonArray
-                    val size = arr.size()
-                    for (i in 0 until size) {
-                        walkIdFields(arr[i])
+                    for (i in 0 until arr.size()) {
+                        stack.addLast(arr[i])
                     }
                 }
             }
-            walkIdFields(root)
             maxId
         } catch (e: Exception) {
             WepWawetLogger.proxyWarn("MpkgPacker.computeMaxObjectId FAILED — returning -1",
@@ -4390,14 +4453,25 @@ object MpkgPacker {
                 }
             }
             // Now scan for assignments to those float vars with bare integer literals
-            for (j in lines.indices) {
-                val line = lines[j]
-                // Pattern: identifier = digits; (where identifier is a known float var)
-                val assignMatch = Regex("""(\b${floatVars.joinToString("|")})\b\s*=\s*(\d+)(\s*;)""").find(line)
-                if (assignMatch != null && !assignMatch.groupValues[2].contains('.')) {
-                    val replacement = "${assignMatch.groupValues[1]} = ${assignMatch.groupValues[2]}.0${assignMatch.groupValues[3]}"
-                    lines[j] = line.replace(assignMatch.value, replacement)
-                    fixesApplied.add("'${assignMatch.groupValues[1]}=${assignMatch.groupValues[2]};'→'.0;' (catch-all)")
+            // v0.7.4 fix: TWO regex construction bugs. (1) When floatVars is EMPTY the
+            // old pattern `"(\b${floatVars.joinToString("|")})\b"` degenerated to
+            // `(\b)\b\s*=\s*(\d+)(\s*;)` which matched ANY `= N;` in the file —
+            // rewriting int assignments (and `for (int i = 0; …)` initializers) to
+            // invalid `N.0` float literals. (2) With multiple names only the FIRST
+            // had a leading \b (`(\bx|myVar)\b`), so `myVar` matched inside
+            // `notmyVar`. The alternation is now properly wrapped + escaped and the
+            // whole pass is skipped when there are no float variables.
+            if (floatVars.isNotEmpty()) {
+                val varAlternation = floatVars.joinToString("|") { Regex.escape(it) }
+                val assignRegex = Regex("""\b($varAlternation)\b\s*=\s*(\d+)(\s*;)""")
+                for (j in lines.indices) {
+                    val line = lines[j]
+                    val assignMatch = assignRegex.find(line)
+                    if (assignMatch != null && !assignMatch.groupValues[2].contains('.')) {
+                        val replacement = "${assignMatch.groupValues[1]} = ${assignMatch.groupValues[2]}.0${assignMatch.groupValues[3]}"
+                        lines[j] = line.replace(assignMatch.value, replacement)
+                        fixesApplied.add("'${assignMatch.groupValues[1]}=${assignMatch.groupValues[2]};'→'.0;' (catch-all)")
+                    }
                 }
             }
 
@@ -5530,15 +5604,18 @@ vec3 ApplyChromaticAberration(sampler2D tex, vec2 uv, float intensity) {
                     val effectObj = effect.asJsonObject
                     if (!effectObj.has("passes")) continue
                     val passes = effectObj.getAsJsonArray("passes")
-                    for (pass in passes) {
+                    for ((passIdx, pass) in passes.withIndex()) {
                         val passObj = pass.asJsonObject
                         if (!passObj.has("textures")) continue
                         val textures = passObj.getAsJsonArray("textures")
 
                         // Determine the shader name for this pass
                         // Chain: effect file → material → shader name
+                        // v0.7.4: pass the pass INDEX so multi-pass effects resolve
+                        // the shader for the CORRECT pass (was: first shader found
+                        // in any pass — wrong for multi-pass effects).
                         val effectFile = effectObj.get("file")?.asString
-                        val shaderName = findShaderName(effectFile, passObj, entryMap)
+                        val shaderName = findShaderName(effectFile, passIdx, entryMap)
                         val defaults = if (shaderName != null) shaderDefaults[shaderName] else null
 
                         // Replace null entries with defaults (skip index 0 = framebuffer)
@@ -5579,12 +5656,21 @@ vec3 ApplyChromaticAberration(sampler2D tex, vec2 uv, float intensity) {
      * v0.6.0 (parity §7-8): Use RegexOption.DOT_MATCHES_ALL so the `.*?` matches across
      * newlines. Previously the regex missed metadata comments on a different line from the
      * uniform declaration.
+     *
+     * v0.7.4 fix: the unbounded `.*?` could ALSO run past subsequent `g_TextureN`
+     * declarations — when g_Texture0 had no default comment but g_Texture1 (later in
+     * the file) did, slot 0 silently received slot 1's default and fixSceneJson
+     * bound the WRONG texture into slot 0. The tempered pattern
+     * `(?:(?!g_Texture\d).)*?` still crosses newlines (§7-8 intent preserved) but
+     * stops at the next texture declaration/usage, so a default can only belong
+     * to the declaration it immediately follows.
      */
     private fun extractTextureDefaultsFromShader(shaderContent: String): List<String?> {
         val defaults = arrayOfNulls<String>(8) // g_Texture0 through g_Texture7
         // Match: uniform sampler2D g_TextureN; // {"...","default":"texture_name",...}
-        // v0.6.0: DOT_MATCHES_ALL allows .*? to span newlines
-        val regex = Regex("""g_Texture(\d+)\s*;.*?"default"\s*:\s*"([^"]*)"""",
+        // v0.6.0: DOT_MATCHES_ALL allows the gap to span newlines; v0.7.4: the
+        // gap may not cross another g_TextureN occurrence.
+        val regex = Regex("""g_Texture(\d+)\s*;(?:(?!g_Texture\d).)*?"default"\s*:\s*"([^"]*)"""",
             RegexOption.DOT_MATCHES_ALL)
         for (match in regex.findAll(shaderContent)) {
             val slot = match.groupValues[1].toIntOrNull() ?: continue
@@ -5597,10 +5683,20 @@ vec3 ApplyChromaticAberration(sampler2D tex, vec2 uv, float intensity) {
         return defaults.toList()
     }
 
-    /** Follow the chain: effect file → material → shader name. */
+    /** Follow the chain: effect file → material → shader name.
+     *
+     * v0.7.4 fix: takes the CALLING pass's index (from scene.json's effect
+     * passes array) and resolves the shader for THAT pass in the effect file.
+     * Previously the passObj parameter was ignored and the FIRST shader found
+     * in ANY pass was returned — for multi-pass effects (e.g. a blur with
+     * horizontal + vertical passes using different shaders) every pass got
+     * pass 0's shader, so the wrong default textures were substituted into
+     * the wrong pass's null texture slots. Falls back to scanning all passes
+     * (the old behavior) when the index is out of range.
+     */
     private fun findShaderName(
         effectFile: String?,
-        passObj: JsonObject,
+        passIndex: Int,
         entryMap: Map<String, String>,
     ): String? {
         if (effectFile == null) return null
@@ -5611,10 +5707,15 @@ vec3 ApplyChromaticAberration(sampler2D tex, vec2 uv, float intensity) {
             val passes = effectJson.getAsJsonArray("passes")
             if (passes == null || passes.size() == 0) return null
 
-            // v0.6.0 (parity §7-7): Iterate over ALL passes, not just passes[0]
-            // Multi-pass shaders (e.g., a blur shader with horizontal + vertical passes)
-            // may use different shaders per pass — return the FIRST shader found.
-            for (passIdx in 0 until passes.size()) {
+            // v0.7.4: try the calling pass's index FIRST; fall back to scanning
+            // all passes (v0.6.0 §7-7 behavior) when scene.json and the effect
+            // file disagree on the pass count.
+            val candidateIndices = if (passIndex in 0 until passes.size()) {
+                listOf(passIndex) + (0 until passes.size()).filter { it != passIndex }
+            } else {
+                (0 until passes.size()).toList()
+            }
+            for (passIdx in candidateIndices) {
                 // The pass in the effect file might have a "material" field
                 val effectPass = passes[passIdx].asJsonObject
                 val materialPath = if (effectPass.has("material")) {
@@ -5712,6 +5813,52 @@ vec3 ApplyChromaticAberration(sampler2D tex, vec2 uv, float intensity) {
             if (match) return i
         }
         return -1
+    }
+
+    /**
+     * v0.7.4: find the TRUE end offset (exclusive) of a PNG that starts at
+     * [pngStart] by walking the PNG chunk structure: every chunk is
+     * `4-byte BE length + 4-byte type + length bytes of data + 4-byte CRC`,
+     * and the image ends right after the IEND chunk's CRC.
+     *
+     * This replaces the raw byte search for "IEND", which could match the
+     * literal text "IEND" inside a tEXt/zTXt/iTXt metadata chunk and truncate
+     * the image mid-file. If the chunk walk runs off the buffer (corrupt
+     * structure), we fall back to the old raw search so behavior degrades
+     * gracefully instead of failing hard.
+     */
+    private fun findPngEnd(data: ByteArray, pngStart: Int): Int {
+        // Skip the 8-byte PNG signature.
+        var pos = pngStart + 8
+        // The IHDR chunk must follow immediately — otherwise this isn't a
+        // well-formed PNG stream; fall back to the raw search.
+        if (pos + 8 > data.size) return findIendFallback(data, pngStart)
+        var type = String(data, pos + 4, 4, Charsets.US_ASCII)
+        if (type != "IHDR") return findIendFallback(data, pngStart)
+        var guard = 0
+        while (pos + 8 <= data.size && guard < 100_000) {
+            guard++
+            // Chunk data length (unsigned 32-bit BE; PNG limits it to 2^31-1).
+            val len = ((data[pos].toInt() and 0xFF) shl 24) or
+                ((data[pos + 1].toInt() and 0xFF) shl 16) or
+                ((data[pos + 2].toInt() and 0xFF) shl 8) or
+                (data[pos + 3].toInt() and 0xFF)
+            if (len < 0) return findIendFallback(data, pngStart) // implausible
+            type = String(data, pos + 4, 4, Charsets.US_ASCII)
+            // chunk total = length(4) + type(4) + data(len) + CRC(4)
+            val chunkEnd = pos.toLong() + 12L + len.toLong()
+            if (chunkEnd > data.size) return findIendFallback(data, pngStart)
+            if (type == "IEND") return chunkEnd.toInt()
+            pos = chunkEnd.toInt()
+        }
+        return findIendFallback(data, pngStart)
+    }
+
+    /** v0.7.4: old raw "IEND" search, kept as the fallback path. */
+    private fun findIendFallback(data: ByteArray, pngStart: Int): Int {
+        val iendStart = findBytes(data, byteArrayOf(0x49, 0x45, 0x4e, 0x44), pngStart)
+        if (iendStart < 0) return -1
+        return iendStart + 8 // IEND marker (4 bytes) + CRC (4 bytes)
     }
 
     private fun writeLeIntToStream(out: java.io.ByteArrayOutputStream, value: Int) {

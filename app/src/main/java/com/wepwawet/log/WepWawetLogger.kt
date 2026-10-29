@@ -86,12 +86,27 @@ object WepWawetLogger {
 
     private val ringBuffer = ArrayDeque<LogEntry>()
     private val seq = AtomicLong(0)
-    private var minLevel = Level.INFO
+    // v0.7.4: @Volatile — setMinLevel()/setVerbose() write this from arbitrary
+    // threads (Settings UI); log() reads it without holding any lock. Without
+    // @Volatile other threads may keep using a stale level until their CPU
+    // cache flushes (a real, if benign, data race).
+    @Volatile private var minLevel = Level.INFO
     @Volatile private var initialized = false
 
+    // v0.7.4: guards the init() check-then-act so two threads calling init()
+    // concurrently can't both run the body (previously the @Volatile flag made
+    // the reads/writes atomic but the check-then-act was not).
+    private val initLock = Any()
+
+    // v0.7.4: kept so clear() can reset the persistence watermark — see clear().
+    private var appContextRef: Context? = null
+
     fun init(context: Context) {
-        if (initialized) return
-        initialized = true
+        synchronized(initLock) {
+            if (initialized) return
+            initialized = true
+            appContextRef = context.applicationContext
+        }
         // Read the persisted minimum log level (set by the Settings screen "Log level" picker).
         // Wrap in try-catch — if SharedPreferences fails (very unlikely, but possible on
         // device corruption), we still want the logger to work with the default INFO level.
@@ -238,7 +253,26 @@ object WepWawetLogger {
 
     fun snapshot(): List<LogEntry> = synchronized(ringBuffer) { ringBuffer.toList() }
 
-    fun clear() = synchronized(ringBuffer) { ringBuffer.clear(); seq.set(0) }
+    /**
+     * Clear the in-memory ring buffer AND reset the seq counter.
+     *
+     * v0.7.4 fix: previously this reset `seq` to 0 but did NOT reset the
+     * `last_seq` watermark that LogPersistenceWorker keeps in its
+     * "wepwawet_log_persistence" SharedPreferences. After a clear, new log
+     * entries restarted at seq=1,2,3… but the persisted watermark could
+     * still be e.g. 5000 — the worker's `it.seq > lastSeq` filter rejected
+     * EVERY new entry until 5000+ more logs had been emitted, so NOTHING
+     * was written to disk after the user cleared the logs. We now reset the
+     * watermark to 0 as part of the clear (synchronously via commit()).
+     */
+    fun clear() {
+        synchronized(ringBuffer) { ringBuffer.clear(); seq.set(0) }
+        runCatching {
+            appContextRef?.getSharedPreferences(
+                "wepwawet_log_persistence", Context.MODE_PRIVATE)
+                ?.edit()?.putLong("last_seq", 0L)?.commit()
+        }
+    }
 
     fun drainTo(target: MutableList<LogEntry>): Int = synchronized(ringBuffer) {
         val count = ringBuffer.size

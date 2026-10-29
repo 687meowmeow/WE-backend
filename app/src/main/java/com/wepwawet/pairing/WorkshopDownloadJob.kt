@@ -32,6 +32,13 @@ import java.io.File
  */
 object WorkshopDownloadJob {
 
+    // v0.7.4: settings keys duplicated from SettingsScreen (whose constants
+    // are private). Kept in sync with SettingsScreen's PREFS_NAME /
+    // KEY_PKG_CACHE_ENABLED — same pattern WepWawetLogger uses for the
+    // verbose_log key.
+    private const val WEPWAWET_SETTINGS_PREFS = "wepwawet_settings"
+    private const val WEPWAWET_KEY_PKG_CACHE_ENABLED = "pkg_cache_enabled"
+
     /** Snapshot of the current (or last) download's state. */
     data class State(
         val isRunning: Boolean = false,
@@ -197,6 +204,10 @@ object WorkshopDownloadJob {
             hasChunkProgress = false,
             savedFilePath = null,
             savedFileSize = 0L,
+            // v0.7.4: clear any stale pending-video state (same as the send
+            // path) so a leftover trim-dialog file can't resurface.
+            pendingVideoFile = null,
+            pendingVideoItem = null,
         ) }
         // v0.5.9-alpha (R8): mirror the start into DownloadManager so the
         // Downloads screen + WallpaperCard "Downloading…" overlay populate.
@@ -213,7 +224,24 @@ object WorkshopDownloadJob {
                 WepWawetLogger.workshop("WorkshopDownloadJob: coroutine STARTED",
                     "id" to item.id,
                     "thread" to Thread.currentThread().name)
-            val downloadedPkg = downloader.downloadWorkshopPkg(
+            // v0.7.4: same .pkg cache wiring as the send path (see
+            // launchSendToPhone) — reuse a cached scene .pkg when the
+            // "Cache .pkg files" setting is enabled.
+            val pkgCacheEnabled = appContext.getSharedPreferences(
+                WEPWAWET_SETTINGS_PREFS, Context.MODE_PRIVATE)
+                .getBoolean(WEPWAWET_KEY_PKG_CACHE_ENABLED, false)
+            val cachedPkg = File(File(appContext.cacheDir, "pkg_cache"), "${item.id}.pkg")
+            val canReuseCache = pkgCacheEnabled && cachedPkg.exists() &&
+                cachedPkg.length() > 0L && !detectVideoByMagicBytes(cachedPkg)
+            val downloadedPkg: File? = if (canReuseCache) {
+                WepWawetLogger.workshop("WorkshopDownloadJob: reusing cached .pkg (skip Steam download)",
+                    "id" to item.id,
+                    "path" to cachedPkg.absolutePath,
+                    "size" to cachedPkg.length())
+                _state.update { s -> s.copy(status = "Using cached .pkg — packing…") }
+                cachedPkg
+            } else {
+            downloader.downloadWorkshopPkg(
                 context = appContext,
                 workshopId = item.id,
                 outputFile = pkgFile,
@@ -262,6 +290,7 @@ object WorkshopDownloadJob {
                         "status" to status.take(150))
                 },
             )
+            }
 
             WepWawetLogger.workshop("WorkshopDownloadJob: downloadWorkshopPkg RETURNED",
                 "id" to item.id,
@@ -372,7 +401,9 @@ object WorkshopDownloadJob {
                         endedAt = System.currentTimeMillis(),
                     ) }
                     onDownloadFailed(item, err)
-                    runCatching { downloadedPkg.delete() }
+                    // v0.7.4: don't delete the CACHE entry on failure — only
+                    // the freshly-downloaded temp file.
+                    if (downloadedPkg !== cachedPkg) runCatching { downloadedPkg.delete() }
                     return@launchSafely
                 }
             } finally {
@@ -400,7 +431,7 @@ object WorkshopDownloadJob {
                     endedAt = System.currentTimeMillis(),
                 ) }
                 onDownloadFailed(item, err)
-                runCatching { downloadedPkg.delete() }
+                if (downloadedPkg !== cachedPkg) runCatching { downloadedPkg.delete() }
                 return@launchSafely
             }
 
@@ -429,7 +460,7 @@ object WorkshopDownloadJob {
                     endedAt = System.currentTimeMillis(),
                 ) }
                 onDownloadFailed(item, err)
-                runCatching { downloadedPkg.delete(); cacheMpkg.delete() }
+                if (downloadedPkg !== cachedPkg) runCatching { downloadedPkg.delete(); cacheMpkg.delete() }
                 return@launchSafely
             }
             WepWawetLogger.workshop("WorkshopDownloadJob: read mpkg bytes done",
@@ -445,7 +476,18 @@ object WorkshopDownloadJob {
             WepWawetLogger.workshop("WorkshopDownloadJob: PublicDownloadsWriter returned",
                 "uri_null" to (uri == null),
                 "uri" to (uri?.toString() ?: "null"))
-            runCatching { downloadedPkg.delete() }
+            // v0.7.4: store the .pkg in the cache when the setting is enabled
+            // (and this was a fresh scene download), then clean up the temp
+            // copy — mirrors the send path.
+            if (downloadedPkg != null && downloadedPkg !== cachedPkg) {
+                if (pkgCacheEnabled && !isVideo) {
+                    runCatching {
+                        cachedPkg.parentFile?.mkdirs()
+                        downloadedPkg.copyTo(cachedPkg, overwrite = true)
+                    }
+                }
+                runCatching { downloadedPkg.delete() }
+            }
             runCatching { cacheMpkg.delete() }
             // === Delete install directory (was deferred from WorkshopDownloader
             // so packFromPkg/packVideoWallpaper could read standalone files like
@@ -554,8 +596,7 @@ object WorkshopDownloadJob {
 
         val sendId = System.currentTimeMillis()
         val pkgFile = File(appContext.cacheDir, "${item.id}_${sendId}_send.pkg")
-        val downloader = WorkshopDownloader(steamUser, steamPass,
-            SteamCredentialsStore.getGuardCode(appContext))
+        val downloader = WorkshopDownloader(steamUser, steamPass)
 
         _state.update { it.copy(
             isRunning = true,
@@ -570,6 +611,11 @@ object WorkshopDownloadJob {
             hasChunkProgress = false,
             savedFilePath = null,
             savedFileSize = 0L,
+            // v0.7.4: clear any stale pending-video state left over from a
+            // previous download — otherwise the trim dialog could reappear
+            // for a file that no longer belongs to this session.
+            pendingVideoFile = null,
+            pendingVideoItem = null,
         ) }
         // v0.5.9-alpha (R8): mirror the start into DownloadManager so the
         // Downloads screen + WallpaperCard "Downloading…" overlay populate.
@@ -587,7 +633,28 @@ object WorkshopDownloadJob {
                 WepWawetLogger.workshop("WorkshopDownloadJob.send: coroutine STARTED",
                     "id" to item.id,
                     "thread" to Thread.currentThread().name)
-                val downloadedPkg = downloader.downloadWorkshopPkg(
+                // v0.7.4: WIRE UP the "Cache .pkg files" setting (it was
+                // previously persisted but read by NO ONE — a pure UI no-op).
+                // When enabled, a previously-downloaded scene .pkg for this
+                // item is reused and the fresh download is copied to the
+                // stable cache path after a successful pack. Only SCENE
+                // packages are cached — video files flow through the trim
+                // dialog lifecycle where they get consumed/deleted.
+                val pkgCacheEnabled = appContext.getSharedPreferences(
+                    WEPWAWET_SETTINGS_PREFS, Context.MODE_PRIVATE)
+                    .getBoolean(WEPWAWET_KEY_PKG_CACHE_ENABLED, false)
+                val cachedPkg = File(File(appContext.cacheDir, "pkg_cache"), "${item.id}.pkg")
+                val canReuseCache = pkgCacheEnabled && cachedPkg.exists() &&
+                    cachedPkg.length() > 0L && !detectVideoByMagicBytes(cachedPkg)
+                val downloadedPkg: File? = if (canReuseCache) {
+                    WepWawetLogger.workshop("WorkshopDownloadJob.send: reusing cached .pkg (skip Steam download)",
+                        "id" to item.id,
+                        "path" to cachedPkg.absolutePath,
+                        "size" to cachedPkg.length())
+                    _state.update { s -> s.copy(status = "Using cached .pkg — packing…") }
+                    cachedPkg
+                } else {
+                    downloader.downloadWorkshopPkg(
                     context = appContext,
                     workshopId = item.id,
                     outputFile = pkgFile,
@@ -629,6 +696,7 @@ object WorkshopDownloadJob {
                             "status" to status.take(150))
                     },
                 )
+                }
 
                 WepWawetLogger.workshop("WorkshopDownloadJob.send: downloadWorkshopPkg RETURNED",
                     "id" to item.id,
@@ -782,7 +850,8 @@ object WorkshopDownloadJob {
                             endedAt = System.currentTimeMillis(),
                         ) }
                         onDownloadFailed(item, err)
-                        runCatching { downloadedPkg.delete() }
+                        // v0.7.4: don't delete the CACHE entry on failure.
+                        if (downloadedPkg !== cachedPkg) runCatching { downloadedPkg.delete() }
                         return@launchSafely
                     }
                 } finally {
@@ -808,7 +877,7 @@ object WorkshopDownloadJob {
                         endedAt = System.currentTimeMillis(),
                     ) }
                     onDownloadFailed(item, err)
-                    runCatching { downloadedPkg.delete() }
+                    if (downloadedPkg !== cachedPkg) runCatching { downloadedPkg.delete() }
                     return@launchSafely
                 }
 
@@ -841,6 +910,19 @@ object WorkshopDownloadJob {
                 // the "Receiving wallpaper..." progress dialog.
                 PairingService.launchWallpaperEngineApp(appContext)
 
+                // === v0.7.4: Delete the install directory (mirrors the debug
+                // download path, which already did this). It contains the raw
+                // depot files (project.json, preview.jpg, models, scripts…)
+                // that are no longer needed once the .mpkg is built — leaving
+                // them behind leaked megabytes per send-to-phone in
+                // cacheDir/workshop_downloads/<id>/ until Android's cache
+                // cleaner ran. (WorkshopDownloader also wipes it BEFORE the
+                // next download of the same id, but that doesn't help users
+                // who send several different wallpapers.) ===
+                runCatching { installDir.deleteRecursively() }
+                WepWawetLogger.workshop("WorkshopDownloadJob.send: install dir cleaned up",
+                    "path" to installDir.absolutePath)
+
                 // === IMPORTANT: do NOT delete cacheMpkg here! ===
                 // The PairingService.queueWallpaper only holds a File reference,
                 // not the bytes — the file must still exist when the WePairingServer
@@ -857,8 +939,22 @@ object WorkshopDownloadJob {
                 //     under memory pressure)
                 //   - Manually by the user via "Clear cache" in Android Settings
 
-                // Clean up the .pkg cache (no longer needed)
-                runCatching { downloadedPkg.delete() }
+                // v0.7.4: store the .pkg in the stable cache when the
+                // "Cache .pkg files" setting is enabled (scene wallpapers
+                // only — videos are consumed by the trim flow), then clean up
+                // the timestamped temp copy as before.
+                if (downloadedPkg !== cachedPkg) {
+                    if (pkgCacheEnabled && !isVideo) {
+                        runCatching {
+                            cachedPkg.parentFile?.mkdirs()
+                            downloadedPkg.copyTo(cachedPkg, overwrite = true)
+                        }
+                        WepWawetLogger.workshop("WorkshopDownloadJob.send: .pkg stored in cache for faster re-packing",
+                            "path" to cachedPkg.absolutePath,
+                            "size" to cachedPkg.length())
+                    }
+                    runCatching { downloadedPkg.delete() }
+                }
 
                 val msg = "Queued ${formatBytes(cacheMpkg.length())} for transfer to $deviceName"
                 WepWawetLogger.workshop("WorkshopDownloadJob.send: QUEUED",
@@ -961,6 +1057,12 @@ object WorkshopDownloadJob {
                 PairingService.queueWallpaper(cacheMpkg, pendingItem.title)
                 PairingService.launchWallpaperEngineApp(appContext)
                 runCatching { videoFile.delete() }
+                // v0.7.4: clean up the install dir here too (the video path in
+                // launchSendToPhone returns early before the normal cleanup —
+                // this is the continuation of that flow, so it owns the cleanup).
+                runCatching { installDir.deleteRecursively() }
+                WepWawetLogger.workshop("WorkshopDownloadJob.continueVideoSend: install dir cleaned up",
+                    "path" to installDir.absolutePath)
                 val msg = "Queued ${formatBytes(cacheMpkg.length())} for transfer to $deviceName"
                 WepWawetLogger.workshop("WorkshopDownloadJob.continueVideoSend: QUEUED",
                     "file" to cacheMpkg.name, "size" to cacheMpkg.length())
@@ -1038,6 +1140,23 @@ object WorkshopDownloadJob {
         ) }
     }
 
+    /**
+     * v0.7.4: Called by VideoTrimScreen after it has successfully queued a
+     * video (trimmed or full). Clears the pending-video state WITHOUT deleting
+     * the file (the trim screen owns file cleanup) so the "Video Downloaded"
+     * dialog doesn't reappear after navigating back, and a second "Trim Video"
+     * tap can't navigate to a file that was already consumed.
+     */
+    fun onVideoConsumedByTrimScreen() {
+        if (_state.value.pendingVideoFile != null || _state.value.pendingVideoItem != null) {
+            _state.update { it.copy(
+                pendingVideoFile = null,
+                pendingVideoItem = null,
+            ) }
+            WepWawetLogger.workshop("WorkshopDownloadJob.onVideoConsumedByTrimScreen: pending video state cleared")
+        }
+    }
+
     fun cancel() {
         WepWawetLogger.workshop("WorkshopDownloadJob: cancelling",
             "id" to (_state.value.workshopId ?: "null"))
@@ -1051,6 +1170,10 @@ object WorkshopDownloadJob {
             isRunning = false,
             status = "Cancelled",
             errorMessage = "Cancelled",
+            // v0.7.4: reset progress so the Downloads screen doesn't show a
+            // frozen progress bar at whatever percentage the download was at
+            // when cancelled (cancelVideoSend already did this; cancel didn't).
+            progress = 0f,
             endedAt = System.currentTimeMillis(),
         ) }
     }

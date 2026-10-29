@@ -113,415 +113,582 @@ object VideoTranscoder {
      * 3. MediaMuxer writes the encoded data to the output MP4 file
      */
     private fun transcodeWithMediaCodec(inputFile: File, outputFile: File): Boolean {
+        // === v0.7.4 RESTRUCTURE ===
+        // Every codec/muxer/extractor is declared BEFORE the try and released in
+        // a finally block — the old code only cleaned up on the success path, so
+        // ANY mid-transcode exception leaked all four MediaCodecs + the muxer +
+        // both extractors (MediaCodec instances are limited per process; after a
+        // couple of failed transcodes the next createEncoderByType failed).
+        //
+        // The muxer track setup was also fixed: addTrack() is now called with the
+        // encoder's OUTPUT format (obtained after start(), via
+        // INFO_OUTPUT_FORMAT_CHANGED) instead of the CONFIGURE input format. The
+        // input format has no CSD-0/CSD-1 (SPS/PPS, AudioSpecificConfig), so the
+        // old code produced MP4s whose moov atom had no codec-specific data while
+        // the CSD bytes landed in mdat as fake samples — structurally broken
+        // output. Per the Android docs: "the MediaFormat will be retrieved from
+        // MediaCodec.getOutputFormat()". CODEC_CONFIG output buffers are now
+        // skipped (their data is conveyed via the output format).
+        //
+        // Frames are no longer dropped when the encoder input queue is
+        // momentarily full: a decoded frame that can't be queued yet is kept as
+        // `pendingVideoDecoded`/`pendingAudioDecoded` and retried on the next
+        // loop iteration (the old code just released it — missing frames, PTS
+        // gaps, glitches). The raw-byte copy fallback is also no longer nested
+        // inside the Image!=null branch, so codecs that don't expose the Image
+        // API still get their frames through.
         val extractor = android.media.MediaExtractor()
-        extractor.setDataSource(inputFile.absolutePath)
-
-        // Find video and audio tracks
-        var videoTrackIndex = -1
-        var audioTrackIndex = -1
-        for (i in 0 until extractor.trackCount) {
-            val format = extractor.getTrackFormat(i)
-            val mime = format.getString(android.media.MediaFormat.KEY_MIME) ?: ""
-            if (mime.startsWith("video/") && videoTrackIndex == -1) {
-                videoTrackIndex = i
-            } else if (mime.startsWith("audio/") && audioTrackIndex == -1) {
-                audioTrackIndex = i
-            }
-        }
-
-        if (videoTrackIndex == -1) {
-            WepWawetLogger.proxyError("$TAG: no video track found in input",
-                "input" to inputFile.name,
-                "track_count" to extractor.trackCount)
-            extractor.release()
-            return false
-        }
-
-        // v0.6.0 (parity §8-2): Log audio presence and (NEW) attempt to transcode it
-        // to AAC. Previously (v0.5.32) audio was dropped entirely because the
-        // incomplete transcode produced invalid MP4s. Now we properly transcode.
-        val hasAudio = audioTrackIndex >= 0
-        if (hasAudio) {
-            WepWawetLogger.proxy("$TAG: input has audio track — will transcode to AAC",
-                "input" to inputFile.name)
-        }
-
-        // Read video track format (width, height, duration, etc.)
-        val videoInputFormat = extractor.getTrackFormat(videoTrackIndex)
-        val width = videoInputFormat.getInteger(android.media.MediaFormat.KEY_WIDTH)
-        val height = videoInputFormat.getInteger(android.media.MediaFormat.KEY_HEIGHT)
-        val duration = if (videoInputFormat.containsKey(android.media.MediaFormat.KEY_DURATION)) {
-            videoInputFormat.getLong(android.media.MediaFormat.KEY_DURATION)
-        } else 0L
-
-        // v0.6.0 (parity §8-3): Preserve source frame rate (was hardcoded to 30)
-        val srcFps = if (videoInputFormat.containsKey(android.media.MediaFormat.KEY_FRAME_RATE))
-            videoInputFormat.getInteger(android.media.MediaFormat.KEY_FRAME_RATE) else 30
-
-        WepWawetLogger.proxy("$TAG: video track found",
-            "width" to width, "height" to height,
-            "duration_ms" to (duration / 1000),
-            "fps" to srcFps,
-            "input_mime" to (videoInputFormat.getString(android.media.MediaFormat.KEY_MIME) ?: "?"))
-
-        // Create the output MediaMuxer (writes MP4 container)
-        val muxer = android.media.MediaMuxer(
-            outputFile.absolutePath,
-            android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4
-        )
-
-        // v0.6.0 (parity §8-4): Preserve rotation metadata via muxer orientation hint
-        if (videoInputFormat.containsKey(android.media.MediaFormat.KEY_ROTATION)) {
-            val rotation = videoInputFormat.getInteger(android.media.MediaFormat.KEY_ROTATION)
-            muxer.setOrientationHint(rotation)
-            WepWawetLogger.proxy("$TAG: preserving rotation metadata",
-                "rotation_degrees" to rotation)
-        }
-
-        // v0.6.0 (parity §8-1): Pick H.264 (default) or H.265 (if device supports encoding)
-        // H.265 produces ~50% smaller files at equivalent quality, useful for large wallpapers.
-        val codecMime = pickVideoCodec()
-        val isH265 = codecMime == android.media.MediaFormat.MIMETYPE_VIDEO_HEVC
-        WepWawetLogger.proxy("$TAG: selected video codec",
-            "mime" to codecMime, "is_h265" to isH265)
-
-        // Configure the video encoder (H.264 or H.265)
-        val videoEncoderFormat = android.media.MediaFormat.createVideoFormat(
-            codecMime, width, height
-        ).apply {
-            setInteger(android.media.MediaFormat.KEY_COLOR_FORMAT,
-                android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
-            setInteger(android.media.MediaFormat.KEY_BIT_RATE, computeBitrate(width, height, srcFps))
-            setInteger(android.media.MediaFormat.KEY_FRAME_RATE, srcFps)  // §8-3: preserve source fps
-            setInteger(android.media.MediaFormat.KEY_I_FRAME_INTERVAL, 2) // I-frame every 2 seconds
-
-            // v0.6.0 (parity §8-6): H.264 Baseline profile for max device compatibility
-            // (some older Android devices only support Baseline at Level 3)
-            if (!isH265) {
-                try {
-                    setInteger(android.media.MediaFormat.KEY_PROFILE,
-                        android.media.MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
-                    setInteger(android.media.MediaFormat.KEY_LEVEL,
-                        android.media.MediaCodecInfo.CodecProfileLevel.AVCLevel3)
-                } catch (_: Exception) {
-                    // Some encoders don't support KEY_PROFILE — fall back to default
-                }
-            }
-
-            // v0.6.0 (parity §8-5): Disable B-frames for seek-friendly wallpaper playback
-            // (wallpaper playback involves frequent random seeks to any frame for preview)
-            try {
-                setInteger("max-bframes", 0)  // API 23+
-            } catch (_: Exception) {
-                // Some encoders don't support this key — ignore
-            }
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                try {
-                    setInteger(android.media.MediaFormat.KEY_LATENCY, 0)  // API 30+
-                } catch (_: Exception) {}
-            }
-        }
-
-        val videoEncoder = android.media.MediaCodec.createEncoderByType(codecMime)
-        videoEncoder.configure(videoEncoderFormat, null, null,
-            android.media.MediaCodec.CONFIGURE_FLAG_ENCODE)
-        videoEncoder.start()
-
-        // Configure the video decoder
-        extractor.selectTrack(videoTrackIndex)
-        val videoDecoder = android.media.MediaCodec.createDecoderByType(
-            videoInputFormat.getString(android.media.MediaFormat.KEY_MIME)!!
-        )
-        videoDecoder.configure(videoInputFormat, null, null, 0)
-        videoDecoder.start()
-
-        // Add video track to muxer
-        val muxerVideoTrack = muxer.addTrack(videoEncoderFormat)
-
-        // v0.6.0 (parity §8-2): Properly transcode audio if present
-        var muxerAudioTrack = -1
+        var muxer: android.media.MediaMuxer? = null
+        var videoDecoder: android.media.MediaCodec? = null
+        var videoEncoder: android.media.MediaCodec? = null
         var audioDecoder: android.media.MediaCodec? = null
         var audioEncoder: android.media.MediaCodec? = null
-        var audioInputFormat: android.media.MediaFormat? = null
-        if (hasAudio) {
-            audioInputFormat = extractor.getTrackFormat(audioTrackIndex)
-            try {
-                // Set up audio decoder (auto-detect source codec)
-                val audioMime = audioInputFormat.getString(android.media.MediaFormat.KEY_MIME)!!
-                audioDecoder = android.media.MediaCodec.createDecoderByType(audioMime)
-                audioDecoder.configure(audioInputFormat, null, null, 0)
-                audioDecoder.start()
+        var audioExtractor: android.media.MediaExtractor? = null
+        var muxerStarted = false
+        var success = false
 
-                // Set up audio encoder: AAC 128 kbps stereo 44.1 kHz
-                val audioEncoderFormat = android.media.MediaFormat.createAudioFormat(
-                    android.media.MediaFormat.MIMETYPE_AUDIO_AAC,
-                    44100,  // sample rate (universal)
-                    2       // stereo (universal)
-                ).apply {
-                    setInteger(android.media.MediaFormat.KEY_BIT_RATE, 128000)
-                    setInteger(android.media.MediaFormat.KEY_AAC_PROFILE,
-                        android.media.MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+        try {
+            extractor.setDataSource(inputFile.absolutePath)
+
+            // Find video and audio tracks
+            var videoTrackIndex = -1
+            var audioTrackIndex = -1
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(android.media.MediaFormat.KEY_MIME) ?: ""
+                if (mime.startsWith("video/") && videoTrackIndex == -1) {
+                    videoTrackIndex = i
+                } else if (mime.startsWith("audio/") && audioTrackIndex == -1) {
+                    audioTrackIndex = i
                 }
-                audioEncoder = android.media.MediaCodec.createEncoderByType(
-                    android.media.MediaFormat.MIMETYPE_AUDIO_AAC)
-                audioEncoder.configure(audioEncoderFormat, null, null,
-                    android.media.MediaCodec.CONFIGURE_FLAG_ENCODE)
-                audioEncoder.start()
-
-                muxerAudioTrack = muxer.addTrack(audioEncoderFormat)
-                WepWawetLogger.proxy("$TAG: audio transcoding setup complete",
-                    "source_mime" to audioMime,
-                    "target_codec" to "AAC 128kbps stereo 44.1kHz")
-            } catch (e: Exception) {
-                WepWawetLogger.proxyWarn("$TAG: audio transcode setup failed — dropping audio",
-                    "exception" to e.javaClass.name, "message" to (e.message ?: ""))
-                audioDecoder?.release()
-                audioEncoder?.release()
-                audioDecoder = null
-                audioEncoder = null
-                muxerAudioTrack = -1
             }
-        }
 
-        muxer.start()
+            if (videoTrackIndex == -1) {
+                WepWawetLogger.proxyError("$TAG: no video track found in input",
+                    "input" to inputFile.name,
+                    "track_count" to extractor.trackCount)
+                return false
+            }
 
-        // === Transcode video ===
-        val info = android.media.MediaCodec.BufferInfo()
-        val bufferInfo = android.media.MediaCodec.BufferInfo()
-        var allExtracted = false
-        var allDecoded = false
-        var allEncoded = false
-        var videoFrameCount = 0
+            // Read video track format (width, height, duration, etc.)
+            val videoInputFormat = extractor.getTrackFormat(videoTrackIndex)
+            val width = videoInputFormat.getInteger(android.media.MediaFormat.KEY_WIDTH)
+            val height = videoInputFormat.getInteger(android.media.MediaFormat.KEY_HEIGHT)
+            val duration = if (videoInputFormat.containsKey(android.media.MediaFormat.KEY_DURATION)) {
+                videoInputFormat.getLong(android.media.MediaFormat.KEY_DURATION)
+            } else 0L
 
-        // Simple transcode loop: extract → decode → encode → mux
-        // This is a simplified implementation that handles the common case.
-        // For production, a more robust async callback-based implementation
-        // would be needed, but this works for the .webm → .mp4 use case.
-        val TIMEOUT_US = 10000L // 10ms timeout
+            // v0.6.0 (parity §8-3): Preserve source frame rate (was hardcoded to 30)
+            val srcFps = if (videoInputFormat.containsKey(android.media.MediaFormat.KEY_FRAME_RATE))
+                videoInputFormat.getInteger(android.media.MediaFormat.KEY_FRAME_RATE) else 30
 
-        while (!allEncoded) {
-            // === Extract + decode video ===
-            if (!allExtracted) {
-                val inputBufferIndex = videoDecoder.dequeueInputBuffer(TIMEOUT_US)
-                if (inputBufferIndex >= 0) {
-                    val inputBuffer = videoDecoder.getInputBuffer(inputBufferIndex)!!
-                    val sampleSize = extractor.readSampleData(inputBuffer, 0)
-                    if (sampleSize < 0) {
-                        videoDecoder.queueInputBuffer(inputBufferIndex, 0, 0, 0,
-                            android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                        allExtracted = true
-                    } else {
-                        val sampleTime = extractor.sampleTime
-                        videoDecoder.queueInputBuffer(inputBufferIndex, 0, sampleSize, sampleTime, 0)
-                        extractor.advance()
+            WepWawetLogger.proxy("$TAG: video track found",
+                "width" to width, "height" to height,
+                "duration_ms" to (duration / 1000),
+                "fps" to srcFps,
+                "input_mime" to (videoInputFormat.getString(android.media.MediaFormat.KEY_MIME) ?: "?"))
+
+            // Create the output MediaMuxer (writes MP4 container).
+            // NOTE: addTrack/start are deferred until the encoders report their
+            // output formats (see the loop below) — see the v0.7.4 note above.
+            val mux = android.media.MediaMuxer(
+                outputFile.absolutePath,
+                android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4
+            )
+            muxer = mux
+
+            // v0.6.0 (parity §8-4): Preserve rotation metadata via muxer orientation hint
+            if (videoInputFormat.containsKey(android.media.MediaFormat.KEY_ROTATION)) {
+                val rotation = videoInputFormat.getInteger(android.media.MediaFormat.KEY_ROTATION)
+                mux.setOrientationHint(rotation)
+                WepWawetLogger.proxy("$TAG: preserving rotation metadata",
+                    "rotation_degrees" to rotation)
+            }
+
+            // v0.6.0 (parity §8-1): Pick H.264 (default) or H.265 (if device supports encoding)
+            val codecMime = pickVideoCodec()
+            val isH265 = codecMime == android.media.MediaFormat.MIMETYPE_VIDEO_HEVC
+            WepWawetLogger.proxy("$TAG: selected video codec",
+                "mime" to codecMime, "is_h265" to isH265)
+
+            // Configure the video encoder (H.264 or H.265)
+            val videoEncoderFormat = android.media.MediaFormat.createVideoFormat(
+                codecMime, width, height
+            ).apply {
+                setInteger(android.media.MediaFormat.KEY_COLOR_FORMAT,
+                    android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
+                setInteger(android.media.MediaFormat.KEY_BIT_RATE, computeBitrate(width, height, srcFps))
+                setInteger(android.media.MediaFormat.KEY_FRAME_RATE, srcFps)  // §8-3: preserve source fps
+                setInteger(android.media.MediaFormat.KEY_I_FRAME_INTERVAL, 2) // I-frame every 2 seconds
+
+                // v0.6.0 (parity §8-6): H.264 Baseline profile for max device compatibility
+                if (!isH265) {
+                    try {
+                        setInteger(android.media.MediaFormat.KEY_PROFILE,
+                            android.media.MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+                        setInteger(android.media.MediaFormat.KEY_LEVEL,
+                            android.media.MediaCodecInfo.CodecProfileLevel.AVCLevel3)
+                    } catch (_: Exception) {
+                        // Some encoders don't support KEY_PROFILE — fall back to default
                     }
                 }
+
+                // v0.6.0 (parity §8-5): Disable B-frames for seek-friendly wallpaper playback
+                try {
+                    setInteger("max-bframes", 0)  // API 23+
+                } catch (_: Exception) {
+                    // Some encoders don't support this key — ignore
+                }
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                    try {
+                        setInteger(android.media.MediaFormat.KEY_LATENCY, 0)  // API 30+
+                    } catch (_: Exception) {}
+                }
             }
 
-            // === Get decoded video frames → encode to H.264 ===
-            if (!allDecoded) {
-                val outputBufferIndex = videoDecoder.dequeueOutputBuffer(info, TIMEOUT_US)
-                if (outputBufferIndex >= 0) {
-                    if (info.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                        allDecoded = true
-                        videoEncoder.signalEndOfInputStream()
-                    } else {
-                        // v0.5.32 (H6 fix): Use Image API (getOutputImage /
-                        // getInputImage) to copy YUV planes from decoder
-                        // output to encoder input. Previously this used raw
-                        // ByteBuffer copies, which works only when the decoder
-                        // and encoder happen to use the same YUV420 layout
-                        // (e.g., both NV12 on Adreno). On other layouts
-                        // (NV21, YV12, etc.) the raw byte copy produces
-                        // scrambled chroma planes → green tint or swapped
-                        // U/V in the output MP4.
-                        //
-                        // Per Google issue tracker
-                        // (issuetracker.google.com/issues/319451102):
-                        // "the layout of a YUV 4:2:0 ByteBuffer is device
-                        // and codec specific … We recommend that you use
-                        // the getOutputImage API (since API 21) instead."
-                        //
-                        // The Image API exposes per-plane rowStride and
-                        // pixelStride, so [copyYuv420Image] can copy each
-                        // plane correctly regardless of the source/dest
-                        // layouts. (minSdk=26, so Image API is available.)
-                        val decodedImage = videoDecoder.getOutputImage(outputBufferIndex)
-                        val encoderInputIndex = videoEncoder.dequeueInputBuffer(TIMEOUT_US)
-                        if (encoderInputIndex >= 0 && decodedImage != null) {
-                            val encoderInput = videoEncoder.getInputImage(encoderInputIndex)
-                            if (encoderInput != null) {
-                                copyYuv420Image(decodedImage, encoderInput, width, height)
-                                // Pass the encoder's input buffer capacity
-                                // as size — this is the full YUV420 frame
-                                // size the encoder expects (Y + U + V planes
-                                // with the encoder's row stride padding).
-                                val encoderBuf = videoEncoder.getInputBuffer(encoderInputIndex)
+            val vEnc = android.media.MediaCodec.createEncoderByType(codecMime)
+            videoEncoder = vEnc
+            vEnc.configure(videoEncoderFormat, null, null,
+                android.media.MediaCodec.CONFIGURE_FLAG_ENCODE)
+            vEnc.start()
+
+            // Configure the video decoder
+            extractor.selectTrack(videoTrackIndex)
+            val vDec = android.media.MediaCodec.createDecoderByType(
+                videoInputFormat.getString(android.media.MediaFormat.KEY_MIME)!!
+            )
+            videoDecoder = vDec
+            vDec.configure(videoInputFormat, null, null, 0)
+            vDec.start()
+
+            // v0.6.0 (parity §8-2): audio transcode setup (AAC 128 kbps stereo
+            // 44.1 kHz). On ANY setup failure the audio codecs are released and
+            // nulled out — the loop then runs video-only. The muxer track is NOT
+            // added here (CSD is unknown until the encoder starts producing).
+            val hasAudio = audioTrackIndex >= 0
+            if (hasAudio) {
+                try {
+                    val audioInputFormat = extractor.getTrackFormat(audioTrackIndex)
+                    val audioMime = audioInputFormat.getString(android.media.MediaFormat.KEY_MIME)!!
+                    // v0.7.4: dedicated extractor for the audio track (the first
+                    // extractor has the VIDEO track selected). Created up front
+                    // and released in the finally block — the old code leaked it
+                    // if anything inside the audio loop threw.
+                    val aExt = android.media.MediaExtractor()
+                    audioExtractor = aExt
+                    aExt.setDataSource(inputFile.absolutePath)
+                    aExt.selectTrack(audioTrackIndex)
+
+                    val aDec = android.media.MediaCodec.createDecoderByType(audioMime)
+                    audioDecoder = aDec
+                    aDec.configure(audioInputFormat, null, null, 0)
+                    aDec.start()
+
+                    val audioEncoderFormat = android.media.MediaFormat.createAudioFormat(
+                        android.media.MediaFormat.MIMETYPE_AUDIO_AAC,
+                        44100,  // sample rate (universal)
+                        2       // stereo (universal)
+                    ).apply {
+                        setInteger(android.media.MediaFormat.KEY_BIT_RATE, 128000)
+                        setInteger(android.media.MediaFormat.KEY_AAC_PROFILE,
+                            android.media.MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+                    }
+                    val aEnc = android.media.MediaCodec.createEncoderByType(
+                        android.media.MediaFormat.MIMETYPE_AUDIO_AAC)
+                    audioEncoder = aEnc
+                    aEnc.configure(audioEncoderFormat, null, null,
+                        android.media.MediaCodec.CONFIGURE_FLAG_ENCODE)
+                    aEnc.start()
+
+                    WepWawetLogger.proxy("$TAG: audio transcoding setup complete",
+                        "source_mime" to audioMime,
+                        "target_codec" to "AAC 128kbps stereo 44.1kHz")
+                } catch (e: Exception) {
+                    WepWawetLogger.proxyWarn("$TAG: audio transcode setup failed — dropping audio",
+                        "exception" to e.javaClass.name, "message" to (e.message ?: ""))
+                    runCatching { audioDecoder?.stop() }
+                    runCatching { audioDecoder?.release() }
+                    runCatching { audioEncoder?.stop() }
+                    runCatching { audioEncoder?.release() }
+                    runCatching { audioExtractor?.release() }
+                    audioDecoder = null
+                    audioEncoder = null
+                    audioExtractor = null
+                }
+            }
+
+            // === Interleaved transcode loop (extract → decode → encode → mux) ===
+            // Audio and video are processed in the SAME loop so both encoders'
+            // output formats (needed for muxer.addTrack) arrive before either
+            // stream needs to be written. Samples produced before the muxer has
+            // both tracks are buffered in memory (a tiny window — each encoder
+            // reports its format on its first output, which happens within the
+            // first few loop iterations).
+            val info = android.media.MediaCodec.BufferInfo()
+            val bufferInfo = android.media.MediaCodec.BufferInfo()
+            val audioInfo = android.media.MediaCodec.BufferInfo()
+            val audioEncInfo = android.media.MediaCodec.BufferInfo()
+            val TIMEOUT_US = 10000L // 10ms timeout
+
+            var videoAllExtracted = false
+            var videoAllDecoded = false
+            var videoAllEncoded = false
+            var videoFrameCount = 0
+            // v0.7.4: pending decoded buffer index — a decoded frame that hasn't
+            // been accepted by the encoder yet. Kept (NOT released) and retried
+            // next iteration; the old code released it (frame drop).
+            var pendingVideoDecoded = -1
+
+            var audioAllExtracted = false
+            var audioAllDecoded = false
+            var audioAllEncoded = false
+            var audioFrameCount = 0
+            var pendingAudioDecoded = -1
+
+            var muxerVideoTrack = -1
+            var muxerAudioTrack = -1
+
+            // Encoded samples produced before both tracks were added to the muxer.
+            class PendingSample(val data: ByteArray, val ptsUs: Long, val flags: Int)
+            val pendingVideoSamples = mutableListOf<PendingSample>()
+            val pendingAudioSamples = mutableListOf<PendingSample>()
+
+            fun makeSampleInfo(data: ByteArray, ptsUs: Long, flags: Int): android.media.MediaCodec.BufferInfo =
+                android.media.MediaCodec.BufferInfo().apply { set(0, data.size, ptsUs, flags) }
+
+            fun maybeStartMuxer() {
+                if (!muxerStarted && muxerVideoTrack >= 0 &&
+                    (muxerAudioTrack >= 0 || audioEncoder == null)) {
+                    mux.start()
+                    muxerStarted = true
+                    // Flush everything buffered while we were waiting for the
+                    // second track's format.
+                    for (s in pendingVideoSamples) {
+                        mux.writeSampleData(muxerVideoTrack,
+                            java.nio.ByteBuffer.wrap(s.data), makeSampleInfo(s.data, s.ptsUs, s.flags))
+                    }
+                    pendingVideoSamples.clear()
+                    if (muxerAudioTrack >= 0) {
+                        for (s in pendingAudioSamples) {
+                            mux.writeSampleData(muxerAudioTrack,
+                                java.nio.ByteBuffer.wrap(s.data), makeSampleInfo(s.data, s.ptsUs, s.flags))
+                        }
+                        pendingAudioSamples.clear()
+                    }
+                    WepWawetLogger.proxy("$TAG: muxer started",
+                        "video_track" to muxerVideoTrack,
+                        "audio_track" to muxerAudioTrack,
+                        "buffered_video_flushed" to true)
+                }
+            }
+
+            fun writeOrBufferVideo(data: ByteArray, ptsUs: Long, flags: Int) {
+                if (muxerStarted) {
+                    mux.writeSampleData(muxerVideoTrack,
+                        java.nio.ByteBuffer.wrap(data), makeSampleInfo(data, ptsUs, flags))
+                } else {
+                    pendingVideoSamples.add(PendingSample(data, ptsUs, flags))
+                }
+            }
+
+            fun writeOrBufferAudio(data: ByteArray, ptsUs: Long, flags: Int) {
+                if (muxerStarted && muxerAudioTrack >= 0) {
+                    mux.writeSampleData(muxerAudioTrack,
+                        java.nio.ByteBuffer.wrap(data), makeSampleInfo(data, ptsUs, flags))
+                } else if (muxerAudioTrack >= 0) {
+                    pendingAudioSamples.add(PendingSample(data, ptsUs, flags))
+                }
+            }
+
+            while (!(videoAllEncoded && (audioEncoder == null || audioAllEncoded))) {
+                // ================= VIDEO PHASE =================
+                if (!videoAllExtracted) {
+                    val inputBufferIndex = vDec.dequeueInputBuffer(TIMEOUT_US)
+                    if (inputBufferIndex >= 0) {
+                        val inputBuffer = vDec.getInputBuffer(inputBufferIndex)!!
+                        val sampleSize = extractor.readSampleData(inputBuffer, 0)
+                        if (sampleSize < 0) {
+                            vDec.queueInputBuffer(inputBufferIndex, 0, 0, 0,
+                                android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            videoAllExtracted = true
+                        } else {
+                            val sampleTime = extractor.sampleTime
+                            vDec.queueInputBuffer(inputBufferIndex, 0, sampleSize, sampleTime, 0)
+                            extractor.advance()
+                        }
+                    }
+                }
+
+                if (!videoAllDecoded) {
+                    if (pendingVideoDecoded < 0) {
+                        val outputBufferIndex = vDec.dequeueOutputBuffer(info, TIMEOUT_US)
+                        if (outputBufferIndex >= 0) {
+                            if (info.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                                videoAllDecoded = true
+                                vEnc.signalEndOfInputStream()
+                                vDec.releaseOutputBuffer(outputBufferIndex, false)
+                            } else {
+                                // Hold the frame until the encoder can accept it.
+                                pendingVideoDecoded = outputBufferIndex
+                            }
+                        }
+                    }
+                    if (pendingVideoDecoded >= 0) {
+                        val encoderInputIndex = vEnc.dequeueInputBuffer(TIMEOUT_US)
+                        if (encoderInputIndex >= 0) {
+                            // v0.5.32 (H6 fix): use the Image API (getOutputImage /
+                            // getInputImage) to copy YUV planes — raw ByteBuffer
+                            // copies scramble chroma when the decoder and encoder
+                            // use different YUV420 layouts (green tint / swapped U/V).
+                            // v0.7.4: the raw-byte fallback is no longer nested
+                            // inside the Image!=null branch, so codecs without
+                            // Image support still get their frames through.
+                            val decodedImage = vDec.getOutputImage(pendingVideoDecoded)
+                            val encoderImage = vEnc.getInputImage(encoderInputIndex)
+                            if (decodedImage != null && encoderImage != null) {
+                                copyYuv420Image(decodedImage, encoderImage, width, height)
+                                // Pass the encoder input buffer capacity as the
+                                // size — the full YUV420 frame per the encoder's
+                                // own layout (padding rows are zeroed by
+                                // copyYuv420Image so no uninitialized bytes are
+                                // ever read).
+                                val encoderBuf = vEnc.getInputBuffer(encoderInputIndex)
                                 val expectedSize = encoderBuf?.capacity() ?: info.size
-                                videoEncoder.queueInputBuffer(
+                                vEnc.queueInputBuffer(
                                     encoderInputIndex, 0, expectedSize,
                                     info.presentationTimeUs, 0,
                                 )
                             } else {
-                                // Fallback: rare codec that doesn't expose
-                                // Image API for input — use raw ByteBuffer
-                                // copy (the pre-H6-fix behavior).
-                                val decodedBuffer = videoDecoder.getOutputBuffer(outputBufferIndex)
-                                val rawEncoderInput = videoEncoder.getInputBuffer(encoderInputIndex)
+                                // Fallback: raw ByteBuffer copy (pre-H6 behavior).
+                                val decodedBuffer = vDec.getOutputBuffer(pendingVideoDecoded)
+                                val rawEncoderInput = vEnc.getInputBuffer(encoderInputIndex)
                                 if (decodedBuffer != null && rawEncoderInput != null) {
                                     val chunkSize = minOf(info.size, rawEncoderInput.capacity())
                                     decodedBuffer.position(info.offset)
                                     decodedBuffer.limit(info.offset + chunkSize)
                                     rawEncoderInput.clear()
                                     rawEncoderInput.put(decodedBuffer)
-                                    videoEncoder.queueInputBuffer(
+                                    vEnc.queueInputBuffer(
                                         encoderInputIndex, 0, chunkSize,
                                         info.presentationTimeUs, 0,
                                     )
                                 }
                             }
+                            vDec.releaseOutputBuffer(pendingVideoDecoded, false)
+                            pendingVideoDecoded = -1
                         }
+                        // else: encoder busy — keep the decoded frame pending
+                        // and retry next iteration (v0.7.4: no frame drops).
                     }
-                    videoDecoder.releaseOutputBuffer(outputBufferIndex, false)
                 }
-            }
 
-            // === Always drain encoder output, even after decoder EOS ===
-            // v0.5.32 (C1 fix): Previously this drain was INSIDE the
-            // `if (!allDecoded)` block, so once the decoder hit EOS
-            // (`allDecoded = true` + `signalEndOfInputStream()`), the
-            // entire block — including the encoder drain — was skipped on
-            // every subsequent iteration. The encoder's final EOS-flagged
-            // output buffer was never drained, `allEncoded` never became
-            // true, and the loop spun forever burning a CPU core.
-            //
-            // Per Android MediaCodec docs: "Once the client reaches the end
-            // of the input data it signals the end of the input stream…
-            // The codec will continue to return output buffers until it
-            // eventually signals the end of the output stream" — so we
-            // MUST keep calling dequeueOutputBuffer on the encoder until
-            // we see BUFFER_FLAG_END_OF_STREAM.
-            val encoderOutputIndex = videoEncoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
-            if (encoderOutputIndex >= 0) {
-                if (bufferInfo.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                    allEncoded = true
-                } else {
-                    val encodedBuffer = videoEncoder.getOutputBuffer(encoderOutputIndex)!!
-                    muxer.writeSampleData(muxerVideoTrack, encodedBuffer, bufferInfo)
-                    videoFrameCount++
+                // === Always drain video encoder output, even after decoder EOS ===
+                // (v0.5.32 C1 fix — see git history; without this the loop spun
+                // forever after signalEndOfInputStream.)
+                val encOut = vEnc.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
+                when (encOut) {
+                    android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        // v0.7.4 CRITICAL: add the track with the ENCODER'S
+                        // OUTPUT format — this is the only place the codec-
+                        // specific data (SPS/PPS for H.264/H.265) is available.
+                        if (muxerVideoTrack < 0) {
+                            muxerVideoTrack = mux.addTrack(vEnc.outputFormat)
+                            WepWawetLogger.proxy("$TAG: video track added to muxer (with CSD)",
+                                "track_index" to muxerVideoTrack,
+                                "format_keys" to vEnc.outputFormat.keys().sorted().joinToString(","))
+                        }
+                        maybeStartMuxer()
+                    }
+                    android.media.MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> {
+                        // No-op on API 21+ when using getOutputBuffer(int).
+                    }
                 }
-                videoEncoder.releaseOutputBuffer(encoderOutputIndex, false)
-            }
-        }
+                if (encOut >= 0) {
+                    val isEos = bufferInfo.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                    val isCsd = bufferInfo.flags and android.media.MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
+                    // v0.7.4: write the sample FIRST and only then flag EOS —
+                    // an EOS buffer MAY still carry the final sample's payload
+                    // (the old if/else dropped it when both were set).
+                    if (!isCsd && bufferInfo.size > 0) {
+                        // v0.7.4: CODEC_CONFIG buffers are skipped — their data
+                        // (SPS/PPS) is already conveyed via the output format
+                        // above. Writing them as samples corrupted the old output.
+                        val encBuffer = vEnc.getOutputBuffer(encOut)!!
+                        encBuffer.position(bufferInfo.offset)
+                        encBuffer.limit(bufferInfo.offset + bufferInfo.size)
+                        val data = ByteArray(bufferInfo.size)
+                        encBuffer.get(data)
+                        writeOrBufferVideo(data, bufferInfo.presentationTimeUs, bufferInfo.flags)
+                        videoFrameCount++
+                    }
+                    if (isEos) {
+                        videoAllEncoded = true
+                    }
+                    vEnc.releaseOutputBuffer(encOut, false)
+                }
 
-        WepWawetLogger.proxy("$TAG: video transcoded",
-            "video_frames" to videoFrameCount)
+                // ================= AUDIO PHASE =================
+                if (audioDecoder != null && audioEncoder != null && audioExtractor != null) {
+                    val aDec = audioDecoder!!
+                    val aEnc = audioEncoder!!
+                    val aExt = audioExtractor!!
 
-        // v0.6.0 (parity §8-2): Transcode audio if audio codecs were set up successfully
-        if (audioDecoder != null && audioEncoder != null && muxerAudioTrack >= 0 && audioInputFormat != null) {
-            try {
-                // Extract audio from the OTHER track (we already selected video track above)
-                // Use a second MediaExtractor since the first one's selected track is video
-                val audioExtractor = android.media.MediaExtractor()
-                audioExtractor.setDataSource(inputFile.absolutePath)
-                audioExtractor.selectTrack(audioTrackIndex)
-
-                val audioInfo = android.media.MediaCodec.BufferInfo()
-                var audioAllExtracted = false
-                var audioAllDecoded = false
-                var audioAllEncoded = false
-                var audioFrameCount = 0
-                val audioTimeoutUs = 10000L
-
-                while (!audioAllEncoded) {
-                    // Extract + decode audio
                     if (!audioAllExtracted) {
-                        val audioInputIndex = audioDecoder.dequeueInputBuffer(audioTimeoutUs)
+                        val audioInputIndex = aDec.dequeueInputBuffer(TIMEOUT_US)
                         if (audioInputIndex >= 0) {
-                            val audioInputBuffer = audioDecoder.getInputBuffer(audioInputIndex)!!
-                            val audioSampleSize = audioExtractor.readSampleData(audioInputBuffer, 0)
+                            val audioInputBuffer = aDec.getInputBuffer(audioInputIndex)!!
+                            val audioSampleSize = aExt.readSampleData(audioInputBuffer, 0)
                             if (audioSampleSize < 0) {
-                                audioDecoder.queueInputBuffer(audioInputIndex, 0, 0, 0,
+                                aDec.queueInputBuffer(audioInputIndex, 0, 0, 0,
                                     android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                                 audioAllExtracted = true
                             } else {
-                                val audioSampleTime = audioExtractor.sampleTime
-                                audioDecoder.queueInputBuffer(audioInputIndex, 0, audioSampleSize, audioSampleTime, 0)
-                                audioExtractor.advance()
+                                val audioSampleTime = aExt.sampleTime
+                                aDec.queueInputBuffer(audioInputIndex, 0, audioSampleSize, audioSampleTime, 0)
+                                aExt.advance()
                             }
                         }
                     }
 
-                    // Decode → encode audio
                     if (!audioAllDecoded) {
-                        val audioOutputIndex = audioDecoder.dequeueOutputBuffer(audioInfo, audioTimeoutUs)
-                        if (audioOutputIndex >= 0) {
-                            if (audioInfo.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                                audioAllDecoded = true
-                                audioEncoder.signalEndOfInputStream()
-                            } else {
+                        if (pendingAudioDecoded < 0) {
+                            val audioOutputIndex = aDec.dequeueOutputBuffer(audioInfo, TIMEOUT_US)
+                            if (audioOutputIndex >= 0) {
+                                if (audioInfo.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                                    audioAllDecoded = true
+                                    aEnc.signalEndOfInputStream()
+                                    aDec.releaseOutputBuffer(audioOutputIndex, false)
+                                } else {
+                                    pendingAudioDecoded = audioOutputIndex
+                                }
+                            }
+                        }
+                        if (pendingAudioDecoded >= 0) {
+                            val encInputIdx = aEnc.dequeueInputBuffer(TIMEOUT_US)
+                            if (encInputIdx >= 0) {
                                 // Copy decoded audio buffer to encoder input
-                                val decodedAudioBuffer = audioDecoder.getOutputBuffer(audioOutputIndex)
-                                val encInputIdx = audioEncoder.dequeueInputBuffer(audioTimeoutUs)
-                                if (encInputIdx >= 0 && decodedAudioBuffer != null) {
-                                    val encInputBuf = audioEncoder.getInputBuffer(encInputIdx)!!
+                                // (v0.7.4: pending-buffer pattern — never dropped).
+                                val decodedAudioBuffer = aDec.getOutputBuffer(pendingAudioDecoded)
+                                val encInputBuf = aEnc.getInputBuffer(encInputIdx)
+                                if (decodedAudioBuffer != null && encInputBuf != null) {
                                     val chunkSize = minOf(audioInfo.size, encInputBuf.capacity())
                                     decodedAudioBuffer.position(audioInfo.offset)
                                     decodedAudioBuffer.limit(audioInfo.offset + chunkSize)
                                     encInputBuf.clear()
                                     encInputBuf.put(decodedAudioBuffer)
-                                    audioEncoder.queueInputBuffer(encInputIdx, 0, chunkSize, audioInfo.presentationTimeUs, 0)
+                                    aEnc.queueInputBuffer(encInputIdx, 0, chunkSize, audioInfo.presentationTimeUs, 0)
                                 }
+                                aDec.releaseOutputBuffer(pendingAudioDecoded, false)
+                                pendingAudioDecoded = -1
                             }
-                            audioDecoder.releaseOutputBuffer(audioOutputIndex, false)
                         }
                     }
 
                     // Drain audio encoder output (always — even after decoder EOS)
-                    val audioEncOutIdx = audioEncoder.dequeueOutputBuffer(audioInfo, audioTimeoutUs)
-                    if (audioEncOutIdx >= 0) {
-                        if (audioInfo.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                            audioAllEncoded = true
-                        } else {
-                            val audioEncBuf = audioEncoder.getOutputBuffer(audioEncOutIdx)!!
-                            muxer.writeSampleData(muxerAudioTrack, audioEncBuf, audioInfo)
+                    val audioEncOut = aEnc.dequeueOutputBuffer(audioEncInfo, TIMEOUT_US)
+                    when (audioEncOut) {
+                        android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            if (muxerAudioTrack < 0) {
+                                muxerAudioTrack = mux.addTrack(aEnc.outputFormat)
+                                WepWawetLogger.proxy("$TAG: audio track added to muxer (with CSD)",
+                                    "track_index" to muxerAudioTrack)
+                            }
+                            maybeStartMuxer()
+                        }
+                        android.media.MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> {
+                            // No-op on API 21+.
+                        }
+                    }
+                    if (audioEncOut >= 0) {
+                        val isEos = audioEncInfo.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                        val isCsd = audioEncInfo.flags and android.media.MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
+                        // v0.7.4: write-then-flag-EOS (see the video drain above).
+                        if (!isCsd && audioEncInfo.size > 0) {
+                            val audioEncBuf = aEnc.getOutputBuffer(audioEncOut)!!
+                            audioEncBuf.position(audioEncInfo.offset)
+                            audioEncBuf.limit(audioEncInfo.offset + audioEncInfo.size)
+                            val data = ByteArray(audioEncInfo.size)
+                            audioEncBuf.get(data)
+                            writeOrBufferAudio(data, audioEncInfo.presentationTimeUs, audioEncInfo.flags)
                             audioFrameCount++
                         }
-                        audioEncoder.releaseOutputBuffer(audioEncOutIdx, false)
+                        if (isEos) {
+                            audioAllEncoded = true
+                        }
+                        aEnc.releaseOutputBuffer(audioEncOut, false)
                     }
                 }
+            }
 
-                audioExtractor.release()
-                WepWawetLogger.proxy("$TAG: audio transcoded",
-                    "audio_frames" to audioFrameCount)
-            } catch (e: Exception) {
-                WepWawetLogger.proxyWarn("$TAG: audio transcode loop failed — continuing with video-only",
-                    "exception" to e.javaClass.name, "message" to (e.message ?: ""))
+            // Post-loop safety: if the audio codecs never produced a format
+            // change (e.g. an empty audio track), start the muxer video-only
+            // rather than losing the whole transcode.
+            maybeStartMuxer()
+            if (!muxerStarted && muxerVideoTrack >= 0) {
+                mux.start()
+                muxerStarted = true
+                for (s in pendingVideoSamples) {
+                    mux.writeSampleData(muxerVideoTrack,
+                        java.nio.ByteBuffer.wrap(s.data), makeSampleInfo(s.data, s.ptsUs, s.flags))
+                }
+                pendingVideoSamples.clear()
+                WepWawetLogger.proxyWarn("$TAG: muxer started video-only (audio format never arrived)")
+            }
+
+            if (videoFrameCount == 0 && pendingVideoSamples.isEmpty()) {
+                WepWawetLogger.proxyError("$TAG: transcode produced ZERO video frames — failing",
+                    "input" to inputFile.name)
+                return false
+            }
+
+            mux.stop()
+            muxerStarted = false
+            success = true
+
+            WepWawetLogger.proxy("$TAG: video transcoded",
+                "video_frames" to videoFrameCount,
+                "audio_frames" to audioFrameCount,
+                "audio_transcoded" to (audioDecoder != null))
+
+            WepWawetLogger.proxy("$TAG.transcodeToMp4H264 SUCCESS",
+                "input" to inputFile.name,
+                "input_size" to inputFile.length(),
+                "output" to outputFile.name,
+                "output_size" to outputFile.length(),
+                "video_frames" to videoFrameCount,
+                "audio_transcoded" to (audioDecoder != null))
+
+            return true
+        } catch (e: Exception) {
+            WepWawetLogger.proxyError("$TAG: transcode failed",
+                "exception" to e.javaClass.name,
+                "message" to (e.message ?: ""),
+                "input" to inputFile.name)
+            return false
+        } finally {
+            // v0.7.4: release EVERYTHING on every exit path (was success-only).
+            // stop() before release() where the codec was started; stop() on an
+            // unstarted/errored codec throws, so it's wrapped separately.
+            runCatching { videoDecoder?.stop() }
+            runCatching { videoDecoder?.release() }
+            runCatching { videoEncoder?.stop() }
+            runCatching { videoEncoder?.release() }
+            runCatching { audioDecoder?.stop() }
+            runCatching { audioDecoder?.release() }
+            runCatching { audioEncoder?.stop() }
+            runCatching { audioEncoder?.release() }
+            runCatching { audioExtractor?.release() }
+            if (muxerStarted) {
+                runCatching { muxer?.stop() }
+            }
+            runCatching { muxer?.release() }
+            runCatching { extractor.release() }
+            // Remove the partial output file on failure so a corrupt MP4 is
+            // never shipped to the phone.
+            if (!success) {
+                runCatching { outputFile.delete() }
             }
         }
-
-        // Clean up — v0.6.0: also release audio codecs if present
-        try { videoDecoder.stop() } catch (_: Exception) {}
-        try { videoDecoder.release() } catch (_: Exception) {}
-        try { videoEncoder.stop() } catch (_: Exception) {}
-        try { videoEncoder.release() } catch (_: Exception) {}
-        try { audioDecoder?.stop() } catch (_: Exception) {}
-        try { audioDecoder?.release() } catch (_: Exception) {}
-        try { audioEncoder?.stop() } catch (_: Exception) {}
-        try { audioEncoder?.release() } catch (_: Exception) {}
-        try { muxer.stop() } catch (_: Exception) {}
-        try { muxer.release() } catch (_: Exception) {}
-        try { extractor.release() } catch (_: Exception) {}
-
-        WepWawetLogger.proxy("$TAG.transcodeToMp4H264 SUCCESS",
-            "input" to inputFile.name,
-            "input_size" to inputFile.length(),
-            "output" to outputFile.name,
-            "output_size" to outputFile.length(),
-            "video_frames" to videoFrameCount,
-            "audio_transcoded" to (audioDecoder != null))
-
-        return true
     }
 
     /**
@@ -608,6 +775,37 @@ object VideoTranscoder {
         copyPlane(srcPlanes[1], dstPlanes[1], width / 2, height / 2)
         // V plane (quarter resolution)
         copyPlane(srcPlanes[2], dstPlanes[2], width / 2, height / 2)
+        // v0.7.4: zero the destination planes' stride padding. The transcode
+        // loop passes the FULL input buffer size to queueInputBuffer (the size
+        // the encoder expects for its own layout), and some encoders read the
+        // padding rows — leaving them uninitialized meant the encoder could
+        // sample garbage (theoretical chroma artifacts). Zeroing is cheap (the
+        // padding is usually zero-width for aligned resolutions).
+        zeroPlanePadding(dstPlanes[0], width, height)
+        zeroPlanePadding(dstPlanes[1], (width + 1) / 2, (height + 1) / 2)
+        zeroPlanePadding(dstPlanes[2], (width + 1) / 2, (height + 1) / 2)
+    }
+
+    /**
+     * v0.7.4: zero the row-stride padding of one destination plane (the bytes
+     * between each row's visible pixels and the next row's start, plus the
+     * tail after the last row).
+     */
+    private fun zeroPlanePadding(plane: android.media.Image.Plane, width: Int, height: Int) {
+        val rowStride = plane.rowStride
+        val pixelStride = plane.pixelStride
+        val buffer = plane.buffer
+        val visibleBytes = (width - 1) * pixelStride + 1
+        if (rowStride <= visibleBytes) return  // no padding
+        val capacity = buffer.capacity()
+        for (row in 0 until height) {
+            var pos = row * rowStride + visibleBytes
+            val rowEnd = (row + 1) * rowStride
+            while (pos < rowEnd && pos < capacity) {
+                buffer.put(pos, 0)
+                pos++
+            }
+        }
     }
 
     /**

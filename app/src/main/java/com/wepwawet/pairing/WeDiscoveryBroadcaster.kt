@@ -135,6 +135,13 @@ class WeDiscoveryBroadcaster(private val context: Context) {
             socket.soTimeout = 1000  // wake up every 1s to check running
 
             while (running) {
+                // v0.7.4: the loop used to spend up to 1s blocking in receive()
+                // PLUS the fixed 1.3s sleep — an actual broadcast cadence of
+                // ~2.3s, not the intended ~1.3s (verified from Wireshark capture
+                // of a real PC). We now measure the elapsed time and sleep only
+                // the REMAINDER of the interval so the ping goes out every
+                // ~BROADCAST_INTERVAL_MS regardless of how long receive() blocked.
+                val iterationStart = System.currentTimeMillis()
                 try {
                     // Broadcast to multicast group only — multicast is the correct
                     // transport for service discovery. Subnet broadcast (255.255.255.255)
@@ -167,7 +174,13 @@ class WeDiscoveryBroadcaster(private val context: Context) {
                     // Normal — no reply, keep broadcasting
                 }
 
-                Thread.sleep(BROADCAST_INTERVAL_MS)
+                val elapsed = System.currentTimeMillis() - iterationStart
+                val sleepTime = (BROADCAST_INTERVAL_MS - elapsed).coerceAtLeast(0L)
+                try {
+                    Thread.sleep(sleepTime)
+                } catch (_: InterruptedException) {
+                    return
+                }
             }
             // NOTE: socket.close() moved to finally block (audit M1 fix below).
         } catch (e: Exception) {

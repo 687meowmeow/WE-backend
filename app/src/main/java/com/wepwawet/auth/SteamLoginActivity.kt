@@ -197,11 +197,23 @@ class SteamLoginActivity : ComponentActivity() {
         )
 
         // Collect all cookies into a single "Cookie:" header value (semicolons + spaces)
+        // v0.7.4: dedupe by cookie NAME (first occurrence wins) instead of by the
+        // full "k=v" string. Steam sets `sessionid` (and a few others) with
+        // DIFFERENT values on steamcommunity.com / steampowered.com /
+        // login.steampowered.com — the old `.distinct()` kept ALL of them, and a
+        // Cookie header with duplicate names is ambiguous (servers pick per
+        // their own rules). Keeping the first occurrence (steamcommunity.com is
+        // queried first and is the goto target) makes the header deterministic.
+        val seenCookieNames = mutableSetOf<String>()
         val allCookies = domains
             .mapNotNull { cookieManager.getCookie(it) }
             .flatMap { it.split(";").map { c -> c.trim() } }
             .filter { it.isNotEmpty() }
-            .distinct()
+            .filter { pair ->
+                val eq = pair.indexOf('=')
+                val name = if (eq > 0) pair.substring(0, eq).trim() else pair
+                seenCookieNames.add(name)
+            }
             .joinToString("; ")
 
         // Parse the relevant cookies individually for inspection / logging
@@ -283,6 +295,19 @@ class SteamLoginActivity : ComponentActivity() {
         } catch (e: Exception) {
             WepWawetLogger.steamDebug("SteamLogin: flush cookies failed",
                 "exception" to e.javaClass.name)
+        }
+        // v0.7.4: destroy the WebView. It holds strong references to the
+        // Activity context (WebViewClient, the native peer) — without an
+        // explicit destroy() the entire Activity leaked on every recreation.
+        // Guarded with isInitialized because the early-return path in onCreate
+        // (already-logged-in) never assigns the lateinit field.
+        if (this::webView.isInitialized) {
+            runCatching {
+                webView.stopLoading()
+                webView.loadUrl("about:blank")
+                webView.removeAllViews()
+                webView.destroy()
+            }
         }
         super.onDestroy()
         WepWawetLogger.lifecycle("SteamLoginActivity.onDestroy")

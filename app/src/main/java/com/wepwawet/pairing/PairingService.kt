@@ -125,10 +125,11 @@ class PairingService : Service() {
             // v0.7.0: Also check SharedPreferences for persisted pairing state —
             // the app may have been killed/restarted, and the phone hasn't
             // reconnected yet, but the UI should still show "paired".
-            if (pairingServer != null && pairedDeviceName != null) return true
-            // Check if we were previously paired (persisted state)
-            // This is a "soft" paired state — the TCP connection needs to be
-            // re-established, but the UI can show the paired device name.
+            //
+            // v0.7.4: the old first check (`pairingServer != null &&
+            // pairedDeviceName != null → return true`) was dead code — the
+            // return below already covers that case (pairedDeviceName != null →
+            // true). Simplified to the single expression; truth table unchanged.
             return pairedDeviceName != null ||
                 (appContext?.let { loadPairedDevice(it) } != null)
         }

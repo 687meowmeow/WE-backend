@@ -126,16 +126,19 @@ class SteamApiService(
     /**
      * Persist a single creator name to SharedPreferences (fire-and-forget on
      * IO dispatcher — never blocks the UI).
+     *
+     * v0.7.4: launched on the shared WepWawetApplication.appScope instead of a
+     * brand-new CoroutineScope(SupervisorJob()) per call — the old code leaked a
+     * scope (and its Job) on every invocation. Also re-throws CancellationException
+     * so cancellation propagates instead of being swallowed.
      */
     private fun persistCreatorName(steamId: String, name: String) {
         val prefs = creatorNamesPrefs ?: return
-        // Use a private CoroutineScope (not GlobalScope) — GlobalScope is
-        // deprecated for application-level use because it can leak across
-        // Activity lifecycles. A SupervisorScope with a single Job is the
-        // recommended pattern for fire-and-forget background work.
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+        com.wepwawet.WepWawetApplication.appScope.launch {
             try {
                 prefs.edit().putString(steamId, name).apply()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 WepWawetLogger.proxyWarn("persistCreatorName failed",
                     "steam_id" to steamId, "exception" to e.javaClass.name)
@@ -220,6 +223,10 @@ class SteamApiService(
                             "code" to response.code,
                             "chunk_size" to chunk.size,
                         )
+                        // v0.7.4: close the response so the connection returns to
+                        // OkHttp's pool (the body was neither consumed nor closed
+                        // on this path — under sustained 429s the pool exhausts).
+                        response.close()
                         return@withContext Result.failure(
                             SteamApiException.HttpError(response.code, "GetPublishedFileDetails")
                         )
@@ -244,6 +251,12 @@ class SteamApiService(
                         "chunk_size" to chunk.size,
                         "returned" to details.size,
                         "result_code" to parsed.response.result)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // v0.7.4: coroutine cancellation MUST propagate — the old
+                    // catch (e: Exception) converted it into Result.failure,
+                    // breaking structured concurrency (a cancelled caller kept
+                    // seeing "normal" failures and the loop kept making requests).
+                    throw e
                 } catch (e: Exception) {
                     WepWawetLogger.proxyWarn("getPublishedFileDetails chunk failed",
                         "chunk_size" to chunk.size,
@@ -379,7 +392,7 @@ class SteamApiService(
             if (!cursor.isNullOrBlank()) {
                 urlBuilder.append("&cursor=").append(URLEncoder.encode(cursor, "UTF-8"))
             }
-            urlBuilder.append("&numperpage=").append(PAGE_SIZE)
+            urlBuilder.append("&numperpage=").append(pageSize)
             urlBuilder.append("&appid=").append(WE_APP_ID)
             urlBuilder.append("&creator_appid=").append(WE_APP_ID)
             // Required tags — each tag as a separate repeated field
@@ -400,7 +413,13 @@ class SteamApiService(
                     .append("%5D=").append(MOBILE_COMPAT_KVS_VALUE)
             }
             // Trend days (only for RankedByTrend)
-            if (sort.queryType == 3 && sort.trendDays > 0) {  // queryType 3 = RankedByTrend; days range [1,7] per Steam docs
+            // v0.7.4: gate on the EFFECTIVE query type, not sort.queryType. When
+            // a text search overrides query_type to RankedByTextSearch (12), the
+            // old check still appended `&days=` if the browse sort happened to be
+            // a trend sort — sending a trend-days parameter on a text-search
+            // query. (Steam's docs: days is only meaningful for RankedByTrend,
+            // range [1,7].)
+            if (effectiveQueryType == 3 && sort.trendDays > 0) {  // queryType 3 = RankedByTrend; days range [1,7] per Steam docs
                 urlBuilder.append("&days=").append(sort.trendDays)
             }
             // Search text
@@ -474,6 +493,9 @@ class SteamApiService(
             WepWawetLogger.steam("queryFiles done",
                 "items" to items.size, "total" to total, "page" to page)
             Result.success(items)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // v0.7.4: re-throw — see getPublishedFileDetails for rationale.
+            throw e
         } catch (e: Exception) {
             WepWawetLogger.proxyWarn("queryFiles failed",
                 "exception" to e.javaClass.name, "message" to (e.message.orEmpty()))
@@ -549,7 +571,7 @@ class SteamApiService(
             queryType = queryType,
             page = page,
             cursor = cursor,
-            numPerPage = PAGE_SIZE,
+            numPerPage = pageSize,
             requiredTags = tags,
             excludedTags = allExcludedTags,
             matchAllTags = true,
@@ -614,7 +636,7 @@ class SteamApiService(
             steamId = steamId,
             appId = WE_APP_ID.toInt(),
             page = page,
-            numPerPage = PAGE_SIZE,
+            numPerPage = pageSize,
             requiredTags = tags,
             excludedTags = allExcludedTags,
             requiredKvTags = requiredKvTags,
@@ -768,6 +790,9 @@ class SteamApiService(
                 if (!response.isSuccessful) {
                     WepWawetLogger.proxyWarn("resolveCreatorName HTTP error",
                         "code" to response.code, "steam_id" to steamId)
+                    // v0.7.4: close the response so the connection returns to
+                    // OkHttp's pool (see getPublishedFileDetails for rationale).
+                    response.close()
                     // Fall back to the raw ID — UI can still show something.
                     // v0.5.11-alpha: DON'T cache the raw ID on HTTP error
                     // (was previously pinned in the in-memory cache, which
@@ -801,6 +826,9 @@ class SteamApiService(
                     "resolved" to resolved,
                     "found_in_html" to (name != null))
                 Result.success(resolved)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // v0.7.4: re-throw — see getPublishedFileDetails for rationale.
+                throw e
             } catch (e: Exception) {
                 WepWawetLogger.proxyWarn("resolveCreatorName failed",
                     "steam_id" to steamId,
@@ -872,7 +900,7 @@ class SteamApiService(
             }
 
             val allResults = mutableMapOf<String, String>()
-            for (chunk in steamIds.chunked(100)) {  // Steam max 100 IDs per request
+            for ((chunkIdx, chunk) in steamIds.chunked(100).withIndex()) {  // Steam max 100 IDs per request
                 try {
                     val url = "$BASE_URL/ISteamUser/GetPlayerSummaries/v2/" +
                         "?key=${java.net.URLEncoder.encode(key, "UTF-8")}" +
@@ -919,13 +947,23 @@ class SteamApiService(
                     WepWawetLogger.steam("getPlayerSummaries chunk done",
                         "chunk_size" to chunk.size, "resolved" to playersArray.size(),
                         "cache_size" to creatorNameCache.size)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // v0.7.4: re-throw. The old catch (e: Exception) ALSO swallowed
+                    // the CancellationException thrown by the delay(100) below when
+                    // the calling coroutine was cancelled — the loop then kept
+                    // making HTTP requests + sleeping for a cancelled caller.
+                    throw e
                 } catch (e: Exception) {
                     WepWawetLogger.proxyWarn("getPlayerSummaries chunk failed",
                         "exception" to e.javaClass.name, "message" to (e.message ?: ""))
                 }
                 // Throttle between chunks to stay under Steam's rate limit
                 // (~10 req/sec — we sleep 100ms between chunks to be safe).
-                kotlinx.coroutines.delay(100)
+                // v0.7.4: only BETWEEN chunks — the old trailing delay added
+                // a pointless 100ms after the LAST request too.
+                if (chunkIdx < (steamIds.chunked(100).size - 1)) {
+                    kotlinx.coroutines.delay(100)
+                }
             }
             Result.success(allResults)
         }
@@ -991,7 +1029,7 @@ class SteamApiService(
                 append("$BROWSE_URL?appid=$WE_APP_ID")
                 append("&browsesort=${sort.browseParam}")
                 append("&p=$page")
-                append("&numperpage=$PAGE_SIZE")
+                append("&numperpage=$pageSize")
                 // trend_days — use the Sort enum's trendDays field
                 if (sort.browseParam == "trend" && sort.trendDays > 0) {
                     append("&days=${sort.trendDays}")
@@ -1017,6 +1055,9 @@ class SteamApiService(
                 }
             }
             fetchIdsFromUrl(url, page)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // v0.7.4: re-throw — see getPublishedFileDetails for rationale.
+            throw e
         } catch (e: Exception) {
             WepWawetLogger.proxyWarn("fetchWorkshopIds failed",
                 "exception" to e.javaClass.name)
@@ -1042,9 +1083,12 @@ class SteamApiService(
                 append("?appid=$WE_APP_ID")
                 append("&browsesort=toprated")
                 append("&p=$page")
-                append("&numperpage=$PAGE_SIZE")
+                append("&numperpage=$pageSize")
             }
             fetchIdsFromUrl(url, page)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // v0.7.4: re-throw — see getPublishedFileDetails for rationale.
+            throw e
         } catch (e: Exception) {
             WepWawetLogger.proxyWarn("fetchCreatorWorkshopIds failed",
                 "steam_id" to steamId,
@@ -1070,6 +1114,9 @@ class SteamApiService(
                 if (!response.isSuccessful) {
                     WepWawetLogger.proxyWarn("fetchIdsFromUrl HTTP error",
                         "code" to response.code, "url" to url)
+                    // v0.7.4: close the response so the connection returns to
+                    // OkHttp's pool (see getPublishedFileDetails for rationale).
+                    response.close()
                     return@withContext Result.failure(
                         SteamApiException.HttpError(response.code, "browseWorkshop")
                     )
@@ -1080,6 +1127,9 @@ class SteamApiService(
                 WepWawetLogger.steamDebug("fetchIdsFromUrl parsed",
                     "ids_found" to ids.size, "page" to page)
                 Result.success(ids)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // v0.7.4: re-throw — see getPublishedFileDetails for rationale.
+                throw e
             } catch (e: Exception) {
                 WepWawetLogger.proxyWarn("fetchIdsFromUrl failed",
                     "exception" to e.javaClass.name)
@@ -1218,7 +1268,32 @@ class SteamApiService(
     const val MOBILE_COMPAT_KVS_VALUE = "3"
         const val WE_APP_ID = 431960L
         const val BATCH_SIZE = 50            // Steam API limit per request
-        const val PAGE_SIZE = 30             // Steam browse HTML page size
+        const val DEFAULT_PAGE_SIZE = 30     // default page size (Settings slider default)
+
+        /**
+         * v0.7.4: RUNTIME-CONFIGURABLE page size — previously a hardcoded
+         * `const val PAGE_SIZE = 30` that completely ignored the "Page size"
+         * slider in Settings (the slider persisted its value but nothing ever
+         * read it). Loaded from the "wepwawet_settings" prefs at app start via
+         * [initPageSize] (called from WepWawetApplication.onCreate) and updated
+         * live via [setPageSize] (called by SettingsScreen when the slider
+         * moves). @Volatile so queries on IO threads always see the latest value.
+         */
+        @Volatile var pageSize: Int = DEFAULT_PAGE_SIZE
+            private set
+
+        /** v0.7.4: apply a new page size (clamped to the slider's 10..100 range). */
+        fun setPageSize(size: Int) {
+            pageSize = size.coerceIn(10, 100)
+        }
+
+        /** v0.7.4: load the persisted page size at app start. */
+        fun initPageSize(context: android.content.Context) {
+            val saved = context.getSharedPreferences(
+                "wepwawet_settings", android.content.Context.MODE_PRIVATE)
+                .getInt("page_size", DEFAULT_PAGE_SIZE)
+            pageSize = saved.coerceIn(10, 100)
+        }
         const val USER_AGENT =
             // v0.5.32 (audit L2): use a DESKTOP Chrome UA instead of a mobile
             // UA so Steam serves the standard desktop HTML layout for
@@ -1338,6 +1413,11 @@ class SteamApiService(
 
                 // Ensure numeric fields that might come as strings are parsed correctly
                 // Gson handles String→Long automatically, but just in case:
+                // v0.7.4: a NON-numeric string (e.g. "unknown") is now REMOVED so
+                // plainGson binds the field's default (0) — previously it was left
+                // in place and the reflection binding threw JsonSyntaxException,
+                // causing the whole item to be silently dropped by the callers'
+                // mapNotNull. Dropping the field keeps the item visible.
                 listOf("subscriptions", "favorited", "views", "lifetime_subscriptions",
                     "lifetime_favorited", "file_size", "time_created", "time_updated",
                     "creator_app_id"
@@ -1346,9 +1426,13 @@ class SteamApiService(
                     if (el != null && el.isJsonPrimitive && el.asJsonPrimitive.isString) {
                         // Convert string number to actual number
                         val strVal = el.asString
-                        strVal.toLongOrNull()?.let { numVal ->
+                        if (strVal.toLongOrNull()?.let { numVal ->
+                                obj.remove(fieldName)
+                                obj.addProperty(fieldName, numVal)
+                                true
+                            } != true) {
+                            // Non-numeric string — strip the field entirely.
                             obj.remove(fieldName)
-                            obj.addProperty(fieldName, numVal)
                         }
                     }
                 }

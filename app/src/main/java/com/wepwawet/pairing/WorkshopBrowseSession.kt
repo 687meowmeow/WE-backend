@@ -134,21 +134,19 @@ object WorkshopBrowseSession {
             // Get credentials
             val username = SteamCredentialsStore.getUsername(context)
             val password = SteamCredentialsStore.getPassword(context)
-            val guardCode = SteamCredentialsStore.getGuardCode(context)
             if (username == null || password == null) {
                 WepWawetLogger.workshopWarn("$TAG: no Steam credentials saved")
                 return false
             }
 
             // Create downloader if not already created (reuse across reconnects)
-            val downloader = this.downloader ?: WorkshopDownloader(username, password, guardCode).also {
+            val downloader = this.downloader ?: WorkshopDownloader(username, password).also {
                 this.downloader = it
             }
 
             // Try to connect
             WepWawetLogger.workshop("$TAG: connecting to Steam for browse session…",
                 "username" to username,
-                "has_guard" to !guardCode.isNullOrBlank(),
             )
             val connected = downloader.connectAndAuthenticate(context)
             if (!connected) {

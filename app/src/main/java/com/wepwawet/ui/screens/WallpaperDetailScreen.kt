@@ -201,6 +201,11 @@ fun WallpaperDetailScreen(
                 WepWawetLogger.workshopWarn("WallpaperDetailScreen: item not found",
                     "id" to itemId)
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // v0.7.4: re-throw coroutine cancellation (the load LaunchedEffect is
+            // cancelled every time the user navigates from item A to item B —
+            // the old catch (e: Exception) logged it as a load failure).
+            throw e
         } catch (e: Exception) {
             errorMessage = e.message ?: "Failed to load wallpaper."
             WepWawetLogger.workshopWarn("WallpaperDetailScreen load failed",

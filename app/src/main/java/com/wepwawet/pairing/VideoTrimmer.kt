@@ -17,9 +17,25 @@ import java.nio.ByteBuffer
  * it's fast (typically <1 second for a 50MB video) and lossless.
  *
  * The trim is keyframe-accurate (not frame-accurate): the start point
- * snaps to the nearest keyframe at or before [startMs]. For most video
- * wallpapers this is fine — the keyframe interval is typically 2-5
- * seconds, so the actual start time is within 2-5s of the requested time.
+ * snaps to the nearest keyframe (sync sample) at or before [startMs]. For
+ * most video wallpapers this is fine — the keyframe interval is typically
+ * 2-5 seconds, so the actual start time is within 2-5s of the requested time.
+ *
+ * v0.7.4 fixes applied to the copy loop:
+ *   1. KEYFRAME SNAP actually happens now. The old loop started writing at
+ *      the FIRST sample with PTS >= startMs regardless of whether it was a
+ *      sync sample — when the trim point fell between keyframes the output
+ *      began with undecodable P/B frames (2-5s of black/garbage). We now
+ *      locate the last sync sample before startMs and start copying there.
+ *   2. PTS re-basing: output timestamps now start at ~0 (old code kept the
+ *      original timestamps, so trimming a 60s video from 30s produced an
+ *      MP4 whose timeline began at 30s — many players showed 30s of black
+ *      at the start).
+ *   3. MediaMuxer is released in a finally block (the old catch path only
+ *      released the extractor — a failed muxer leaked its file handle and
+ *      native resources) and a failed/partial output file is deleted.
+ *   4. Zero-sample outputs (e.g. trim range before the first sample's PTS)
+ *      now fail cleanly instead of leaving a structurally-invalid MP4.
  *
  * If frame-accurate trimming is needed in the future, we'd need to
  * re-encode (decode from the nearest keyframe to [startMs], then encode
@@ -36,7 +52,7 @@ object VideoTrimmer {
      * @param outputFile Output MP4 file (will be overwritten if exists)
      * @param startMs Start time in milliseconds
      * @param endMs End time in milliseconds
-     * @return true on success, false on failure
+     * @return true on success, false on failure (output file removed)
      */
     fun trim(inputFile: File, outputFile: File, startMs: Long, endMs: Long): Boolean {
         if (!inputFile.exists()) {
@@ -67,6 +83,11 @@ object VideoTrimmer {
             "duration_ms" to duration)
 
         val extractor = MediaExtractor()
+        // v0.7.4: muxer reference hoisted so the finally block can release it
+        // on ANY exit path (the old catch path only released the extractor —
+        // a writeSampleData failure leaked the muxer's FD + native resources).
+        var muxer: MediaMuxer? = null
+        var success = false
         return try {
             extractor.setDataSource(inputFile.absolutePath)
 
@@ -86,7 +107,7 @@ object VideoTrimmer {
             }
 
             // Create the MediaMuxer
-            val muxer = MediaMuxer(
+            muxer = MediaMuxer(
                 outputFile.absolutePath,
                 MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4
             )
@@ -100,26 +121,56 @@ object VideoTrimmer {
             }
             muxer.start()
 
-            // Copy samples within the time range
+            // === v0.7.4 fix 1: find the KEYFRAME SNAP POINT ===
+            // Walk forward until the first sample at/after startMs, remembering
+            // the last SYNC sample seen before it — that's the keyframe at (or
+            // just before) the requested start. Copying must begin there so the
+            // decoder has a reference frame.
+            var snapUs = -1L
+            while (true) {
+                val t = extractor.sampleTime
+                if (t < 0 || t >= startMs * 1000) break
+                if (extractor.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
+                    snapUs = t
+                }
+                extractor.advance()
+            }
+            if (snapUs < 0) {
+                // No sync sample before startMs (startMs is near 0, or the file
+                // has no earlier keyframe) — snap to the previous sync sample
+                // relative to startMs, or to the very first sample.
+                extractor.seekTo(startMs * 1000, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                val t = extractor.sampleTime
+                snapUs = if (t >= 0) t else 0L
+            } else {
+                // Rewind to the snap keyframe (SEEK_TO_PREVIOUS_SYNC from a
+                // sync sample lands on that same sample).
+                extractor.seekTo(snapUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            }
+            WepWawetLogger.proxy("$TAG: keyframe snap point selected",
+                "requested_start_ms" to startMs,
+                "snap_us" to snapUs,
+                "snap_ms" to (snapUs / 1000))
+
+            // Copy samples within [snapUs, cappedEnd]. PTS is re-based by snapUs
+            // so the output timeline starts at ~0 (v0.7.4 fix 2).
             val buffer = ByteBuffer.allocate(1024 * 1024) // 1MB buffer
             val bufferInfo = android.media.MediaCodec.BufferInfo()
             var samplesCopied = 0
             var bytesCopied = 0L
+            var firstSampleUs = -1L
 
             while (true) {
                 val sampleTime = extractor.sampleTime
                 if (sampleTime < 0) break // end of stream
 
-                val sampleMs = sampleTime / 1000 // μs → ms
-                if (sampleMs < startMs) {
-                    // Before start — skip this sample
+                // Skip anything before the snap point (e.g. audio samples that
+                // the multi-track seek landed before the video keyframe).
+                if (sampleTime < snapUs) {
                     extractor.advance()
                     continue
                 }
-                if (sampleMs > cappedEnd) {
-                    // After end — done
-                    break
-                }
+                if (sampleTime / 1000 > cappedEnd) break // after end — done
 
                 val trackIndex = extractor.sampleTrackIndex
                 val muxerTrackIndex = muxerTracks[trackIndex]
@@ -132,9 +183,11 @@ object VideoTrimmer {
                 val sampleSize = extractor.readSampleData(buffer, 0)
                 if (sampleSize < 0) break
 
+                if (firstSampleUs < 0) firstSampleUs = sampleTime
                 bufferInfo.offset = 0
                 bufferInfo.size = sampleSize
-                bufferInfo.presentationTimeUs = sampleTime
+                // v0.7.4 fix 2: re-base PTS onto a ~0-based timeline.
+                bufferInfo.presentationTimeUs = (sampleTime - snapUs).coerceAtLeast(0L)
                 bufferInfo.flags = when {
                     extractor.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0 ->
                         android.media.MediaCodec.BUFFER_FLAG_KEY_FRAME
@@ -147,23 +200,40 @@ object VideoTrimmer {
                 extractor.advance()
             }
 
-            muxer.stop()
-            muxer.release()
-            extractor.release()
+            // v0.7.4 fix 4: a zero-sample output is a structurally invalid MP4
+            // (muxer.stop() would throw anyway) — fail cleanly instead.
+            if (samplesCopied == 0) {
+                WepWawetLogger.proxyError("$TAG: no samples in trim range — failing",
+                    "start_ms" to startMs,
+                    "snap_ms" to (snapUs / 1000),
+                    "capped_end_ms" to cappedEnd,
+                    "first_sample_us" to firstSampleUs)
+                return false
+            }
 
+            muxer.stop()
+            success = true
             WepWawetLogger.proxy("$TAG: trim complete",
                 "output" to outputFile.name,
                 "output_size" to outputFile.length(),
                 "samples_copied" to samplesCopied,
                 "bytes_copied" to bytesCopied,
-                "trim_duration_ms" to (cappedEnd - startMs))
+                "snap_ms" to (snapUs / 1000),
+                "trim_duration_ms" to (cappedEnd - snapUs / 1000))
             true
         } catch (e: Exception) {
             WepWawetLogger.proxyError("$TAG: trim failed",
                 "exception" to e.javaClass.name,
                 "message" to (e.message ?: ""))
-            runCatching { extractor.release() }
             false
+        } finally {
+            // v0.7.4 fix 3: release BOTH the extractor and the muxer on every
+            // exit path, and delete the partial output file on failure.
+            runCatching { extractor.release() }
+            runCatching { muxer?.release() }
+            if (!success) {
+                runCatching { outputFile.delete() }
+            }
         }
     }
 

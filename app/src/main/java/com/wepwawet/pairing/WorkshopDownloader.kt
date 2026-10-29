@@ -63,8 +63,32 @@ private object JavaSteamLogBridge : LogListener {
      * Set by the active WorkshopDownloader instance so the bridge can
      * abort its download when a known library bug is detected.
      * Single-threaded download assumption — only one active download at a time.
+     *
+     * v0.7.4: set/clear now go through [setAbortCallback]/[clearAbortCallback]
+     * with an owner check. Previously a download's cleanup (`abortCallback = null`)
+     * could race a NEW download's registration if the old coroutine was still
+     * unwinding while the new one connected (e.g. cancel + immediate retry) —
+     * silently disabling library-bug detection for the new download.
      */
     @Volatile var abortCallback: ((String) -> Unit)? = null
+    @Volatile private var abortOwner: Any? = null
+    private val abortLock = Any()
+
+    fun setAbortCallback(owner: Any, callback: ((String) -> Unit)?) {
+        synchronized(abortLock) {
+            abortOwner = if (callback != null) owner else null
+            abortCallback = callback
+        }
+    }
+
+    fun clearAbortCallback(owner: Any) {
+        synchronized(abortLock) {
+            if (abortOwner === owner) {
+                abortOwner = null
+                abortCallback = null
+            }
+        }
+    }
 
     fun installIfNeeded() {
         if (installed.compareAndSet(false, true)) {
@@ -130,8 +154,13 @@ private object JavaSteamLogBridge : LogListener {
 class WorkshopDownloader(
     private val username: String,
     private val password: String,
-    private val guardCode: String? = null,
 ) {
+    // v0.7.4: the `guardCode` constructor parameter was removed. It was never
+    // supplied by ANY caller with a real value — SteamCredentialsStore.
+    // saveGuardCode() had zero call sites, so the code was always null and
+    // GuardAuthenticator.getDeviceCode() could only fail. Steam auth uses the
+    // device-confirmation flow ("is this you?" prompt on the Steam mobile
+    // app) via acceptDeviceConfirmation().
     companion object {
         private const val TAG = "WorkshopDownloader"
         private const val APP_ID_WE = 431960
@@ -175,11 +204,9 @@ class WorkshopDownloader(
                 ?: return@withContext "No Steam username saved"
             val password = SteamCredentialsStore.getPassword(context)
                 ?: return@withContext "No Steam password saved"
-            val guardCode = SteamCredentialsStore.getGuardCode(context)
-            WepWawetLogger.proxy("$TAG.testLogin START", "username" to username,
-                "has_guard" to !guardCode.isNullOrBlank())
+            WepWawetLogger.proxy("$TAG.testLogin START", "username" to username)
 
-            val downloader = WorkshopDownloader(username, password, guardCode)
+            val downloader = WorkshopDownloader(username, password)
             downloader.statusCallback = { msg ->
                 WepWawetLogger.proxy("$TAG.testLogin: $msg")
             }
@@ -230,11 +257,9 @@ class WorkshopDownloader(
     @Volatile private var isRetrying = false  // true during TryAnotherCM retry
     @Volatile private var usedRefreshToken = false  // true if we tried refresh token login
     @Volatile private var hasValidToken = false  // true after auth session succeeds (token saved)
-    @Volatile private var hasTriedModernAuthFallback = false  // true if we already fell back to modern auth once (prevents infinite loop)
     @Volatile private var appContext: Context? = null  // for clearing stale token on rate limit
     @Volatile private var statusCallback: ((String) -> Unit)? = null
     @Volatile private var isDownloadInProgress = false  // true during DepotDownloader.awaitCompletion — used by onDisconnected to decide whether to auto-reconnect
-    @Volatile private var isReconnectingForFallback = false  // true when our modern-auth fallback called steamClient.connect() — prevents onDisconnected(user_initiated=true) from killing the callback thread
     private val subscriptions = mutableListOf<Closeable>()
 
     /** Tracks the callback dispatch thread so we can interrupt+join it before
@@ -242,6 +267,15 @@ class WorkshopDownloader(
      *  inside runWaitCallbacks(1000L)) races with the new thread — callbacks
      *  may be dispatched to neither, one, or both threads. */
     @Volatile private var callbackThread: Thread? = null
+
+    /**
+     * v0.7.4: the modern-auth polling thread (onConnected spawns it to block on
+     * authSessionFuture.get() / pollingWaitForResult().get()). Kept as a field
+     * so cleanup() can interrupt it — previously it was fire-and-forget and
+     * could outlive the session, eventually calling steamUser!!.logOn() on an
+     * already-disconnected client whose callbacks nobody dispatches.
+     */
+    @Volatile private var authPollingThread: Thread? = null
 
     private fun updateStatus(msg: String) {
         WepWawetLogger.proxy("$TAG: $msg")
@@ -286,19 +320,16 @@ class WorkshopDownloader(
 
     private inner class GuardAuthenticator : IAuthenticator {
         override fun getDeviceCode(previousCodeWasIncorrect: Boolean): CompletableFuture<String> {
-            WepWawetLogger.proxy("$TAG: Steam Guard 2FA code requested",
-                "previous_incorrect" to previousCodeWasIncorrect,
-                "has_code" to !guardCode.isNullOrBlank())
+            // v0.7.4: Steam Guard CODE entry is not supported (and never was —
+            // the old guardCode parameter was always null because nothing ever
+            // saved a code). Steam's device-confirmation flow (the "is this
+            // you?" prompt on the Steam mobile app) is the supported 2FA path —
+            // see acceptDeviceConfirmation below.
+            WepWawetLogger.proxy("$TAG: Steam Guard 2FA code requested — not supported (device confirmation only)",
+                "previous_incorrect" to previousCodeWasIncorrect)
             val future = CompletableFuture<String>()
-            if (previousCodeWasIncorrect) {
-                future.completeExceptionally(
-                    AuthenticationException("Steam Guard code was wrong or expired. Use device confirmation (approve on Steam mobile app) instead."))
-            } else if (guardCode.isNullOrBlank()) {
-                future.completeExceptionally(
-                    AuthenticationException("Steam Guard 2FA code required but not provided."))
-            } else {
-                future.complete(guardCode)
-            }
+            future.completeExceptionally(
+                AuthenticationException("Steam Guard code entry is not supported — approve the login on your Steam mobile app instead."))
             return future
         }
 
@@ -324,8 +355,7 @@ class WorkshopDownloader(
         onStatusUpdate: (String) -> Unit,
     ): File? = withContext(Dispatchers.IO) {
         this@WorkshopDownloader.statusCallback = onStatusUpdate
-        WepWawetLogger.proxy("$TAG START", "workshop_id" to workshopId, "username" to username,
-            "has_guard_code" to !guardCode.isNullOrBlank())
+        WepWawetLogger.proxy("$TAG START", "workshop_id" to workshopId, "username" to username)
         try {
             updateStatus("Connecting to Steam...")
             if (!connectAndAuthenticate(context)) {
@@ -343,6 +373,17 @@ class WorkshopDownloader(
 
             onStatusUpdate("Downloading workshop item via Steam protocol...")
             val installDir = File(context.cacheDir, "workshop_downloads/$workshopId")
+            // v0.7.4: wipe any leftovers from a PREVIOUS download of the same
+            // workshop id before (re)creating the dir. mkdirs() alone is a no-op
+            // when the dir already exists, so files removed in a newer workshop
+            // version (or stale partial downloads from a cancelled run) would
+            // linger and get packed alongside the fresh content by
+            // MpkgPacker.packFromPkg — producing a corrupted .mpkg.
+            if (installDir.exists()) {
+                runCatching { installDir.deleteRecursively() }
+                WepWawetLogger.proxy("$TAG: cleared stale install dir before download",
+                    "path" to installDir.absolutePath)
+            }
             val mkdirsOk = installDir.mkdirs()
             WepWawetLogger.proxy("$TAG: install dir prepared",
                 "path" to installDir.absolutePath,
@@ -676,7 +717,9 @@ class WorkshopDownloader(
             // to fire — with it, the download aborts within ~1 second of the
             // library's error log, with a clear "known library bug" message.
             // Cleared in the finally block below. ===
-            JavaSteamLogBridge.abortCallback = { reason ->
+            // v0.7.4: registered via the owner-checked setter so a previous
+            // download's cleanup can't race-clear THIS download's callback.
+            JavaSteamLogBridge.setAbortCallback(this) { reason ->
                 if (downloadError == null) {
                     WepWawetLogger.proxyError("$TAG: abort triggered by JavaSteamLogBridge",
                         "reason" to reason.take(300))
@@ -714,6 +757,14 @@ class WorkshopDownloader(
                 }.apply { isDaemon = true; name = "JavaSteam-DepotCompletion"; start() }
 
                 // Wait for either completion or timeout
+                // v0.7.4: track WHY we left the wait loop. If downloadError was
+                // set by the abort callback / disconnect watchdog / stuck
+                // detector, that precise root-cause message MUST survive — the
+                // old code fell through into the `completionJob.isAlive`
+                // "timeout" branch and REPLACED it with a misleading
+                // "Steam CDN may be slow or stuck" message, sending the user
+                // into pointless retries.
+                var waitInterrupted = false
                 while (completionJob.isAlive &&
                        System.currentTimeMillis() - completionStart < completionTimeoutMs) {
                     if (downloadError != null) {
@@ -721,34 +772,54 @@ class WorkshopDownloader(
                             "error" to (downloadError?.message ?: ""))
                         break
                     }
-                    try { Thread.sleep(500) } catch (_: InterruptedException) { break }
+                    try { Thread.sleep(500) } catch (_: InterruptedException) { waitInterrupted = true; break }
                 }
-                if (completionJob.isAlive) {
-                    val elapsedSec = (System.currentTimeMillis() - completionStart) / 1000
-                    val statusAtTimeout = lastStatus.get() ?: "(no status yet)"
-                    WepWawetLogger.proxyError("$TAG: awaitCompletion TIMED OUT",
-                        "timeout_s" to (completionTimeoutMs / 1000),
-                        "elapsed_s" to elapsedSec,
-                        "last_status" to statusAtTimeout,
-                        "files_done" to filesCompleted.get(),
-                        "chunks_done" to chunksCompleted.get(),
-                        "depots_done" to depotsCompleted.get())
-                    // Interrupt the completion thread (best-effort)
-                    completionJob.interrupt()
-                    downloadError = java.lang.Exception("Download timed out after ${elapsedSec}s — Steam CDN may be slow or stuck. Last status: $statusAtTimeout")
-                } else if (completionException != null) {
-                    WepWawetLogger.proxyWarn("$TAG: awaitCompletion threw",
-                        "exception" to (completionException?.javaClass?.name ?: ""),
-                        "message" to (completionException?.message ?: ""))
-                    if (downloadError == null) {
-                        downloadError = completionException
+                when {
+                    // Real error already set (abort callback / watchdog / stuck
+                    // detection / listener failure) — keep it, just nudge the
+                    // completion thread so it doesn't linger.
+                    downloadError != null -> {
+                        WepWawetLogger.proxyWarn("$TAG: aborting wait — real download error present",
+                            "error" to (downloadError?.message ?: ""))
+                        completionJob.interrupt()
                     }
-                } else {
-                    WepWawetLogger.proxy("$TAG: awaitCompletion returned normally",
-                        "elapsed_ms" to (System.currentTimeMillis() - completionStart),
-                        "files_done" to filesCompleted.get(),
-                        "chunks_done" to chunksCompleted.get(),
-                        "depots_done" to depotsCompleted.get())
+                    // Our wait was interrupted (cancellation) — don't report a
+                    // bogus timeout, and restore the interrupt status for the
+                    // caller's blocking-cancellation handling.
+                    waitInterrupted -> {
+                        Thread.currentThread().interrupt()
+                        completionJob.interrupt()
+                        downloadError = java.lang.Exception("Download wait interrupted — cancelled")
+                    }
+                    completionJob.isAlive -> {
+                        val elapsedSec = (System.currentTimeMillis() - completionStart) / 1000
+                        val statusAtTimeout = lastStatus.get() ?: "(no status yet)"
+                        WepWawetLogger.proxyError("$TAG: awaitCompletion TIMED OUT",
+                            "timeout_s" to (completionTimeoutMs / 1000),
+                            "elapsed_s" to elapsedSec,
+                            "last_status" to statusAtTimeout,
+                            "files_done" to filesCompleted.get(),
+                            "chunks_done" to chunksCompleted.get(),
+                            "depots_done" to depotsCompleted.get())
+                        // Interrupt the completion thread (best-effort)
+                        completionJob.interrupt()
+                        downloadError = java.lang.Exception("Download timed out after ${elapsedSec}s — Steam CDN may be slow or stuck. Last status: $statusAtTimeout")
+                    }
+                    completionException != null -> {
+                        WepWawetLogger.proxyWarn("$TAG: awaitCompletion threw",
+                            "exception" to (completionException?.javaClass?.name ?: ""),
+                            "message" to (completionException?.message ?: ""))
+                        if (downloadError == null) {
+                            downloadError = completionException
+                        }
+                    }
+                    else -> {
+                        WepWawetLogger.proxy("$TAG: awaitCompletion returned normally",
+                            "elapsed_ms" to (System.currentTimeMillis() - completionStart),
+                            "files_done" to filesCompleted.get(),
+                            "chunks_done" to chunksCompleted.get(),
+                            "depots_done" to depotsCompleted.get())
+                    }
                 }
             } catch (e: Exception) {
                 WepWawetLogger.proxyWarn("$TAG: awaitCompletion wrapper exception",
@@ -790,8 +861,10 @@ class WorkshopDownloader(
             isDownloadInProgress = false
             // === Clear the abort callback so the bridge doesn't keep a stale
             // reference to this WorkshopDownloader instance (would cause
-            // memory leak + incorrect aborts on the next download). ===
-            JavaSteamLogBridge.abortCallback = null
+            // memory leak + incorrect aborts on the next download).
+            // v0.7.4: owner-checked — only clears if WE still own it (a newer
+            // download may have already registered its own callback). ===
+            JavaSteamLogBridge.clearAbortCallback(this)
             WepWawetLogger.proxy("$TAG: cleared abort callback from JavaSteamLogBridge")
             WepWawetLogger.proxy("$TAG: downloader closed",
                 "files_done" to filesCompleted.get(),
@@ -957,12 +1030,20 @@ class WorkshopDownloader(
             .writeTimeout(60, TimeUnit.SECONDS)
             .build()
 
-        appContext = context
+        // v0.7.4: capture the APPLICATION context — never the caller's
+        // (possibly Activity) context. WorkshopBrowseSession keeps its
+        // downloader alive for the whole app process, and this context is
+        // stored both in the `appContext` field and inside the ConnectedCallback
+        // subscription lambda — capturing an Activity here would leak that
+        // Activity for the lifetime of the singleton. getSharedPreferences and
+        // every other use here behave identically on an application context.
+        val appCtx = context.applicationContext
+        appContext = appCtx
         steamClient = SteamClient(SteamConfiguration.create { it.withHttpClient(httpClient!!) })
         callbackManager = CallbackManager(steamClient!!)
         steamUser = steamClient!!.getHandler(SteamUser::class.java)
 
-        subscriptions.add(callbackManager!!.subscribe(ConnectedCallback::class.java) { onConnected(it, context) })
+        subscriptions.add(callbackManager!!.subscribe(ConnectedCallback::class.java) { onConnected(it, appCtx) })
         subscriptions.add(callbackManager!!.subscribe(DisconnectedCallback::class.java) { onDisconnected(it) })
         subscriptions.add(callbackManager!!.subscribe(LoggedOnCallback::class.java) { onLoggedOn(it) })
         subscriptions.add(callbackManager!!.subscribe(LoggedOffCallback::class.java) { onLoggedOff(it) })
@@ -987,8 +1068,6 @@ class WorkshopDownloader(
 
         isRunning = true
         cmRetries = 0
-        // Reset the modern-auth fallback flag so a new session can fall back again
-        hasTriedModernAuthFallback = false
         WepWawetLogger.proxy("$TAG: connecting to Steam...")
         steamClient!!.connect()
 
@@ -1060,6 +1139,13 @@ class WorkshopDownloader(
     fun cleanup() {
         try { steamUser?.logOff() } catch (_: Exception) {}
         try { steamClient?.disconnect() } catch (_: Exception) {}
+        // v0.7.4: interrupt the modern-auth polling thread — it may still be
+        // blocked in pollingWaitForResult().get() waiting for the user to
+        // approve the login on their phone. Without this it lingered as a
+        // fire-and-forget thread that later called steamUser!!.logOn() on an
+        // already-disconnected client.
+        try { authPollingThread?.interrupt() } catch (_: Exception) {}
+        authPollingThread = null
         // v0.5.32 (audit H2): also shutdown the OkHttp dispatcher's
         // executor so the cached thread pool doesn't leak daemon threads
         // (one per HTTP request that ever ran on this client). Without
@@ -1073,20 +1159,23 @@ class WorkshopDownloader(
         subscriptions.forEach { try { it.close() } catch (_: Exception) {} }
         subscriptions.clear()
         isRunning = false
+        // v0.7.4: interrupt + join the callback dispatch thread (mirrors what
+        // connectAndAuthenticate does before spawning a new one). Without the
+        // interrupt the thread could linger up to 1s inside
+        // runWaitCallbacks(1000L) after cleanup() returned — and dispatch
+        // callbacks into the now-closed subscriptions.
+        callbackThread?.let { oldThread ->
+            try {
+                oldThread.interrupt()
+                oldThread.join(2000)
+            } catch (_: Exception) {}
+        }
+        callbackThread = null
     }
 
     private fun onConnected(callback: ConnectedCallback, context: Context) {
         WepWawetLogger.proxy("$TAG: connected — authenticating as $username")
         updateStatus("Connected to Steam — authenticating...")
-
-        // === Clear the fallback-reconnect flag — the new connection has been
-        // established, so the previous disconnect (from the connect() call
-        // inside our modern-auth fallback) is no longer relevant. The callback
-        // thread is preserved and will process this onConnected. ===
-        if (isReconnectingForFallback) {
-            isReconnectingForFallback = false
-            WepWawetLogger.proxy("$TAG: isReconnectingForFallback cleared (new connection established)")
-        }
 
         // Don't start a new auth session if one is already in progress (e.g. during TryAnotherCM retry)
         if (authInProgress) {
@@ -1147,8 +1236,7 @@ class WorkshopDownloader(
 
         // Step 2: Use modern auth flow (supports 2FA)
         try {
-            WepWawetLogger.proxy("$TAG: starting modern auth session",
-                "has_guard_code" to !guardCode.isNullOrBlank())
+            WepWawetLogger.proxy("$TAG: starting modern auth session")
             val authDetails = AuthSessionDetails()
             authDetails.username = username
             authDetails.password = password
@@ -1158,15 +1246,21 @@ class WorkshopDownloader(
 
             val authSessionFuture = steamClient!!.authentication.beginAuthSessionViaCredentials(authDetails)
 
-            Thread {
+            // v0.7.4: store the thread so cleanup() can interrupt it (it used
+            // to be fire-and-forget and could outlive the session), and bound
+            // both .get() calls with timeouts so a silent Steam never leaves it
+            // blocked forever.
+            authPollingThread = Thread {
                 try {
                     WepWawetLogger.proxy("$TAG: waiting for auth session...")
                     updateStatus("Waiting for Steam auth session...")
-                    val authSession = authSessionFuture.get()
+                    val authSession = authSessionFuture.get(60, TimeUnit.SECONDS)
 
                     WepWawetLogger.proxy("$TAG: polling auth session (may request 2FA)...")
-                    updateStatus("Authenticating with Steam (using 2FA code if needed)...")
-                    val result = authSession.pollingWaitForResult().get()
+                    updateStatus("Authenticating with Steam (approve on your Steam mobile app)...")
+                    // 5 minutes for the user to tap "Approve" on their phone —
+                    // Steam Guard confirmations expire after a few minutes anyway.
+                    val result = authSession.pollingWaitForResult().get(5, TimeUnit.MINUTES)
 
                     WepWawetLogger.proxy("$TAG: auth SUCCESS",
                         "account" to result.accountName,
@@ -1211,7 +1305,7 @@ class WorkshopDownloader(
                     }
                     authInProgress = false
                 }
-            }.start()
+            }.apply { isDaemon = true; name = "JavaSteam-AuthPoll" }.also { it.start() }
         } catch (e: Exception) {
             WepWawetLogger.proxyError("$TAG: failed to start auth session",
                 "exception" to e.javaClass.name, "message" to (e.message ?: ""))
@@ -1230,7 +1324,16 @@ class WorkshopDownloader(
                 authInProgress = false
                 WepWawetLogger.proxy("$TAG: TryAnotherCM — retry #$cmRetries with different CM server...")
                 updateStatus("Switching to different Steam server (retry $cmRetries)...")
-                try { Thread.sleep(3000); steamClient?.connect() } catch (_: Exception) {}
+                // v0.7.4: spawn a NEW thread for the retry — calling connect()
+                // directly on the callback-dispatch thread risks re-entering
+                // JavaSteam's connection state machine and deadlocking its
+                // internal locks (the same reasoning as the onDisconnected
+                // reconnect path below), and Thread.sleep(3000) here would
+                // block ALL callback dispatch for 3 seconds.
+                Thread {
+                    try { Thread.sleep(3000); steamClient?.connect() } catch (_: InterruptedException) {}
+                    catch (_: Exception) {}
+                }.apply { isDaemon = true; name = "JavaSteam-CmRetry"; start() }
                 return
             }
             // If refresh token failed for any token-related reason (Steam backend
@@ -1296,6 +1399,12 @@ class WorkshopDownloader(
         }
         authenticated = true
         authInProgress = false
+        // v0.7.4: reset the CM retry budget on every successful login. It was
+        // only reset in connectAndAuthenticate, so a session that used 4-5
+        // retries to connect could exhaust the budget for LATER transient
+        // TryAnotherCM responses in the same session, turning a recoverable
+        // CM hiccup into a hard failure.
+        cmRetries = 0
         val wasUsingRefreshToken = usedRefreshToken
         usedRefreshToken = false
         // Log detailed info about the login success
@@ -1335,6 +1444,14 @@ class WorkshopDownloader(
             "result" to callback.result,
             "authenticated" to authenticated,
             "download_in_progress" to isDownloadInProgress)
+        // v0.7.4: clear `authenticated` too. It used to stay true, so the
+        // onDisconnected that fires right after took the auto-reconnect
+        // branch and spawned a reconnect thread — but isRunning=false kills
+        // the callback-dispatch thread, so the reconnect's onConnected was
+        // never delivered: the session sat half-alive, the SteamClient +
+        // OkHttp pool leaked, and WorkshopBrowseSession kept seeing
+        // isAuthenticated()==true for a dead session.
+        authenticated = false
         isRunning = false
     }
 
@@ -1352,25 +1469,10 @@ class WorkshopDownloader(
         WepWawetLogger.proxy("$TAG: disconnected",
             "user_initiated" to callback.isUserInitiated,
             "authenticated" to authenticated,
-            "download_in_progress" to isDownloadInProgress,
-            "is_reconnecting_for_fallback" to isReconnectingForFallback)
-        // === CRITICAL FIX: when our modern-auth fallback called connect()
-        // (which INTERNALLY calls disconnect() first when already connected),
-        // the resulting onDisconnected(user_initiated=true) would normally
-        // set isRunning=false → kill the callback thread → break the
-        // subsequent connect()'s onConnected callback.
-        //
-        // The isReconnectingForFallback flag (set in onLoggedOn before
-        // calling connect()) prevents this: when set, we DON'T set
-        // isRunning=false, just wait for the new onConnected to fire.
-        // Cleared in onConnected.
-        if (isReconnectingForFallback) {
-            WepWawetLogger.proxy("$TAG: disconnect from fallback's connect() — keeping callback thread alive (isReconnectingForFallback=true)")
-            // Don't set isRunning=false; the new connection will fire onConnected
-            // which clears the flag and continues the modern auth flow.
-            // Don't auto-reconnect either — connect() was already called.
-            return
-        }
+            "download_in_progress" to isDownloadInProgress)
+        // (v0.7.4: the old isReconnectingForFallback branch here was removed —
+        //  the flag was never set to true anywhere, so the branch could never
+        //  execute. Behavior is unchanged.)
         // === CRITICAL: do NOT auto-reconnect while a download is in progress. ===
         // The DepotDownloader holds a reference to steamClient and is making API
         // calls through it. If we reconnect (creating a new internal session),
@@ -1445,13 +1547,16 @@ class WorkshopDownloader(
         searchDir.walkTopDown().forEach { file ->
             if (file.isFile && file.length() > 1024) {
                 try {
-                    val raf = java.io.RandomAccessFile(file, "r")
-                    val header = ByteArray(12)
-                    raf.readFully(header)
-                    raf.close()
-                    if (header[0] == 0x08.toByte() && header[4] == 'P'.code.toByte() &&
-                        header[5] == 'K'.code.toByte() && header[6] == 'G'.code.toByte() &&
-                        header[7] == 'V'.code.toByte()) return file
+                    // v0.7.4: .use{} — if readFully throws (file truncated between
+                    // the length() check and the read, IO error), close() was
+                    // previously skipped and the FD leaked silently.
+                    java.io.RandomAccessFile(file, "r").use { raf ->
+                        val header = ByteArray(12)
+                        raf.readFully(header)
+                        if (header[0] == 0x08.toByte() && header[4] == 'P'.code.toByte() &&
+                            header[5] == 'K'.code.toByte() && header[6] == 'G'.code.toByte() &&
+                            header[7] == 'V'.code.toByte()) return file
+                    }
                 } catch (_: Exception) {}
             }
         }

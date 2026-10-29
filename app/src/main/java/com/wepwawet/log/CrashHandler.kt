@@ -75,12 +75,18 @@ class CrashHandler private constructor(
             try {
                 previousHandler.uncaughtException(t, e)
             } catch (handlerEx: Throwable) {
-                Log.e(TAG, "Default crash handler threw — force-killing", handlerEx)
+                // v0.7.4: runCatching — if this Log.e itself throws (possible on
+                // OOM / native-crash paths), the exception would escape
+                // uncaughtException() and cause the JVM to re-invoke THIS SAME
+                // handler on the same thread → infinite recursion. The Log.e
+                // calls at the top of this function are already wrapped; these
+                // two were missed.
+                runCatching { Log.e(TAG, "Default crash handler threw — force-killing", handlerEx) }
             }
             // If we get here, the handler didn't kill us — force-kill.
             exitProcess(1)
         } else {
-            Log.e(TAG, "No previous crash handler — force-killing")
+            runCatching { Log.e(TAG, "No previous crash handler — force-killing") }
             exitProcess(1)
         }
     }
@@ -112,9 +118,24 @@ class CrashHandler private constructor(
         sb.append(e.stackTraceToString()).append("\n")
 
         sb.append("\n--- Recent log entries (last 2000) ---\n")
+        // v0.7.4: WepWawetLogger.snapshot() is synchronized(ringBuffer). If
+        // another thread currently holds that monitor and is hung (or is itself
+        // mid-crash), building the report inline would block the crash handler
+        // forever and the crash report would never be written. We compute the
+        // snapshot on a helper thread and wait at most 2 seconds for it — if
+        // the logger is deadlocked we still write the rest of the report.
         runCatching {
-            WepWawetLogger.snapshot().forEach { entry ->
-                sb.append(entry.format()).append("\n")
+            val snapshotThread = kotlin.concurrent.thread(start = true, isDaemon = true) {
+                runCatching {
+                    WepWawetLogger.snapshot().forEach { entry ->
+                        sb.append(entry.format()).append("\n")
+                    }
+                }
+            }
+            try {
+                snapshotThread.join(2000)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
             }
         }
 

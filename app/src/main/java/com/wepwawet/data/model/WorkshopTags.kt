@@ -167,11 +167,15 @@ object WorkshopTags {
      * Only Scene and Video types are mobile-compatible. Image, Web, Application,
      * Playlist, and Unknown types are NOT compatible.
      *
+     * v0.7.4: the unused `tags` parameter was removed — the check is purely
+     * type-based (matching WE PC's logic exactly), and the old signature's
+     * unused parameter implied tag-dependent behavior that never existed.
+     *
      * (Web wallpapers use HTML/CSS/JS which WE Android doesn't render;
      *  Application wallpapers are interactive EXE-based; Image type is not
      *  in the WE PC mobile upload whitelist.)
      */
-    fun isMobileCompatible(type: WallpaperType, tags: List<String>): Boolean {
+    fun isMobileCompatible(type: WallpaperType): Boolean {
         // Only Scene and Video types are mobile-compatible per WE PC's logic
         return type == WallpaperType.SCENE || type == WallpaperType.VIDEO
     }

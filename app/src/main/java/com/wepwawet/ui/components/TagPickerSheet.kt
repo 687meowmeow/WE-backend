@@ -225,8 +225,33 @@ fun TagPickerSheet(
     onApply: (excludedTags: List<String>, mobileCompatible: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    if (!visible) return
+    // v0.7.4: the sheet CONTENT is now conditionally composed via `if (visible)`
+    // instead of an early `if (!visible) return` above the remember calls.
+    // With the early-return, the `remember(visible)` slots were never
+    // re-executed with a CHANGED key (they only ever ran while visible=true),
+    // so the working draft silently persisted across open/close cycles — a
+    // user who toggled tags and swiped the sheet away found their discarded
+    // draft (not the current filter) pre-selected on the next open. With the
+    // wrap, the entire content leaves composition when hidden, so every open
+    // starts from the caller's current values.
+    if (visible) {
+        TagPickerSheetContent(
+            excludedTags = excludedTags,
+            mobileCompatible = mobileCompatible,
+            onApply = onApply,
+            onDismiss = onDismiss,
+        )
+    }
+}
 
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun TagPickerSheetContent(
+    excludedTags: List<String>,
+    mobileCompatible: Boolean,
+    onApply: (excludedTags: List<String>, mobileCompatible: Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     // Local mutable working copies so the user can toggle without committing
@@ -234,12 +259,11 @@ fun TagPickerSheet(
     //
     // Semantic: a tag in this set is EXCLUDED (toggled OFF, hidden from
     // results). A tag NOT in this set is ON (visible in results).
-    var workingExcluded by remember(visible) {
-        mutableStateOf(excludedTags.toSet())
-    }
-    var workingMobileCompat by remember(visible) {
-        mutableStateOf(mobileCompatible)
-    }
+    // v0.7.4: plain remember (no key) — the wrapping `if (visible)` in
+    // TagPickerSheet guarantees a fresh composition (and therefore a fresh
+    // draft initialized from the CURRENT parameters) on every open.
+    var workingExcluded by remember { mutableStateOf(excludedTags.toSet()) }
+    var workingMobileCompat by remember { mutableStateOf(mobileCompatible) }
     var searchQuery by remember { mutableStateOf("") }
 
     ModalBottomSheet(

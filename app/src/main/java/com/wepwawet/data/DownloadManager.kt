@@ -2,7 +2,6 @@ package com.wepwawet.data
 
 import android.content.Context
 import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import com.wepwawet.data.model.WorkshopItemTyped
 import com.wepwawet.log.WepWawetLogger
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -55,8 +54,14 @@ object DownloadManager {
         try {
             val prefs = appContext?.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE) ?: return
             val json = prefs.getString(KEY_COMPLETED, null) ?: return
-            val type = object : TypeToken<List<CompletedDownload>>() {}.type
-            val loaded: List<CompletedDownload> = gson.fromJson(json, type) ?: emptyList()
+            // v0.7.4: parse via Array<CompletedDownload>::class.java instead of an
+            // anonymous `object : TypeToken<List<CompletedDownload>>() {}` — the
+            // same R8/Signature-stripping hazard SteamApiService documents at its
+            // own TypeToken removal note. The Array form needs no reflection on
+            // generic signatures at all, so minified release builds can't hit
+            // "TypeToken must be created with a type argument" here.
+            val loaded: List<CompletedDownload> =
+                gson.fromJson(json, Array<CompletedDownload>::class.java)?.toList() ?: emptyList()
             _completedDownloads.value = loaded
             WepWawetLogger.workshop("DownloadManager: loaded completed downloads from disk",
                 "count" to loaded.size)
@@ -118,9 +123,28 @@ object DownloadManager {
 
     /**
      * Mark a download as completed and move it to the completed list.
+     *
+     * v0.7.4: atomically capture + remove from _activeDownloads in ONE update
+     * call, mirroring failDownload's v0.5.32 (audit M3) fix. The old code read
+     * the active entry OUTSIDE any lock and removed it in a SECOND update after
+     * updating the completed list — a concurrent failDownload(itemId) between
+     * the read and the removal produced a "Completed" entry (with "Unknown"
+     * title metadata) that CLOBBERED the just-written FAILED entry, and vice
+     * versa. When the item wasn't in active at all we still record a completed
+     * entry with default metadata (previous behavior).
      */
     fun completeDownload(itemId: String, fileSizeBytes: Long, deviceName: String) {
-        val active = _activeDownloads.value[itemId]
+        var captured: DownloadProgress? = null
+        _activeDownloads.update { current ->
+            val existing = current[itemId]
+            if (existing == null) {
+                current
+            } else {
+                captured = existing
+                current - itemId
+            }
+        }
+        val active = captured
         synchronized(completedLock) {
             val completed = CompletedDownload(
                 itemId = itemId,
@@ -139,7 +163,6 @@ object DownloadManager {
             }
             saveCompletedToDisk()
         }
-        _activeDownloads.update { it - itemId }
         WepWawetLogger.workshop("DownloadManager: completed download",
             "item_id" to itemId, "size" to fileSizeBytes, "device" to deviceName)
     }

@@ -149,10 +149,16 @@ fun VideoTrimScreen(
     val thumbnails = remember { mutableStateListOf<android.graphics.Bitmap>() }
 
     // Get video metadata (duration, width, height) + generate thumbnails.
+    // v0.7.4: the retriever is released in a FINALLY block (it used to be the
+    // last statement inside the try — any throw from setDataSource/
+    // extractMetadata/getFrameAtTime leaked the native MediaMetadataRetriever),
+    // and CancellationException is re-thrown instead of being logged as a
+    // warning (swallowing it broke structured concurrency when the user
+    // navigated away mid-load).
     LaunchedEffect(videoFile) {
         withContext(Dispatchers.IO) {
+            val retriever = MediaMetadataRetriever()
             try {
-                val retriever = MediaMetadataRetriever()
                 retriever.setDataSource(videoFile.absolutePath)
                 val dur = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
                 val w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 1920
@@ -185,12 +191,15 @@ fun VideoTrimScreen(
                         thumbnails.add(scaled)
                     }
                 }
-                retriever.release()
                 WepWawetLogger.workshop("VideoTrimScreen: thumbnails generated",
                     "count" to thumbnails.size)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 WepWawetLogger.workshopWarn("VideoTrimScreen: metadata/thumbnail failed",
                     "exception" to e.javaClass.name, "message" to (e.message ?: ""))
+            } finally {
+                runCatching { retriever.release() }
             }
         }
     }
@@ -357,11 +366,16 @@ fun VideoTrimScreen(
                         onValueChange = { range ->
                             // Enforce a 500ms minimum selection so the
                             // start/end can't collapse onto each other.
+                            // v0.7.4: newEnd is clamped against the NEW start,
+                            // not the OLD one. The old order clamped newEnd to
+                            // `startMs + 500` BEFORE startMs was updated, so
+                            // dragging the start thumb towards the end made the
+                            // end thumb visibly snap back on the next frame.
                             val newStart = (range.start * durationMs).toLong()
                                 .coerceAtMost((endMs - 500).coerceAtLeast(0))
-                            val newEnd = (range.endInclusive * durationMs).toLong()
-                                .coerceAtLeast(startMs + 500).coerceAtMost(durationMs)
                             startMs = newStart
+                            val newEnd = (range.endInclusive * durationMs).toLong()
+                                .coerceAtLeast(newStart + 500).coerceAtMost(durationMs)
                             endMs = newEnd
                         },
                         onValueChangeFinished = {
@@ -441,10 +455,21 @@ fun VideoTrimScreen(
                                     PairingService.launchWallpaperEngineApp(context)
                                     runCatching { trimmedFile.delete() }
                                     runCatching { videoFile.delete() }
+                                    // v0.7.4: clean up the install dir (contains
+                                    // project.json/preview.jpg the pack consumed).
+                                    runCatching { installDir.deleteRecursively() }
+                                    // v0.7.4: clear the pending-video state so the
+                                    // "Video Downloaded" dialog does NOT reappear
+                                    // after we pop back — and so a second "Trim
+                                    // Video" tap can't navigate here with a path to
+                                    // a file we just deleted (stuck spinner).
+                                    com.wepwawet.pairing.WorkshopDownloadJob.onVideoConsumedByTrimScreen()
                                     WepWawetLogger.workshop("VideoTrimScreen: trim + send complete",
                                         "item_id" to itemId, "mpkg_size" to mpkgFile.length())
                                     isTrimming = false
                                     onSendComplete()
+                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                    throw e
                                 } catch (e: Exception) {
                                     isTrimming = false
                                     trimStatus = "Failed: ${e.message}"
@@ -482,8 +507,14 @@ fun VideoTrimScreen(
                                     PairingService.queueWallpaper(mpkgFile, itemTitle)
                                     PairingService.launchWallpaperEngineApp(context)
                                     runCatching { videoFile.delete() }
+                                    // v0.7.4: same install-dir cleanup + pending-state
+                                    // clear as the trim path.
+                                    runCatching { installDir.deleteRecursively() }
+                                    com.wepwawet.pairing.WorkshopDownloadJob.onVideoConsumedByTrimScreen()
                                     isTrimming = false
                                     onSendComplete()
+                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                    throw e
                                 } catch (e: Exception) {
                                     isTrimming = false
                                     trimStatus = "Failed: ${e.message}"

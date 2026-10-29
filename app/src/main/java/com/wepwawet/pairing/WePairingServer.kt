@@ -811,16 +811,36 @@ class WePairingServer {
         // (it expects transmissionStart after beginUpload, not AuthOK).
         // The lock is re-entrant so the inner sendEncryptedJson /
         // sendEncryptedData calls don't deadlock.
-        synchronized(outputLock) {
-            transferWallpaperLocked(output, mpkgFile, title)
+        //
+        // v0.7.4: bytesSent is tracked HERE (outer function) so the catch
+        // block can report the REAL bytes-sent-so-far — the old catch logged
+        // `mpkgFile.length() - 0` (the total file size, not progress).
+        var bytesSent = 0L
+        try {
+            synchronized(outputLock) {
+                bytesSent = transferWallpaperLocked(output, mpkgFile, title)
+            }
+        } catch (e: Exception) {
+            WepWawetLogger.proxyError("transferWallpaper FAILED",
+                "file" to mpkgFile.name,
+                "exception" to e.javaClass.name,
+                "message" to (e.message ?: ""),
+                "bytes_sent_so_far" to bytesSent,
+                exception = e)
+            // Send cancel so the phone stops appending to tempWriteFile
+            try {
+                sendEncryptedJson(output, DownloadInfo(command = "transmissionCancel"))
+            } catch (_: Exception) {}
         }
     }
 
+    /** v0.7.4: returns the number of file bytes actually sent (for accurate
+     *  failure reporting in [transferWallpaper]). */
     private fun transferWallpaperLocked(
         output: DataOutputStream,
         mpkgFile: java.io.File,
         title: String,
-    ) {
+    ): Long {
         val totalSize = mpkgFile.length()
         // Use just the filename without "wallpapers/" prefix.
         // The phone prepends DOWNLOAD_FOLDER ("downloads/") to this path,
@@ -847,9 +867,12 @@ class WePairingServer {
             WepWawetLogger.proxyError("transferWallpaper ABORT: .mpkg verification failed",
                 "file" to mpkgFile.name,
                 "size" to totalSize)
-            return
+            return 0L
         }
 
+        // v0.7.4: hoisted above the try so the catch block can report the
+        // REAL bytes-sent-so-far (the old catch logged the total file size).
+        var bytesSent = 0L
         try {
             // Step 1: beginUpload — phone removes any existing entry with
             // this file path, creates a fresh WallpaperInfoSparse, adds to UI.
@@ -890,7 +913,6 @@ class WePairingServer {
             // + 16 bytes padding overhead) sits far inside the limit and is
             // byte-for-byte the PC's chunk cadence (FUN_14003b4c0).
             val chunkSize = 128 * 1024  // 128 KiB — matches the PC transfer loop
-            var bytesSent = 0L
             var chunkNum = 0
             val startTime = System.currentTimeMillis()
             java.io.FileInputStream(mpkgFile).use { fis ->
@@ -951,18 +973,15 @@ class WePairingServer {
                 "bytes_sent" to bytesSent,
                 "chunks" to chunkNum,
                 "ms" to transferMs)
+            bytesSent
 
         } catch (e: Exception) {
-            WepWawetLogger.proxyError("transferWallpaper FAILED",
+            WepWawetLogger.proxyError("transferWallpaperLocked FAILED",
                 "file" to fileName,
                 "exception" to e.javaClass.name,
                 "message" to (e.message ?: ""),
-                "bytes_sent_so_far" to (mpkgFile.length() - 0),  // approximate
-                exception = e)
-            // Send cancel so the phone stops appending to tempWriteFile
-            try {
-                sendEncryptedJson(output, DownloadInfo(command = "transmissionCancel"))
-            } catch (_: Exception) {}
+                "bytes_sent_so_far" to bytesSent)
+            throw e
         }
     }
 
@@ -1124,6 +1143,14 @@ class WePairingServer {
                             }
                         } else {
                             // No pending wallpaper — send generic response.
+                            // v0.7.4 note: this deliberately remains an
+                            // {"status":"AuthOK"} ack (unchanged wire behavior).
+                            // The phone's post-pairing command loop primarily
+                            // sends heartbeats (handled above); for any other
+                            // message we ack with AuthOK rather than staying
+                            // silent, because the phone's TcpClient may block
+                            // on a response. Changing the response shape here
+                            // risks breaking the pairing session — keep as-is.
                             // v0.5.32 (audit C4): synchronized on outputLock
                             // so this write can't interleave with an
                             // in-flight transfer thread's writes (which

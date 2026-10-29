@@ -18,7 +18,6 @@ object SteamCredentialsStore {
     private const val PREF_NAME = "wepwawet_steam_credentials"
     private const val KEY_USERNAME = "steam_username"
     private const val KEY_PASSWORD = "steam_password"
-    private const val KEY_GUARD_CODE = "steam_guard_code"
 
     fun saveCredentials(context: Context, username: String, password: String) {
         val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
@@ -60,16 +59,14 @@ object SteamCredentialsStore {
             "username_changed" to usernameChanged)
     }
 
-    fun saveGuardCode(context: Context, code: String) {
-        val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_GUARD_CODE, code).apply()
-        WepWawetLogger.proxy("SteamCredentialsStore: guard code saved")
-    }
-
-    fun getGuardCode(context: Context): String? {
-        return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_GUARD_CODE, null)?.takeIf { it.isNotBlank() }
-    }
+    // v0.7.4: Steam Guard CODE storage removed. The app never collected a
+    // Steam Guard code from the user — saveGuardCode() had ZERO call sites,
+    // so getGuardCode() always returned null and the GuardAuthenticator's
+    // getDeviceCode() path could only ever fail with "code required but not
+    // provided". Authentication goes through Steam's device-confirmation
+    // flow instead (the user approves the "is this you?" prompt on their
+    // Steam mobile app) — see WorkshopDownloader.GuardAuthenticator.
+    // acceptDeviceConfirmation().
 
     fun getUsername(context: Context): String? {
         return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)

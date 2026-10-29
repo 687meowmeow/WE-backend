@@ -42,20 +42,29 @@ class LogPersistenceWorker(
             val today = LocalDate.now(ZoneId.systemDefault())
             val dailyFile = File(logsDir, "wepwawet-${LOG_FMT.format(today)}.log")
             // Write each entry with an immediate flush so a process kill mid-batch
-            // doesn't leave partial entries in the file. If the process is killed
-            // between entries, last_seq is NOT updated, and only the remaining
-            // entries are retried (no duplicates). If killed mid-entry, only the
-            // current line is partial — a log parser can detect and skip it.
+            // doesn't leave partial entries in the file.
+            //
+            // v0.7.4 fix (duplicate log lines after a crash mid-batch): the old
+            // code wrote the whole batch first and persisted `last_seq` with a
+            // single async apply() AFTER the loop. If the process was killed
+            // after some entries were flushed but before the apply() landed on
+            // disk, `last_seq` stayed at its previous value — the next worker
+            // run re-filtered the same snapshot and re-appended the entries that
+            // had already been written, producing duplicated lines in the log
+            // file (the old comment claimed this couldn't happen; it could).
+            //
+            // Now the watermark is persisted SYNCHRONOUSLY (commit()) after
+            // EACH entry is flushed. A kill can now only ever lose the entry
+            // whose commit() hadn't finished — never duplicate a committed one.
+            // The worker runs on a background thread, so the fsync cost per
+            // entry (a few ms) never blocks the UI.
             java.io.FileWriter(dailyFile, true).use { fw ->
                 toWrite.forEach { e ->
                     fw.write(e.format())
                     fw.write("\n")
                     fw.flush()
+                    prefs.edit().putLong("last_seq", e.seq).commit()
                 }
-            }
-            // Update last persisted sequence number
-            toWrite.maxOfOrNull { it.seq }?.let { maxSeq ->
-                prefs.edit().putLong("last_seq", maxSeq).apply()
             }
         }
 

@@ -115,6 +115,15 @@ class WepWawetApplication : Application(), Configuration.Provider, ImageLoaderFa
         // v0.6.1: Load persisted download history from SharedPreferences
         com.wepwawet.data.DownloadManager.initialize(this)
 
+        // v0.7.4: load the user's page-size setting into SteamApiService so the
+        // "Page size" slider in Settings actually affects queries (it was
+        // previously persisted but never read — the API always used 30).
+        runCatching {
+            com.wepwawet.data.SteamApiService.initPageSize(this)
+        }.onFailure { t ->
+            Log.e(TAG, "SteamApiService.initPageSize failed", t)
+        }
+
         // Step 2: Write a boot breadcrumb to public Downloads/WepWawet/boot.txt
         // so the user can verify the app actually reached onCreate — if even
         // this file is missing, the crash is happening BEFORE Application.onCreate
@@ -297,9 +306,15 @@ class WepWawetApplication : Application(), Configuration.Provider, ImageLoaderFa
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = getSystemService(NotificationManager::class.java)
 
+        // v0.7.4: create the channel ID the PairingService actually uses
+        // ("wepwawet_pairing" — see PairingService.CHANNEL_ID). This used to
+        // create "wepwawet.proxy", a DIFFERENT id that no notification was ever
+        // posted to — a dead channel alongside the real one the service creates
+        // itself. Creating the same id here is idempotent (first creation wins)
+        // and just means the channel exists even before the service first runs.
         nm.createNotificationChannel(
             NotificationChannel(
-                CHANNEL_PROXY,
+                "wepwawet_pairing",
                 getString(R.string.notif_proxy_channel_name),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
@@ -320,7 +335,9 @@ class WepWawetApplication : Application(), Configuration.Provider, ImageLoaderFa
 
     companion object {
         private const val TAG = "WepWawet-App"
-        const val CHANNEL_PROXY = "wepwawet.proxy"
+        // (v0.7.4: the unused CHANNEL_PROXY = "wepwawet.proxy" constant was
+        //  removed — the app now creates the "wepwawet_pairing" channel id that
+        //  PairingService actually posts to. See createNotificationChannels.)
 
         /**
          * Singleton Application instance. Set in onCreate(). Used by

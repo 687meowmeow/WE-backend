@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -78,7 +79,11 @@ class WorkshopRepository constructor(
 
     /** Mutex guards concurrent browse/search operations against each other. */
     private val browseLock = Mutex()
-    private var loadJob: kotlinx.coroutines.Job? = null  // M2 fix
+    // (v0.7.4: the `loadJob` field was removed — it was declared for an "M2 fix"
+    //  but NEVER assigned anywhere, so `loadJob?.cancel()` in startBrowse was
+    //  always a no-op and only created the false impression that in-flight
+    //  loads were being cancelled. startBrowse serializes on browseLock
+    //  exactly as before.)
 
     // ====== Search state (separate from browse so user can switch back) ======
 
@@ -116,7 +121,11 @@ class WorkshopRepository constructor(
         _searchQueryText.value = query
     }
 
-    private var currentSearchQuery: String? = null
+    // v0.7.4: @Volatile — this field is read OUTSIDE browseLock by the routing
+    // branches in loadNextPage()/loadPage() (before acquiring the mutex) and
+    // written under the lock by startSearch/clearSearch. Without @Volatile a
+    // reader thread may observe a stale value and route to the wrong branch.
+    @Volatile private var currentSearchQuery: String? = null
     private var currentSearchPage: Int = 0
     @Volatile private var searchHasMore: Boolean = true
 
@@ -153,8 +162,6 @@ class WorkshopRepository constructor(
      * Called when the user changes sort, tag, query, or creator.
      */
     suspend fun startBrowse(filter: Filter) {
-        loadJob?.cancel()
-        loadJob = null
         browseLock.withLock {
             currentFilter = filter
             currentPage = 0
@@ -199,10 +206,14 @@ class WorkshopRepository constructor(
      * `browseLock.withLock` here for both branches.
      */
     suspend fun loadPage(pageNum: Int) {
+        // v0.7.4: validate the page number — a pageNum < 1 would set
+        // currentPage negative and make Steam reject the request with a
+        // confusing error. Clamp to page 1 instead.
+        val safePageNum = pageNum.coerceAtLeast(1)
         if (currentSearchQuery != null) {
             // Search mode pagination
             browseLock.withLock {
-                currentSearchPage = pageNum - 1
+                currentSearchPage = safePageNum - 1
                 _searchItems.value = emptyList()
                 // v0.7.1: reset the search empty-page counter when the
                 // user manually jumps to a different page — otherwise a
@@ -211,12 +222,19 @@ class WorkshopRepository constructor(
                 // the new page from auto-loading the next one if it also
                 // comes back empty.
                 consecutiveEmptySearchPages = 0
+                // v0.7.4 fix: reset searchHasMore too — mirroring the browse
+                // branch below. If the PREVIOUS search had reached end of
+                // results (searchHasMore=false), loadNextSearchPageLocked()
+                // early-returned and the user got a silently empty screen
+                // with no loading state and no way to recover except by
+                // running a brand-new search.
+                searchHasMore = true
                 loadNextSearchPageLocked()
             }
             return
         }
         browseLock.withLock {
-            currentPage = pageNum - 1
+            currentPage = safePageNum - 1
             _browseItems.value = emptyList()
             consecutiveEmptyPages = 0
             hasMore = true
@@ -312,16 +330,33 @@ class WorkshopRepository constructor(
                     // (365) and MOST_POPULAR_MONTH (30) would return identical results to
                     // MOST_POPULAR_WEEK (7). WorkshopRepository will then route trend sorts to
                     // HTML endpoint (FALLBACK 2) which DOES accept arbitrary day values.
-                    val queryResult = steamApi.queryFiles(
-                        sort = filter.sort,
-                        page = page,
-                        tags = filter.tags,
-                        excludedTags = filter.excludedTags,
-                        mobileCompatible = filter.mobileCompatible,
-                        query = filter.query,
-                    )
-                    if (queryResult.isSuccess) {
-                        queryResult
+                    //
+                    // v0.7.4: the routing described above NOW ACTUALLY HAPPENS. The old
+                    // code called the HTTP API even for trendDays > 7 and used its
+                    // (silently clamped-to-7) "success" result — MOST_POPULAR_YEAR and
+                    // MOST_POPULAR_MONTH returned week-trending items whenever the
+                    // JavaSteam session was unavailable. We now skip FALLBACK 1 outright
+                    // for trendDays > 7 and go straight to the HTML endpoint.
+                    val httpResult = if (filter.sort.trendDays > 7) {
+                        WepWawetLogger.workshop(
+                            "loadNextPage: trend days > 7 — skipping HTTP API (clamps to 7), using HTML endpoint",
+                            "page" to page,
+                            "sort" to filter.sort.displayName,
+                            "trend_days" to filter.sort.trendDays,
+                        )
+                        null
+                    } else {
+                        steamApi.queryFiles(
+                            sort = filter.sort,
+                            page = page,
+                            tags = filter.tags,
+                            excludedTags = filter.excludedTags,
+                            mobileCompatible = filter.mobileCompatible,
+                            query = filter.query,
+                        )
+                    }
+                    if (httpResult != null && httpResult.isSuccess) {
+                        httpResult
                     } else {
                         // FALLBACK 2: HTML scraping endpoint (steamcommunity.com/workshop/browse).
                         // Accepts arbitrary `days` values for trend sorts (verified: 1, 7, 30,
@@ -549,21 +584,30 @@ class WorkshopRepository constructor(
 
     /**
      * Clear the active search session — UI falls back to showing browse items.
+     *
+     * v0.7.4: now `suspend` + acquires [browseLock]. Previously it mutated the
+     * session state (currentSearchQuery, searchHasMore, _searchItems, …)
+     * WITHOUT the lock — if loadNextSearchPageLocked() was in flight when the
+     * user cleared the search, the in-flight load completed afterwards and
+     * clobbered the freshly-cleared state, making the old search results
+     * REAPPEAR after the user cleared them.
      */
-    fun clearSearch() {
-        currentSearchQuery = null
-        currentSearchPage = 0
-        searchHasMore = false
-        // v0.7.1: reset the search empty-page counter on clear too, so the
-        // next search session starts fresh.
-        consecutiveEmptySearchPages = 0
-        _searchItems.value = emptyList()
-        _searchState.value = BrowseState.Idle
-        // v0.4.7/v0.5.9-alpha: clear the hoisted query text so the search
-        // box is empty next time the user opens it (matches clearSearch
-        // semantics).
-        _searchQueryText.value = ""
-        WepWawetLogger.workshop("clearSearch")
+    suspend fun clearSearch() {
+        browseLock.withLock {
+            currentSearchQuery = null
+            currentSearchPage = 0
+            searchHasMore = false
+            // v0.7.1: reset the search empty-page counter on clear too, so the
+            // next search session starts fresh.
+            consecutiveEmptySearchPages = 0
+            _searchItems.value = emptyList()
+            _searchState.value = BrowseState.Idle
+            // v0.4.7/v0.5.9-alpha: clear the hoisted query text so the search
+            // box is empty next time the user opens it (matches clearSearch
+            // semantics).
+            _searchQueryText.value = ""
+            WepWawetLogger.workshop("clearSearch")
+        }
     }
 
     private suspend fun loadNextSearchPage() {
@@ -778,8 +822,16 @@ class WorkshopRepository constructor(
 
             filteredItems.forEach { detailCache[it.id] = it }
 
-            // Resolve creator names for the new search items too
-            resolveCreatorsForItems(filteredItems)
+            // Resolve creator names for the new search items too.
+            // v0.7.4: fire-and-forget on the app scope, matching the browse
+            // path (loadNextPageLocked). It previously ran INLINE while
+            // holding browseLock — resolveCreatorsForItems performs network
+            // calls (GetPlayerSummaries with 100ms inter-chunk delays), so a
+            // search result could hold the lock for seconds, serializing
+            // every other browse/search/refresh/loadPage behind it.
+            WepWawetApplication.appScope.launch {
+                resolveCreatorsForItems(filteredItems)
+            }
 
             _searchItems.value = (_searchItems.value + filteredItems).distinctBy { it.id }
             currentSearchPage = page
@@ -809,12 +861,14 @@ class WorkshopRepository constructor(
      * emulated Steam client via `steam://subscribe/<id>`.
      */
     suspend fun subscribe(itemId: String) {
-        _subscribedIds.value = _subscribedIds.value + itemId
+        // v0.7.4: atomic update — the old read-modify-write
+        // (`value = value + itemId`) lost concurrent subscriptions.
+        _subscribedIds.update { it + itemId }
         WepWawetLogger.workshop("subscribe", "id" to itemId)
     }
 
     suspend fun unsubscribe(itemId: String) {
-        _subscribedIds.value = _subscribedIds.value - itemId
+        _subscribedIds.update { it - itemId }
         WepWawetLogger.workshop("unsubscribe", "id" to itemId)
     }
 
@@ -928,7 +982,7 @@ class WorkshopRepository constructor(
      * === v0.5.10-alpha REGRESSION FIX (re-applied in v0.5.11-alpha after
      *     a parallel agent reset dev to v0.5.9-alpha state) ===
      * Previously this function ALSO applied a client-side "mobile-compatible"
-     * filter (drop items where WorkshopTags.isMobileCompatible(type, tags)
+     * filter (drop items where WorkshopTags.isMobileCompatible(type)
      * returned false — i.e., everything except Scene/Video). That filter was
      * OVER-AGGRESSIVE: the Steam API already filters by the AUTHOR's
      * mobile-compatible permission flag via the
@@ -1083,12 +1137,17 @@ class WorkshopRepository constructor(
             // instead of N parallel per-ID HTML scraping calls.
             val results = steamApi.getPlayerSummaries(toResolve).getOrDefault(emptyMap())
             // Merge results into the StateFlow snapshot
+            // v0.7.4: atomic update — the old read-modify-write on
+            // _creatorNames.value lost concurrent merges when disjoint ID
+            // sets were resolved simultaneously.
             if (results.isNotEmpty()) {
-                val merged = _creatorNames.value.toMutableMap()
-                for ((steamId, name) in results) {
-                    merged[steamId] = name
+                _creatorNames.update { existing ->
+                    val merged = existing.toMutableMap()
+                    for ((steamId, name) in results) {
+                        merged[steamId] = name
+                    }
+                    merged
                 }
-                _creatorNames.value = merged
             }
             WepWawetLogger.workshop("resolveCreatorsForItems done",
                 "looked_up" to toResolve.size,

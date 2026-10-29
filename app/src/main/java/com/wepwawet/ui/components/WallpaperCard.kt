@@ -87,7 +87,7 @@ fun WallpaperCard(
     val isCompleted = completedDownloads.any { it.itemId == item.id }
 
     val maturity = WorkshopTags.getMaturity(item.tags)
-    val isMobile = WorkshopTags.isMobileCompatible(item.type, item.tags)
+    val isMobile = WorkshopTags.isMobileCompatible(item.type)
 
     // The display name to show in the "by …" line. Preference order:
     //   1. resolved creatorName passed in from the repo's creatorNames cache

@@ -43,6 +43,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.wepwawet.BuildConfig
+import com.wepwawet.data.SteamApiService
 import com.wepwawet.log.WepWawetLogger
 import com.wepwawet.pairing.SteamCredentialsStore
 import com.wepwawet.pairing.WorkshopBrowseSession
@@ -351,6 +352,15 @@ fun SettingsScreen(
                         pageSize = size
                         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                             .edit().putInt(KEY_PAGE_SIZE, size).apply()
+                        // v0.7.4: apply the new page size to the RUNNING SteamApiService
+                        // so subsequent browse/search queries actually use it. Before
+                        // this, the slider's value was persisted but never read by
+                        // anything — every query hardcoded 30.
+                        SteamApiService.setPageSize(size)
+                        WepWawetLogger.appInfo(
+                            "settings_page_size_changed",
+                            "page_size" to size,
+                        )
                     },
                 )
             }
