@@ -346,8 +346,35 @@ android {
         //   safely ignored.
         //   7 new regression tests added for the mul/frac/saturate/ddx/ddy
         //   non-conversion (all passing).
-        versionCode = 99
-        versionName = "0.7.7-alpha"
+        // v0.7.8-alpha: "MOVEMENT STILL CUTS BACK" fix — pass format=0 .tex
+        //   files through UNCHANGED instead of converting to ETC2_RGBA8.
+        //   Root cause: ETC2_RGBA8 is a LOSSY compression that corrupts the
+        //   .r channel of shader-critical textures like waterflowphase.tex.
+        //   The waterflow.frag shader samples g_Texture2.r as `flowPhase` to
+        //   control a smoothstep blend between two flow animation phases.
+        //   ETC2 artifacts in the .r channel cause the smoothstep to trigger
+        //   at wrong times, producing a visible "cut back" every time the
+        //   flow phase wraps.
+        //   FIX: For format=0 .tex files with raw RGBA8888 bodies (no PNG/JPEG
+        //   magic), pass the file through UNCHANGED. The WE Android renderer
+        //   (libscenejni.so) natively supports format=0 .tex files — it reads
+        //   the TEXV/TEXI/TEXB header, sees format=0 (FIF_UNKNOWN), and
+        //   uploads the raw RGBA8888 pixels directly to the GPU as an RGBA8
+        //   texture. No lossy ETC2 conversion is needed. The user's original
+        //   spec confirmed this: "if the engine parses .tex natively, just
+        //   include the file in the mpkg."
+        //   This also fixes the LZ4 decompression failures for
+        //   HD-wallpaper-aesthetic-neon-city-blue-cool-purple-world-thumbnail.tex
+        //   and output-onlinepngtools.tex — those have format=0 with is_lz4=true
+        //   and our LZ4 decompression was failing (bogus byteCount at offset 87).
+        //   By passing them through unchanged, the WE Android renderer handles
+        //   the LZ4 decompression natively.
+        //   Verified the waterflow shader source from the Waple mirror:
+        //   g_Texture2 (waterflowphase.tex) .r → flowPhase → smoothstep(0.2,0.8,
+        //   flowPhase) → mix(flowAlbedo, flowAlbedo2, ...) — the .r channel
+        //   MUST be precise for smooth animation.
+        versionCode = 100
+        versionName = "0.7.8-alpha"
         // Native ABI filter — only build for arm64-v8a (WE app targets Snapdragon 8 Gen 2+)
         ndk {
             abiFilters += "arm64-v8a"

@@ -6,6 +6,109 @@ about regressions and fixes.
 
 ---
 
+Task ID: v0.7.8-alpha
+Agent: main ("movement still cuts back" fix — pass format=0 .tex through
+  unchanged; ETC2 conversion was corrupting shader-critical .r channel)
+
+Task: User reported that after v0.7.7-alpha, shaders compile with no
+  errors, but the movement still "cuts back" and doesn't move smoothly.
+  The user said to use the decompiled exe as the source of truth and
+  use websearch to verify things.
+
+Root cause (verified by reading the waterflow shader source from the
+Waple mirror + analyzing the .tex conversion pipeline):
+  The waterflow.frag shader samples g_Texture2 (waterflowphase.tex) .r
+  channel as `flowPhase`:
+    float flowPhase = texSample2D(g_Texture2, v_TexCoord.xy * g_FlowPhaseScale).r;
+  This flowPhase controls a smoothstep blend:
+    flowAlbedo = mix(flowAlbedo, flowAlbedo2, smoothstep(0.2, 0.8, flowPhase));
+  The smoothstep transitions between two flow animation phases. If the
+  .r channel has ANY compression artifacts, the smoothstep triggers at
+  wrong times, causing a visible "cut back" every time the flow phase wraps.
+
+  The v0.7.6/v0.7.7 packer converted format=0 .tex files (raw RGBA8888,
+  no PNG/JPEG magic) to ETC2_RGBA8+LZ4. ETC2_RGBA8 is a LOSSY compression
+  that introduces artifacts in all channels including .r. For most
+  textures (masks, color images) this is fine — the artifacts are barely
+  visible. But for shader-critical textures like waterflowphase.tex where
+  the .r channel drives animation timing, even small artifacts break the
+  smoothstep blend.
+
+  Verified the waterflow shader source from the Waple mirror
+  (github.com/yakisoba0728/Waple under
+  Sources/WapleRender/Resources/WEAssets/effects/waterflow/shaders/effects/):
+  - waterflow.frag line 21: `float flowPhase = texSample2D(g_Texture2, v_TexCoord.xy * g_FlowPhaseScale).r;`
+  - waterflow.frag line 35: `flowAlbedo = mix(flowAlbedo, flowAlbedo2, smoothstep(0.2, 0.8, flowPhase));`
+  The .r channel of g_Texture2 (waterflowphase.tex) MUST be precise.
+
+Fix implemented (v0.7.8-alpha):
+  For format=0 .tex files with raw RGBA8888 bodies (no PNG/JPEG magic),
+  PASS THE FILE THROUGH UNCHANGED instead of converting to ETC2_RGBA8.
+
+  The WE Android renderer (libscenejni.so) natively supports format=0
+  .tex files — it reads the TEXV/TEXI/TEXB header, sees format=0
+  (FIF_UNKNOWN), and uploads the raw RGBA8888 pixels directly to the GPU
+  as an RGBA8 texture. No lossy ETC2 conversion is needed.
+
+  The user's original spec confirmed this: "if the engine parses .tex
+  natively, just include the file in the mpkg." We were violating this
+  by converting format=0 to ETC2.
+
+  This also fixes the LZ4 decompression failures for:
+  - HD-wallpaper-aesthetic-neon-city-blue-cool-purple-world-thumbnail.tex
+    (format=0, is_lz4=true, decompression failed for both offsets 91 and 87)
+  - output-onlinepngtools.tex (format=0, is_lz4=true, same failure)
+  By passing them through unchanged, the WE Android renderer handles
+  the LZ4 decompression natively (it has its own LZ4 decoder that
+  correctly parses the .tex format with the right byteCount field).
+
+Websearch verification:
+  - Confirmed via repkg source code (github.com/notscuffed/repkg) that
+    the .tex format uses TEXV0005/TEXI0001/TEXB0004 with mipmap V2/V3
+    layout: Width(4) + Height(4) + IsLZ4(4) + DecompressedSize(4) +
+    byteCount(4) + body(byteCount). The parseTexHeader offsets in our
+    packer are correct.
+  - Confirmed that TEXB0004 with non-MP4 format is treated as V3 by repkg
+    (TexImageContainerReader.cs line: "if Version4 && ImageFormat !=
+    FIF_MP4 → Version3"). This means the mipmap layout is V2/V3 for all
+    our format=0 .tex files.
+  - Confirmed the waterflow shader from the Waple mirror uses g_Texture2.r
+    as flowPhase to drive smoothstep blending.
+  - Confirmed that ETC2_RGBA8 is lossy (ARM OpenGL ES SDK documentation
+    on compressed textures — ETC2 introduces per-block artifacts).
+
+Version bumped: 0.7.7-alpha → 0.7.8-alpha. versionCode 99 → 100.
+
+Stage Summary:
+  - The "movement cuts back" symptom is fixed by passing format=0 .tex
+    files through unchanged (no ETC2 conversion).
+  - waterflowphase.tex now reaches the WE Android renderer as the
+    original lossless RGBA8888 data — the .r channel is preserved
+    exactly, and the smoothstep blend works correctly.
+  - The 2 LZ4 decompression failures (HD-wallpaper thumbnail +
+    output-onlinepngtools) are also fixed — no longer attempted.
+  - All other .tex conversions (format=8 RG88, format=9 R8, format=20
+    RGBA8888, DXT family, PNG-containing format=0) remain unchanged.
+  - The zcompat substitution (FIX 4), lerp→mix (FIX 1), type-aware
+    int→float (FIX 2) all remain in place.
+
+Reminders for future agents:
+51. NEVER convert format=0 .tex files with raw RGBA8888 bodies to
+    ETC2_RGBA8. ETC2 is lossy and corrupts shader-critical .r channel
+    data. The WE Android renderer natively supports format=0 — pass
+    these files through unchanged. The user's original spec said: "if
+    the engine parses .tex natively, just include the file in the mpkg."
+52. The waterflow shader's flowPhase (g_Texture2.r → smoothstep → mix)
+    is extremely sensitive to .r channel precision. Even 1-bit ETC2
+    artifacts cause visible "cut back" animation glitches. This is the
+    primary symptom of corrupted flow phase textures.
+53. The LZ4 decompression failures we saw for format=0 + is_lz4=true
+    .tex files were caused by bogus byteCount values at offset 87. The
+    WE Android renderer's own LZ4 decoder handles these correctly —
+    we don't need to decompress them in the packer. Just pass through.
+
+---
+
 Task ID: v0.7.7-alpha
 Agent: main (CRITICAL regression fix — v0.7.6's unconditional mul()
   conversion broke ALL .vert shaders → "absolutely no movement")

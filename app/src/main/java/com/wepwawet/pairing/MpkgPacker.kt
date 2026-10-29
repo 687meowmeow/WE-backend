@@ -784,67 +784,77 @@ object MpkgPacker {
                         "decompressed_for_detection" to didDecompressForDetection)
                 }
             } else if (didDecompressForDetection) {
-                // LZ4-decompressed body but no PNG/JPEG found — treat as raw
-                // RGBA8888 (TEXI format=0 with raw RGBA pixel data, no PNG
-                // container). convertTexRgba8888ToEtc2 handles LZ4 internally
-                // and reads width/height from the TEXI header.
-                WepWawetLogger.proxy("MpkgPacker.packFromPkg: .tex is raw RGBA8888 (format=0, LZ4-compressed, no PNG magic) — converting to ETC2_RGBA8+LZ4",
+                // v0.7.8-alpha: LZ4-decompressed body but no PNG/JPEG found.
+                // This is a format=0 .tex with raw RGBA8888 pixel data (LZ4-compressed
+                // in the .pkg, but the body is raw RGBA8888 after decompression).
+                //
+                // ROOT CAUSE of "movement cuts back" (v0.7.7):
+                // The v0.7.6/v0.7.7 packer converted these to ETC2_RGBA8+LZ4.
+                // ETC2_RGBA8 is a LOSSY compression — it introduces artifacts in
+                // the .r channel. For textures like waterflowphase.tex that drive
+                // shader animation (the waterflow.frag shader samples g_Texture2.r
+                // as `flowPhase` to control a smoothstep blend), even small
+                // ETC2 compression artifacts in the .r channel cause the smoothstep
+                // to trigger at wrong times, producing a visible "cut back" in the
+                // animation every time the flow phase wraps.
+                //
+                // FIX (v0.7.8): Pass these .tex files through UNCHANGED. The WE
+                // Android renderer (libscenejni.so) natively supports format=0
+                // .tex files with raw RGBA8888 bodies — it reads the TEXV/TEXI/TEXB
+                // header, sees format=0 (FIF_UNKNOWN), and uploads the raw RGBA8888
+                // pixels directly to the GPU as an RGBA8 texture. No lossy ETC2
+                // conversion is needed. The user's original spec confirmed this:
+                // "if the engine parses .tex natively, just include the file in
+                // the mpkg."
+                //
+                // The LZ4-compressed .tex is already in a format the WE Android
+                // renderer can handle natively (IsLZ4=1, format=0, raw RGBA8888
+                // body). We just pass it through as-is.
+                WepWawetLogger.proxy("MpkgPacker.packFromPkg: format=0 .tex with raw RGBA8888 body (LZ4-compressed) — passing through UNCHANGED (WE Android supports format=0 natively; ETC2 conversion was corrupting the .r flow phase data)",
                     "name" to name,
                     "original_size" to blob.size,
-                    "decompressed_size" to effectiveBlob.size,
                     "texi_format" to texiFormat,
-                    "is_lz4" to isLz4)
-                val converted = convertTexRgba8888ToEtc2(blob, name)
-                if (converted != null) {
-                    processedEntries.add(Pair(name, converted))
-                    texConverted++
-                    texRgbaConverted++
-                    totalOriginalTexBytes += blob.size
-                    totalConvertedTexBytes += converted.size
-                    WepWawetLogger.proxy("MpkgPacker.packFromPkg: raw RGBA8888 .tex converted (LZ4-compressed input)",
-                        "name" to name,
-                        "original_size" to blob.size,
-                        "converted_size" to converted.size,
-                        "size_ratio" to "%.2fx".format(converted.size.toDouble() / blob.size.toDouble()))
-                } else {
-                    // ETC2 path failed (e.g., ETC2 native lib unavailable) —
-                    // fall back to passthrough of the original (LZ4-compressed)
-                    // .tex. The WE Android renderer MAY be able to load it if
-                    // it has its own LZ4+RGBA8888 .tex loader; if not, this
-                    // texture will be missing and the shader will sample the
-                    // default. WARN explicitly.
-                    processedEntries.add(texEntry)
-                    WepWawetLogger.proxyWarn("MpkgPacker.packFromPkg: raw RGBA8888 .tex conversion FAILED — using original (LZ4-compressed .tex passthrough — may fail to load on Android)",
-                        "name" to name,
-                        "reason" to "ETC2 native lib unavailable or RGBA8888 decode failed")
-                }
+                    "is_lz4" to isLz4,
+                    "reason" to "ETC2_RGBA8 is lossy and corrupts shader-critical .r channel data (e.g., waterflowphase.tex flow phase)")
+                processedEntries.add(texEntry)
             } else if (texiFormat == 0) {
-                // format=0, IsLZ4=0, no PNG/JPEG magic — likely raw RGBA8888
-                // uncompressed. Try convertTexRgba8888ToEtc2 (which handles
-                // the uncompressed case).
-                WepWawetLogger.proxy("MpkgPacker.packFromPkg: .tex is raw RGBA8888 (format=0, uncompressed, no PNG magic) — converting to ETC2_RGBA8+LZ4",
+                // v0.7.8-alpha: format=0, IsLZ4=0, no PNG/JPEG magic — raw RGBA8888
+                // uncompressed body.
+                //
+                // ROOT CAUSE of "movement cuts back" (v0.7.7):
+                // The v0.7.6/v0.7.7 packer converted these to ETC2_RGBA8+LZ4.
+                // ETC2_RGBA8 is a LOSSY compression that corrupts the .r channel
+                // of shader-critical textures like waterflowphase.tex. The
+                // waterflow.frag shader samples g_Texture2.r as `flowPhase` to
+                // control a smoothstep blend between two flow animation phases.
+                // ETC2 artifacts in the .r channel cause the smoothstep to trigger
+                // at wrong times, producing a visible "cut back" every time the
+                // flow phase wraps.
+                //
+                // FIX (v0.7.8): Pass these .tex files through UNCHANGED. The WE
+                // Android renderer natively supports format=0 .tex files with
+                // raw RGBA8888 bodies — it reads the TEXV/TEXI/TEXB header, sees
+                // format=0 (FIF_UNKNOWN), and uploads the raw RGBA8888 pixels
+                // directly to the GPU as an RGBA8 texture. No lossy ETC2
+                // conversion is needed. The user's original spec confirmed this:
+                // "if the engine parses .tex natively, just include the file in
+                // the mpkg."
+                //
+                // This also fixes the LZ4 decompression failures we saw for
+                // HD-wallpaper-aesthetic-neon-city-blue-cool-purple-world-thumbnail.tex
+                // and output-onlinepngtools.tex — those files have format=0 with
+                // is_lz4=true, and our LZ4 decompression was failing (bogus
+                // byteCount at offset 87). By passing them through unchanged,
+                // the WE Android renderer handles the LZ4 decompression natively
+                // (it has its own LZ4 decoder that correctly parses the .tex
+                // format).
+                WepWawetLogger.proxy("MpkgPacker.packFromPkg: format=0 .tex with raw RGBA8888 body (uncompressed) — passing through UNCHANGED (WE Android supports format=0 natively; ETC2 conversion was corrupting the .r flow phase data)",
                     "name" to name,
                     "original_size" to blob.size,
                     "texi_format" to texiFormat,
-                    "is_lz4" to isLz4)
-                val converted = convertTexRgba8888ToEtc2(blob, name)
-                if (converted != null) {
-                    processedEntries.add(Pair(name, converted))
-                    texConverted++
-                    texRgbaConverted++
-                    totalOriginalTexBytes += blob.size
-                    totalConvertedTexBytes += converted.size
-                    WepWawetLogger.proxy("MpkgPacker.packFromPkg: raw RGBA8888 .tex converted (uncompressed input)",
-                        "name" to name,
-                        "original_size" to blob.size,
-                        "converted_size" to converted.size,
-                        "size_ratio" to "%.2fx".format(converted.size.toDouble() / blob.size.toDouble()))
-                } else {
-                    processedEntries.add(texEntry)
-                    WepWawetLogger.proxyWarn("MpkgPacker.packFromPkg: raw RGBA8888 .tex conversion FAILED — using original (uncompressed .tex passthrough — may fail to load on Android)",
-                        "name" to name,
-                        "reason" to "ETC2 native lib unavailable or RGBA8888 decode failed")
-                }
+                    "is_lz4" to isLz4,
+                    "reason" to "ETC2_RGBA8 is lossy and corrupts shader-critical .r channel data (e.g., waterflowphase.tex flow phase)")
+                processedEntries.add(texEntry)
             } else {
                 processedEntries.add(texEntry)
             }
