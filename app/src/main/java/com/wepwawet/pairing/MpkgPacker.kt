@@ -4983,6 +4983,75 @@ object MpkgPacker {
                     "file" to name)
             }
 
+            // =========================================================================
+            // v0.7.15: Hoist `uniform sampler2D` declarations before `#include`
+            // directives (fixes the blur_precise_gaussian.frag error).
+            // =========================================================================
+            // The WE Android preprocessor inlines `#include "common_blur.h"` at the
+            // #include line, but the inlined blur functions reference `g_Texture0`
+            // which is declared AFTER the #include in the original shader. The
+            // preprocessor does NOT hoist the uniform declaration, so the blur
+            // functions see `g_Texture0` as undeclared → "undeclared identifier"
+            // errors → the blur effect is silently removed.
+            //
+            // FIX: Move all `uniform sampler2D` declarations to BEFORE the first
+            // #include directive. This is always safe in GLSL (moving a uniform
+            // declaration earlier never breaks compilation) and ensures the
+            // inlined .h functions can reference the samplers they need.
+            //
+            // Only fires when an #include directive precedes a uniform sampler2D
+            // declaration (the problematic case). Shaders without #include are
+            // untouched.
+            val firstIncludeIdx = modified.indexOf("#include")
+            if (firstIncludeIdx >= 0) {
+                val uniformRegex = Regex("""^[ \t]*uniform\s+sampler2D\s+\w+\s*;.*$""", RegexOption.MULTILINE)
+                val uniformMatches = uniformRegex.findAll(modified).toList()
+                // Check if any uniform declaration comes AFTER the first #include
+                val needsHoist = uniformMatches.any { it.range.first > firstIncludeIdx }
+                if (needsHoist && uniformMatches.isNotEmpty()) {
+                    val uniformLines = uniformMatches.map { it.value }.toMutableList()
+                    // Dedup (keep first occurrence of each uniform name)
+                    val seen = mutableSetOf<String>()
+                    val dedupedLines = mutableListOf<String>()
+                    for (ul in uniformLines) {
+                        val uname = Regex("""uniform\s+sampler2D\s+(\w+)""").find(ul)?.groupValues?.get(1) ?: continue
+                        if (uname in seen) continue
+                        seen.add(uname)
+                        dedupedLines.add(ul)
+                    }
+                    // Remove ALL uniform sampler2D declarations from their current positions
+                    modified = modified.replace(uniformRegex, "")
+                    // Clean up consecutive blank lines left behind
+                    modified = modified.replace(Regex("""\n{3,}"""), "\n\n")
+                    // Find insertion point: after #version / preprocessor preamble,
+                    // BEFORE the first #include directive.
+                    var insertPos = 0
+                    val linesArr = modified.lines()
+                    var consumed = 0
+                    for (ln in linesArr) {
+                        val t = ln.trim()
+                        if (t.startsWith("#version") || t.startsWith("#extension") ||
+                            t.startsWith("#pragma") || t.isEmpty() || t.startsWith("//") ||
+                            t.startsWith("precision") || t.startsWith("out ") ||
+                            t.startsWith("#define") || t.startsWith("#if") ||
+                            t.startsWith("#endif")
+                        ) {
+                            consumed += ln.length + 1
+                            insertPos = consumed
+                        } else {
+                            break
+                        }
+                    }
+                    // Insert the uniform declarations at insertPos
+                    val insertBlock = dedupedLines.joinToString("\n") + "\n\n"
+                    modified = modified.substring(0, insertPos) + insertBlock + modified.substring(insertPos)
+                    fixesApplied.add("hoist-uniforms-before-include (${dedupedLines.size} declarations)")
+                    WepWawetLogger.proxy(
+                        "MpkgPacker.fixShaders: hoisted uniform sampler2D declarations before #include",
+                        "file" to name, "count" to dedupedLines.size)
+                }
+            }
+
             if (modified != original) {
                 entries[i] = Pair(name, modified.toByteArray(Charsets.UTF_8))
                 fixedCount++
