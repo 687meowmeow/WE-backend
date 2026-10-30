@@ -1,0 +1,61 @@
+{
+	"contentrating" : "Mature",
+	"description" : "[X & Pixiv] Artist : misaka12003",
+	"file" : "scene.json",
+	"general" : 
+	{
+		"properties" : 
+		{
+			"dynamiconoff" : 
+			{
+				"index" : 0,
+				"order" : 100,
+				"text" : "Dynamic ON/OFF",
+				"type" : "bool",
+				"value" : true
+			},
+			"playbackdisplay" : 
+			{
+				"index" : 3,
+				"order" : 103,
+				"text" : "Playback Display",
+				"type" : "bool",
+				"value" : true
+			},
+			"runningwater" : 
+			{
+				"index" : 1,
+				"order" : 101,
+				"text" : "Water Flow",
+				"type" : "bool",
+				"value" : true
+			},
+			"schemecolor" : 
+			{
+				"index" : 0,
+				"order" : 100,
+				"text" : "ui_browse_properties_scheme_color",
+				"type" : "color",
+				"value" : "0.2980392156862745 0.10980392156862745 0.615686274509804"
+			},
+			"waterripples" : 
+			{
+				"index" : 2,
+				"order" : 102,
+				"text" : "Water Ripples",
+				"type" : "bool",
+				"value" : true
+			}
+		},
+		"supportsaudioprocessing" : true,
+		"supportsvideo" : true,
+		"supportsvideoflags" : 2
+	},
+	"preview" : "preview.gif",
+	"ratingsex" : "adult",
+	"ratingviolence" : "none",
+	"tags" : [ "Game" ],
+	"title" : "R18 Acheron & Black Swan 黄泉&黑天鹅 [Honkai:Star Rail] [NSFW]",
+	"type" : "scene",
+	"version" : 0
+}

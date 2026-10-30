@@ -2049,3 +2049,163 @@ Follow-up notes for future agents:
 - pkg_cache_enabled stores scene .pkg files in cacheDir/pkg_cache/<id>.pkg;
   the "Clear cache" button in Settings clears cacheDir so it cleans these
   too.
+
+## v0.7.16-alpha — PC-exact transcoder (wallpaperui.exe decompiled)
+
+Root cause of the "no movement at all" regression: v0.7.15's uniform-hoisting
+pass computed its insertion offset with `ln.length + 1` on CRLF files, so the
+uniform block landed INSIDE the preceding `// [COMBO]` comment line — the
+`uniform sampler2D g_Texture0;` declaration was swallowed by the comment,
+shaders/effects/shake.frag failed to compile ("'g_Texture0' : undeclared
+identifier"), and the shake effect (the water-flow movement) was dropped.
+
+The fix is not a patch on that pass — the pass is GONE, along with the entire
+v0.4–v0.7.15 regex pipeline. It is replaced by a verbatim port of what the
+REAL PC transcoder does, decoded instruction-by-instruction from
+wallpaperui.exe (fixShader @ 0x140015f20, fixBlendOpacity @ 0x140014c20,
+convertProjectToMobile @ 0x14003d1e0):
+
+  • PcShaderFixes.kt — the exact 4-stage shader pipeline:
+      1. blur fix (content-gated g_Texture0-only hoist before
+         `#include "common_blur.h"` — the ONLY hoist the PC does)
+      2. name-gated patches for exactly foliagesway / blend / shift_hue /
+         xray / perspective / skew (the exe's length+memcmp equality checks)
+      3. per-line generic passes with the PC's exact four skip rules
+         (^#…, ^[…, ^(uniform|attribute|varying|out|in)…, for/while) and
+         exact regexes — sample→_sample ($1_$2$3), int→float, sci-notation,
+         sampleCount rewrites. Ordinary // comments are NOT skipped (the
+         `^\s*\[ + char-class rules are what protect [COMBO] metadata).
+      4. BlendOpacity(base,blend,F,O) → mix(base,F(base,blend),O)
+    REMOVED as non-PC inventions: lerp→mix, cbuffer/SamplerState/Texture2D
+    rewrites, mul→mulVal, sample→sampleVal, the native glslang routing for
+    .vert/.frag, the comment/string skip-mask, the v0.4.x xray injections.
+  • PcTexTranscoder.kt + Lz4Compat.kt — the resourcecompiler64.exe output
+    format: TEXB0004-normalized headers, texbFormat=-1, single mip,
+    tex-dims = image-dims (un-padded), ETC2 only when maxdim > 2048,
+    RGBA+LZ4 when it saves ≥20%, raw + flags|=0x08 otherwise, plain LZ4
+    block compression. format 8/9 (RG88/R8) pass through untouched (the
+    v0.6.0 ETC2 conversion of masks was wrong — real PC .mpkgs ship them
+    byte-identical to the .pkg).
+  • PcPacking.kt — workshopurl appended in WE's own JSON dialect (tab
+    indent, `" : "` spacing, CRLF — byte-exact textual insertion), sounds
+    entries dropped (std::filesystem::remove in the exe), and the PC's
+    case-INSENSITIVE entry order (NTFS enumeration order — masks sorts
+    before MSK12003; the old case-sensitive sort diverged from every real
+    PC .mpkg).
+  • zcompat substitution now runs fixShader on the substituted bytes (the
+    exe substitutes AND fixes — byte-verified).
+
+Verification (all automated in PcPipelineTest — 31 tests):
+  • pulse.frag: original → PC output byte-for-byte (2729 B)
+  • zcompat Simple_Audio_Bars.frag: → PC output byte-for-byte (11662 B)
+  • output-onlinepngtools.tex (TEXB0003/LZ4): → PC output byte-for-byte
+  • waterripplenormal.tex: → PC output byte-for-byte
+  • LZ4 recompression of PC bodies: byte-identical (lz4-java JNI == the
+    PC's compressor on structured data: icon 110299 B, output 2520 B,
+    HD 267307 B, MSK-ETC2 1784263 B — all exact)
+  • workshopurl insertion, entry order, sounds rule, header layout: exact
+  • END-TO-END: the complete 4,636,932-byte .mpkg for workshop 3655958892
+    rebuilt from the .pkg inputs is BYTE-IDENTICAL to the real PC-produced
+    reference .mpkg (52/52 entries, container included), with one external
+    variable: the ETC2 pixel bytes of the single >2048px texture (the PC's
+    ETC2 encoder is not etc2comp — every etc2comp effort/metric differs —
+    our ETC2 is valid ETC2_RGBA8 and loads natively; only the block bytes
+    differ from the PC's).
+
+Entry-set note: there is NO reference-based file pruning in the PC — the
+.mpkg contains exactly the .pkg's files plus project.json/preview from the
+workshop directory (verified: the transfer's .pkg held exactly the 50 files
+that shipped; the "hagikora180727-19.tex" log line came from a different,
+9-entry run). The only drops are sounds/ paths.
+
+Known limitation (needs a binary from the user): the exact ETC2 encoder,
+the -c force / -shrink flags, and the >2048px ETC2 threshold all live inside
+resourcecompiler64.exe. The ≥20% LZ4 threshold is the best fit to the ground
+truth (5/6 byte-exact; the 6th, waterflowphase, stores as valid LZ4 instead
+of raw because lz4-java's liblz4 build compresses that noise 1% past the
+boundary — functionally identical on the phone).
+
+## v0.7.17-alpha — GLSL ES safety pass (every fxc-tolerant construct now compiles on Android)
+
+The reported error (workshop 2798696916, sharpen_filter.frag, from the
+official Android engine's own log):
+
+    ERROR: 0:56: '=' : cannot convert from '4-component vector of float' to 'float'
+    ERROR: 0:57: '' : boolean expression expected
+
+Root cause, established from the shipping binaries and WE's own mobile
+shader documentation (docs.wallpaperengine.io/en/scene/shader/mobile.html):
+
+  * The PC transcoder ships `float mask = texSample2D(g_Texture1, uv)` and
+    `mask = INVERT ? 1.0 - mask : mask` VERBATIM — fxc tolerates both
+    (X3206 implicit truncation is a warning; int ternary conditions
+    convert via != 0) and the PC renders them.
+  * The official Android engine only prepends its macro header
+    (#define texSample2D texture, ...) and compiles the same bytes with
+    strict GLSL ES 3.00 → both rejected → the engine silently drops the
+    effect ("If a shader fails to compile on mobile, the effect is
+    automatically removed while the wallpaper continues to work").
+  * WE's docs state the contract explicitly: "GLSL requires explicit type
+    conversions (no implicit casts)"; "Wallpaper Engine automatically
+    converts integer constants to floats by appending '.0'".
+
+The fix — ShaderEsslSafety.kt (new, pure Kotlin, JVM-testable):
+
+  * A type-inferring, conservative rewriter that makes fxc's tolerance
+    explicit at source level:
+      - implicit truncation → (expr).x / .xy / .xyz
+      - base conversions fxc does implicitly (float→int, uint→int,
+        bool↔numeric) → explicit ctors (also repairs the PC pipeline's
+        own `int d = 3.0` output from its int→float pass)
+      - non-bool ternary/if/while/for/do-while conditions, !/&&/||  → bool(...)
+      - scalar ctors from vectors → float((v4).x)
+      - #define bodies too (the engine preprocessor expands them verbatim)
+  * Types from declarations, ALL three combo metadata forms ([COMBO],
+    [COMBO_OFF], uniform-line {"combo":...} — the engine injects an
+    integer define for each), a builtin table (texSample2D→vec4 per the
+    official syntax docs) and simple #define bodies (both object-like
+    `#define FLAG (u_a)` and function-like `#define Src(a,b) ...`).
+  * Safety: untyped → untouched; redeclarations with different types
+    (#if/#else variants, e.g. generic.vert's v_TexCoord) → untouched;
+    inconsistent input → zero edits; CRLF preserved; nested wraps splice
+    outermost-first ((bool(c) ? a : b).xy).
+
+Also ported the PC's OTHER shader pass found beside fixShader
+(@0x140017dd0, invoked before it): rename the FIRST user `float mod(`
+definition to `float _deprFn_0(` (GLSL cannot redeclare the builtin;
+semantics identical). PcShaderFixes.fixShaderForMobile() now runs
+deprModFix → fixShader → ShaderEsslSafety, wired into MpkgPacker with
+per-edit logging.
+
+Verification (all automated, glslangValidator 16.6 ESSL 3.00 with the
+engine's exact header/defines/includes reconstructed from libscenejni.so):
+
+  * the failing sharpen_filter.frag: raw source → full chain → compiles
+    clean (was 2 hard errors); both rewrites byte-checked against the
+    engine's own numbered failure log
+  * 6/6 synthetic edge corpora (truncation matrix, ternary matrix,
+    int/uint conversions, ctor-from-vector, mod rename, clean no-op)
+  * 14/14 shaders of the real PC-produced reference .mpkg STILL
+    byte-identical (safety pass is a no-op on valid shaders) and 4/4
+    zcompat shaders unchanged
+  * 87/108 of the engine's own shader assets validate (rest need
+    engine-injected constants the harness cannot replicate)
+  * 49/49 unit tests (31 PC byte-exactness + 18 new)
+
+Remaining known parity gap: the zcompat substitution database
+(<wallpaper_engine>\assets\zcompat\scene\shaders\<effectId>\ on the
+PC). Not blocking correctness — with the safety pass, affected shaders
+compile and render correctly — but required for byte-identical output on
+wallpapers whose effects have official fixed versions (we ship the 2
+known entries: 2084198056, 2078835426).
+
+Follow-up notes for future agents:
+  * scripts/parity/ (work dir, not shipped) holds the validation harness:
+    validate.py assembles shaders exactly like the engine and runs
+    glslang; kotlin/Sweep2.kt applies the pipeline over corpora.
+  * The official APK (wallpaperengine.io/android/apk/wallpaper-engine.apk)
+    is the source for the engine's exact GLSL header and its include set
+    (assets/shaders/*.h) — keep them in sync if the engine updates.
+  * The engine silently DROPS effects that fail to compile — "no visible
+    error" on the real app does NOT mean the effect rendered. Our backend
+    now makes them compile instead.
