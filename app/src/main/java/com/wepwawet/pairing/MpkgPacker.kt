@@ -4981,6 +4981,7 @@ object MpkgPacker {
 
                 WepWawetLogger.proxyDebug("MpkgPacker.fixShaders: applied xray-specific patches",
                     "file" to name)
+            }
 
             if (modified != original) {
                 entries[i] = Pair(name, modified.toByteArray(Charsets.UTF_8))
